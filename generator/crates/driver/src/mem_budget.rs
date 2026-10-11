@@ -77,18 +77,18 @@ impl Model {
             link_per_total_mb: 0.0,
         };
         let release = Model {
-            small: (700.0, 410.0),
-            large: (2700.0, 130.0),
+            small: (750.0, 460.0),
+            large: (2000.0, 190.0),
             per_data_mb: 130.0,
             per_long_kline: 55.0,
-            link_base_mb: 2000.0,
-            link_per_total_mb: 45.0,
+            link_base_mb: 2300.0,
+            link_per_total_mb: 40.0,
         };
         match p {
             BuildProfile::Dev | BuildProfile::DevOpt => dev,
             BuildProfile::Release => release,
             // fat LTO 全程序单模块：B3 实测大闭包 14.5–15.7 GB（binary-size §五）
-            BuildProfile::ReleaseMax | BuildProfile::ReleaseSmall => Model { link_base_mb: 2000.0, link_per_total_mb: 100.0, ..release },
+            BuildProfile::ReleaseMax | BuildProfile::ReleaseSmall => Model { link_base_mb: 2500.0, link_per_total_mb: 150.0, ..release },
         }
     }
 

@@ -174,12 +174,15 @@ scratch；javac 产物落 `build/audit/` 下临时目录，用完即删。corpus
 ### 编译内存与作业数的自动处理（无需配置）
 
 rava 的编译阶段（`driver/src/cargo.rs`、`mem_budget.rs`、`mem_probe.rs`，build 与 compile 共用）每次编译都按内存定 cargo 并行作业数
-（终态规则，非失败重试；方案与实测见 `docs/plans/2026-10-11-build-memsafe.md`）：
+（方案与实测见 `docs/plans/2026-10-11-build-memsafe.md`）：
 
 - 可用内存 A = `--build-mem-mb`，否则 min(`MemAvailable`、各级 cgroup v2 / v1 余量（不活跃文件页不计占用）、macOS `vm_stat`)；预算 B = 85% A；
-- 逐 crate 估 rustc 峰值 E = 基数 + 斜率 × 源码 MB（按档位取系数），LTO 档位的可执行文件 crate 另按全工作区源码估全程序链接；
-- 作业数 J = 「最大的 J 个 E 之和 ≤ B」的最大 J；上限为 `CARGO_BUILD_JOBS`（若设）、否则自 scratch 向上最近的 cargo 配置 `[build] jobs`、否则核数；
-  单个 crate 估计已超 B 时 J = 1 并告警（应换档位或机器）。决定打印为 `[cargo-env]` 一行，写入 `build_status.json` 的 `mem` 段；
+- 逐 crate 估单作业 rustc 峰值 E（按档位取系数，服务器实测上包络）：代码量两段折线 + 引导映像数据量 + 超长函数（≥1000 行）总行数；
+  可执行文件 crate 在全部库 crate 之后单独编译，LTO 档位另按全工作区源码估全程序链接；
+- 作业数 J = 「最大的 J 个库 crate 的 E 之和 ≤ B」的最大 J；上限为 `CARGO_BUILD_JOBS`（若设）、否则自 scratch 向上最近的 cargo 配置 `[build] jobs`、否则核数；
+  单个 crate（含全程序链接）估计已超 B 时 J = 1 并告警（应换档位或机器）。决定打印为 `[cargo-env]` 一行，写入 `build_status.json` 的 `mem` 段；
+- 实测仍 OOM（cargo 报 rustc `signal: 9, SIGKILL`，或 cargo 本身被 SIGKILL；超时终止不算）时作业数退半重编，已编完的 crate 缓存命中，
+  直到 1 作业；所用作业数依次记入 `mem.oom_retries`；
 - 生成的 workspace `Cargo.toml` 固定 `[profile.dev] debug = "line-tables-only"`；编译环境 `CARGO_INCREMENTAL=0`；
 - 声明层 `java_runtime` 类数 ≥ 1700 为重型闭包，只决定缺省构建超时：600 秒，重型 3000 秒（`--build-timeout` 显式值优先），写入 `build_status.json` 的 `heavy` 段。
 
