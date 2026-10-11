@@ -1661,15 +1661,30 @@ since = "2026-10-11"
 [[pattern]]
 id = "hw-scanner-cfg-blind"
 stage = "compile"
-symptom = "JDK 21：DeepCopy 闭包 3076 → 6479 类，编译 E0599 GSSNameSpi 上无 equals_obj；TestStackWalkerFrames 运行 null_recv（Class.getName 接收者判恒 null，isMethodHandleFrame）"
-match = [["no method named `equals_obj` found for struct `gss_name_spi::GSSNameSpi`"], ["null_recv", "isMethodHandleFrame"]]
-tests = ["DeepCopy", "TestStackWalkerFrames"]
-cause = "闭包手写扫描器不识别 #[cfg]：stack_stream_factory_abstract_stack_walker_impl.rs 的 cfg(jdk_ge_25) 分支（ResolvedMethodName 分配、对 info 的按名写 name / type_ / classOrMemberName）在 JDK 21 下也被建模，按名写只知字段名使值流放宽、闭包翻倍（本机二分确认仅此文件引起）；equals_obj 为接口重声明 Object 方法时调用点带重载后缀而接口块不发射的潜伏缺陷，随闭包扩张暴露。null_recv 根因未钉死（cfg 并入与 callStackWalk→__call_stack_walk 多一跳二者之一）。候选：扫描器按参考 JDK 求值 cfg(jdk_ge_25)，见交接文档"
+symptom = "JDK 21：DeepCopy 闭包 3076 → 6479 类，编译 E0599 GSSNameSpi 上无 equals_obj"
+match = [["no method named `equals_obj` found for struct `gss_name_spi::GSSNameSpi`"]]
+tests = ["DeepCopy"]
+cause = "闭包手写扫描器不识别 #[cfg]：stack_stream_factory_abstract_stack_walker_impl.rs 的 cfg(jdk_ge_25) 分支（ResolvedMethodName 分配、对 info 的按名写 name / type_ / classOrMemberName）在 JDK 21 下也被建模，按名写只知字段名使值流放宽、闭包翻倍。修法：handwritten/cfg.rs 按参考 JDK 三值求值 cfg（jdk_ge_N / not / all / any，其余不定保留），剔除为假的项 / impl 成员 / 语句 / match 分支 / 字段；driver build / closure / profile 传入 ClassPath::release()，emit 的 HwTypeRefs 同口径。修后 DeepCopy 闭包类集与方法集同集成头（3001 类 / 16425 方法，逐项一致）。equals_obj 为独立的潜伏生成器缺陷，随闭包扩张暴露，闭包回落后不再触发"
 introduced = "efc32d6f"
-fixed = []
-status = "open"
-owner = "fix-jdk25（待协调者定夺：涉及 closure/src/handwritten）"
-diagnose = "同一 rava 二进制、只换 runtime 文件做 --stop-after emit 二分，比较 [emit] JDK 类数；--trace-class sun/security/jgss/GSSUtil"
+fixed = ["d279b821"]
+status = "fixed"
+owner = "fix-jdk25"
+diagnose = "同一 rava 二进制、只换 runtime 文件做 --stop-after emit 二分，比较 [emit] JDK 类数；remote_rava closure 两 ref 比 closure.json 的 classes / methods 名集"
+doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md"
+since = "2026-10-11"
+
+[[pattern]]
+id = "hw-upcall-self-lost-in-helper"
+stage = "run"
+symptom = "JDK 21 TestStackWalkerFrames 运行 null_recv：StackStreamFactory（isMethodHandleFrame）中 Class.getName 接收者判恒 null"
+match = [["null_recv", "java/lang/Class.getName", "stack_stream_factory"]]
+tests = ["TestStackWalkerFrames"]
+cause = "native callStackWalk 把 self.doStackWalk 上调移进 &self 辅助 fn（__walk_batches）。闭包手写扫描器并入被调 fn 体时把其调用标为非 self 接收者（objects.rs / scan.rs absorb_body：on_self = false），上调的接收者与 native 的 this 断开，CallerClassFinder 仅类模式帧缓冲（native 写入的 Class 元素）的流断开，Class 元素被判恒 null。二分：集成头通过；只回退该文件通过；回退生成器改动、回退 STE 手写、改回 let 绑定均不过；上调留在 native 体内通过。手写规则：对 this 的 Java 上调须写在 native 体内，辅助 fn 只做无 self 的准备工作"
+introduced = "efc32d6f（栈遍历按 JDK 分版本时引入辅助 fn）"
+fixed = ["725249ef"]
+status = "fixed"
+owner = "fix-jdk25"
+diagnose = "按文件回退做 TestStackWalkerFrames 抽查二分；查手写 native 体内 self.<Java 方法>( 上调是否经辅助 fn 转手"
 doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md"
 since = "2026-10-11"
 

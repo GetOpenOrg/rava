@@ -199,7 +199,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏳ 框架驱动 API 覆盖（2026-10-07-framework-driven-api-coverage.md）：S0 闭包面复算 ◀── dev 恢复；再扩其他流行库
 │   ├─ ⏳ jmod 覆盖第 1–4 步（2026-10-03-jmod-coverage.md）
 │   ├─ ⏳ 引用类语义：无 GC 模型（编译期逃逸分析整组释放 + 所有权推断弱引用，2026-10-07-no-gc-memory-model.md）◀── C4
-│   └─ ⏳ JDK 25 适配轮
+│   └─ ⏳ JDK 25 适配轮（分支 fix-jdk25，交接 docs/reports/2026-10-11-fix-jdk25-handoff.md）：java_base_decl 三组编译问题已修；JDK 21 两处回归已修（C 闭包翻倍 d279b821 扫描器求值 cfg，DeepCopy 闭包 = 集成头 3001 类；B StackWalkerFrames 725249ef 上调留 native 体内）；待合批。
+│       下一步：① 问题 A，JDK 25 StackFrameInfo 反射元素流（两个 StackWalker 测试存根失败，归 G1 / 反射建模）；② 扫描器 `&self` 辅助内 `self.X()` 上调丢 on_self（分析器侧，`hw-upcall-self-lost-in-helper`）；③ `GSSNameSpi.equals_obj` 潜伏命名缺陷；④ JDK 25 全量剩余分类（版本输出差异 3、fold / dead_pcs 2、condy switch 标签 1、超时 1、DeepCopy / DES OOM）
 │
 ├─ 【暂缓】
 │   ├─ ⏸ build-memsafe 内存友好缺省构建档（10-08 暂缓）
