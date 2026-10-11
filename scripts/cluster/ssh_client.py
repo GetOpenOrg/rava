@@ -1,8 +1,22 @@
-"""SSH 客户端：建连（私钥 / 密码、SOCKS5 代理或自定义 sock、心跳保活）与执行命令。"""
+"""SSH 客户端：建连（私钥 / 密码、SOCKS5 代理或自定义 sock、心跳保活）与执行命令。
 
+主机密钥校验：先读系统 ~/.ssh/known_hosts，再读 rava 维护的 known_hosts（cluster_config.KNOWN_HOSTS_PATH，
+缺省 ~/.config/rava/known_hosts）。未登记的主机拒绝连接（每主机告警一次），密钥不符由 paramiko 拒绝；
+首次接入走显式 TOFU：分发时加 --trust-new-host（或环境变量 RAVA_TRUST_NEW_HOST=1），
+或预先登记：python scripts/cluster/ssh_client.py trust [标签 ...]（经 直连 → 跳板 → 代理 链路逐台建连，
+把服务器当前密钥写入 rava 的 known_hosts，含已在系统文件登记的主机）。
+"""
+
+import base64
+import fcntl
+import hashlib
+import os
 import random
 import socket
+import sys
+import threading
 import time
+from pathlib import Path
 
 import paramiko
 
@@ -27,6 +41,88 @@ def _make_socks5_socket(proxy_host, proxy_port, target_host, target_port, timeou
     return sock
 
 
+# 首次接入的主机是否按 TOFU 登记（--trust-new-host 置位）；缺省拒绝
+TRUST_NEW_HOSTS = os.environ.get("RAVA_TRUST_NEW_HOST", "") not in ("", "0")
+
+_known_lock = threading.Lock()
+_warned_hosts: set[str] = set()
+
+
+class HostKeyRejected(paramiko.SSHException):
+    """主机密钥未登记且未开 TOFU：不重试。"""
+
+
+def known_hosts_path() -> Path:
+    try:
+        from cluster_config import KNOWN_HOSTS_PATH
+        return Path(KNOWN_HOSTS_PATH)
+    except Exception:
+        return Path.home() / ".config" / "rava" / "known_hosts"
+
+
+def host_key_name(host: str, port: int) -> str:
+    """known_hosts 中的主机名（与 paramiko 查找口径一致：非 22 端口写成 [host]:port）。"""
+    return host if port == 22 else f"[{host}]:{port}"
+
+
+def fingerprint(key) -> str:
+    return "SHA256:" + base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip("=")
+
+
+def record_host_key(hostname: str, key, path: Path | None = None) -> bool:
+    """把 hostname 的密钥追加进 rava known_hosts（进程内锁 + 文件锁；同名同类型已有则不写）。
+    返回是否新写入；已登记的同类型密钥与之不符时抛 BadHostKeyException。"""
+    path = Path(path or known_hosts_path())
+    with _known_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            existing = paramiko.HostKeys()
+            existing.load(str(path))
+            old = (existing.lookup(hostname) or {}).get(key.get_name())
+            if old is not None:
+                if old != key:
+                    raise paramiko.BadHostKeyException(hostname, key, old)
+                return False
+            line = paramiko.hostkeys.HostKeyEntry([hostname], key).to_line()
+            os.write(fd, line.encode())
+            os.fsync(fd)
+            return True
+        finally:
+            os.close(fd)
+
+
+class _RejectUnknownHost(paramiko.MissingHostKeyPolicy):
+    def missing_host_key(self, client, hostname, key):
+        if hostname not in _warned_hosts:
+            _warned_hosts.add(hostname)
+            print(f"❌ 主机 {hostname} 的 {key.get_name()} 密钥 {fingerprint(key)} 未登记"
+                  f"（系统 known_hosts 与 {known_hosts_path()} 均无），拒绝连接；"
+                  f"核实指纹后用 `ssh_client.py trust <标签>` 或分发器 --trust-new-host 登记",
+                  file=sys.stderr, flush=True)
+        raise HostKeyRejected(f"主机 {hostname} 的密钥未登记")
+
+
+class _TrustOnFirstUse(paramiko.MissingHostKeyPolicy):
+    def missing_host_key(self, client, hostname, key):
+        if record_host_key(hostname, key):
+            print(f"🔏 TOFU：登记主机 {hostname} 的 {key.get_name()} 密钥 {fingerprint(key)} → {known_hosts_path()}",
+                  file=sys.stderr, flush=True)
+        client.get_host_keys().add(hostname, key.get_name(), key)
+
+
+def _new_client() -> paramiko.SSHClient:
+    client = paramiko.SSHClient()
+    client.load_system_host_keys()
+    kh = known_hosts_path()
+    if kh.exists():
+        # 读入 _host_keys 而不经 load_host_keys：后者会记下文件名，paramiko 关闭时可能回写
+        client.get_host_keys().load(str(kh))
+    client.set_missing_host_key_policy(_TrustOnFirstUse() if TRUST_NEW_HOSTS else _RejectUnknownHost())
+    return client
+
+
 def create_ssh_client(server, max_retries=3, verbose=True, timeout=20, sock_factory=None):
     """创建 SSH 客户端，支持私钥或密码登录，失败时自动重试（指数退避）。
     server 中可选 socks5_proxy: {"host": "127.0.0.1", "port": 10808} 以走代理。
@@ -43,8 +139,7 @@ def create_ssh_client(server, max_retries=3, verbose=True, timeout=20, sock_fact
 
     proxy_cfg = server.get("socks5_proxy")
     for attempt in range(max_retries):
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = _new_client()
         try:
             sock = None
             if sock_factory is not None:
@@ -87,6 +182,11 @@ def create_ssh_client(server, max_retries=3, verbose=True, timeout=20, sock_fact
                 transport.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             _print(f"✅ {tag}成功连接到 {host}")
             return client
+        except (HostKeyRejected, paramiko.BadHostKeyException) as e:
+            # 主机密钥未登记 / 不符：重试无意义
+            client.close()
+            _print(f"❌ {tag}{host} 主机密钥校验失败: {e}")
+            return None
         except Exception as e:
             client.close()
             if attempt < max_retries - 1:
@@ -130,3 +230,48 @@ def run_command(client, cmd, timeout=120):
     return "\n".join(output_lines).strip()
 
 
+
+
+def trust_servers(labels: list[str]) -> int:
+    """逐台经 直连 → 跳板 → 代理 建连（开 TOFU），把服务器当前密钥写入 rava known_hosts。"""
+    global TRUST_NEW_HOSTS
+    TRUST_NEW_HOSTS = True
+    import cluster_config as config
+    from dist_conn import _connect_with_retry, close_jump_clients
+    servers = [s for s in config.SERVERS if not labels or s["label"] in labels]
+    missing = set(labels) - {s["label"] for s in servers}
+    if missing:
+        print(f"未知标签: {' '.join(sorted(missing))}", file=sys.stderr)
+        return 2
+    rc = 0
+    for srv in servers:
+        client, via = _connect_with_retry(srv, max_rounds=1)
+        if client is None:
+            print(f"❌ [{srv['label']}] 无法建连，未登记")
+            rc = 1
+            continue
+        key = client.get_transport().get_remote_server_key()
+        name = host_key_name(srv["host"], srv["port"])
+        try:
+            new = record_host_key(name, key)
+        except paramiko.BadHostKeyException as e:
+            print(f"❌ [{srv['label']}] {e}")
+            rc = 1
+            new = None
+        finally:
+            client.close()
+        if new is not None:
+            print(f"{'🔏 登记' if new else '✓ 已登记'} [{srv['label']}] {name} {key.get_name()} {fingerprint(key)}"
+                  f"（{via or '直连'}）")
+    close_jump_clients()
+    return rc
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="rava 集群 SSH 主机密钥登记")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("trust", help="建连并把服务器主机密钥写入 rava known_hosts（缺省全部服务器）")
+    t.add_argument("labels", nargs="*")
+    a = ap.parse_args()
+    sys.exit(trust_servers(a.labels))

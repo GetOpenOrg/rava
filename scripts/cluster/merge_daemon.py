@@ -38,7 +38,8 @@ import known_failures as kf          # noqa: E402
 from merge_queue import Queue, DEFAULT_QUEUE, GATES, TERMINAL, now   # noqa: E402
 
 REPO_ROOT = _HERE.parent.parent          # 本检出根目录（分发器以 scripts/cluster/ 相对路径调用）
-from cluster_config import RESULTS_DIR  # noqa: E402
+from cluster_config import RESULTS_DIR, DEFAULT_JDK  # noqa: E402
+from dist_state import state_path  # noqa: E402
 LOG_PATH = RESULTS_DIR / "merge_daemon.log"
 from cluster_config import REPO_ROOT as MAIN_REPO  # noqa: E402
 WS = MAIN_REPO.parent
@@ -122,7 +123,7 @@ def launch_spot(ctx: Ctx, e: dict) -> int:
 def stale_records(ctx: Ctx, e: dict) -> list[str]:
     """spot tag 下已有结果却属于别的提交（tag 复用）的用例。"""
     import json
-    p = ctx.results / "spot" / e["spot"] / "state_jdk21.json"
+    p = state_path(ctx.results / "spot" / e["spot"], e.get("jdk", DEFAULT_JDK))
     if not p.exists():
         return []
     st = json.loads(p.read_text(encoding="utf-8"))

@@ -119,6 +119,7 @@ rava 分布式测试调度器（任务池模式）。
 """
 
 import sys
+import shlex
 import time
 import signal
 import logging
@@ -133,15 +134,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 # 屏蔽 Paramiko 的 WARNING/ERROR 日志（连接关闭时的噪音）
 logging.getLogger("paramiko").setLevel(logging.CRITICAL)
 
+import ssh_client
 from ssh_client import create_ssh_client
 import cluster_config as config
 from cluster_config import SERVERS, REMOTE_DIR, DEFAULT_JDK, pick_servers, slot_servers
 import dist_ctx
 from dist_ctx import _shutdown, _cleanup_handler, _log, _print_lock
 from dist_monitor import _set_st, _monitor_loop, print_final_summary
-from dist_remote import resolve_spot_ref, drop_missing_tests
+from dist_remote import resolve_spot_ref, drop_missing_tests, resolve_target_commit
 from dist_state import (
     TaskPool, State, load_test_list, sample_passed, write_master, archive_for_reset,
+    state_path as state_file, check_test_names, CorruptStateError,
 )
 from dist_e2e import server_worker
 from dist_job import run_jobs
@@ -150,18 +153,36 @@ from dist_cleanup import start_background_cleanup
 
 # ── 清理服务器项目 ─────────────────────────────────────────────────────────────
 
-def cleanup_servers():
-    _log(f"\n🗑  删除各服务器 {REMOTE_DIR}...")
-    for server in SERVERS:
+def cleanup_servers(servers: list[dict]):
+    """删除所选服务器（--servers 筛选后的物理机，不按槽重复）的项目目录（服务器条目 remote_dir，缺省 REMOTE_DIR）。"""
+    for server in servers:
+        remote_dir = server.get("remote_dir", REMOTE_DIR)
+        _log(f"\n🗑  [{server['label']}] 删除 {remote_dir}...")
         client = create_ssh_client(server)
         if not client:
             _log(f"  [{server['label']}] 连接失败，跳过")
             continue
         try:
-            client.exec_command(f"rm -rf {REMOTE_DIR}", timeout=60)
+            _, stdout, _ = client.exec_command(f"rm -rf {shlex.quote(remote_dir)}", timeout=60)
+            stdout.channel.recv_exit_status()
             _log(f"  [{server['label']}] ✅ 已清除")
         finally:
             client.close()
+
+
+def e2e_exit_code(state: "State", tests: list[str], pool: "TaskPool", interrupted: bool) -> int:
+    """全量 / 抽查退出码（只看本次范围内的测试）：全部通过 → 0；中断 → 130；
+    有失败 / infra 失败 / 未跑完（服务器全部停用等）→ 1。"""
+    if interrupted:
+        return 130
+    passed, failed = state.completed_set(), state.failed_set()
+    with state._lock:
+        infra = set(state.data.get("infra_failed", {}))
+        leased = {v.get("test") for v in state.data.get("leases", {}).values()}
+    scope = set(tests)
+    if scope & (failed | infra | leased) or pool.remaining() > 0 or not scope <= passed:
+        return 1
+    return 0
 
 
 # ── 主入口 ────────────────────────────────────────────────────────────────────
@@ -221,7 +242,11 @@ def main():
                     help="作业模式：单个作业超时秒数（默认 3600）")
     ap.add_argument("--no-cleanup",    action="store_true",
                     help="启动时不清理服务器上过期的检出目录与 /tmp 条目（见 dist_cleanup.py）")
+    ap.add_argument("--trust-new-host", action="store_true",
+                    help="首次接入：未登记主机密钥的服务器按 TOFU 登记进 rava known_hosts（缺省拒绝连接）")
     args = ap.parse_args()
+    if args.trust_new_host:
+        ssh_client.TRUST_NEW_HOSTS = True
     for spec in args.slots or []:
         lbl, _, n = spec.partition("=")
         srv = next((x for x in SERVERS if x["label"] == lbl), None)
@@ -247,8 +272,7 @@ def main():
         ref = resolve_spot_ref(args.ref)
         if ref != args.ref:
             _log(f"--ref {args.ref} → {ref}")
-        run_jobs(args.job, ref, args.cmd, args.fetch, args.servers, args.min_ram, args.job_timeout)
-        return
+        return run_jobs(args.job, ref, args.cmd, args.fetch, args.servers, args.min_ram, args.job_timeout)
 
     if args.task_timeout is not None and args.task_timeout < 60:
         ap.error("--task-timeout 至少 60 秒")
@@ -258,6 +282,11 @@ def main():
         _log(f"run_tests 追加选项: {dist_ctx.run_tests_args or '(无)'}；"
              f"单例总时限 {dist_ctx.task_timeout or config.TASK_TIMEOUT}s")
 
+    try:
+        check_test_names(args.tests or (), "--tests")
+    except ValueError as e:
+        ap.error(str(e))
+
     spot_tests: list[str] | None = None
     if args.spot:
         if not args.ref:
@@ -266,7 +295,11 @@ def main():
         if resolved != args.ref:
             _log(f"--ref {args.ref} → {resolved}")
             args.ref = resolved
-        spot_tests = sorted(set(sample_passed(args.jdk, args.per_dir, args.seed)) | set(args.tests or ()))
+        try:
+            sampled = sample_passed(args.jdk, args.per_dir, args.seed)
+        except ValueError as e:
+            ap.error(str(e))
+        spot_tests = sorted(set(sampled) | set(args.tests or ()))
         spot_tests, missing = drop_missing_tests(args.ref, spot_tests)
         if missing:
             _log(f"⚠️ {args.ref} 树中不存在、已从抽查名单剔除 {len(missing)} 例: {' '.join(missing)}")
@@ -279,13 +312,17 @@ def main():
     signal.signal(signal.SIGTERM, _cleanup_handler)
 
     dist_ctx.results_dir.mkdir(parents=True, exist_ok=True)
-    state_path = dist_ctx.results_dir / f"state_jdk{args.jdk}.json"
+    state_path = state_file(dist_ctx.results_dir, args.jdk)
 
     if args.reset:
         archive_for_reset(state_path, args.jdk)
         _log(f"🔄 JDK {args.jdk} 进度已重置，本轮在 main 最新代码上从头全量")
 
-    state = State(state_path)
+    try:
+        state = State(state_path)
+    except (CorruptStateError, ValueError) as e:
+        _log(f"❌ {e}")
+        return 1
 
     if args.reset_failed:
         failed_tests = dict(state.data.get("failed", {}))
@@ -307,7 +344,7 @@ def main():
             fail_list.unlink()
 
         _log(f"🔄 已清除 {n} 条失败记录、{removed_logs} 个日志文件、failed_tests_jdk{args.jdk}.txt，下次运行将重新调度")
-        return
+        return 0
     state.set_jdk(args.jdk)
 
     if args.status:
@@ -319,16 +356,20 @@ def main():
         print(f"\n  通过提交分布: {state.commit_counts()}")
         print(f"  总测试: {total}  通过: {s['passed']}  失败: {s['failed']}  "
               f"未运行: {int(total or 0) - s['passed'] - s['failed'] if isinstance(total, int) else '?'}")
-        return
+        return 0
 
     if args.merge:
         _log(f"📋 通过清单: {write_master(state)}  共 {len(state.completed_set())} 个测试")
-        return
+        return 0
 
     # ── 立即预初始化状态 + 启动监控（让状态表从一开始就可见）────────────────────
     # --servers 按物理机标签筛选（缺省取 config pools 含 "test" 的服务器），再按槽展开（config slots）：
     # 每槽一个工作线程、状态表一行
-    servers_used = slot_servers(pick_servers(args.servers, "test"))
+    hosts_used = pick_servers(args.servers, "test")
+    servers_used = slot_servers(hosts_used)
+    # 续跑比对用的本次目标提交：抽查为 --ref，全量为服务器将检出的 origin/main
+    dist_ctx.target_commit = resolve_target_commit(args.ref if args.spot else "main")
+    _log(f"本次目标提交: {dist_ctx.target_commit or '（解析不出，不做租约提交比对）'}")
     dist_ctx.slot_servers = servers_used
     for s in servers_used:
         _set_st(s["label"], status="connecting")
@@ -340,14 +381,20 @@ def main():
         ).start()
 
     # ── 初始化任务池（setup 已移入 server_worker，无需在此等待）──────────────
-    all_tests = spot_tests if spot_tests is not None else load_test_list()
+    try:
+        all_tests = spot_tests if spot_tests is not None else load_test_list()
+    except ValueError as e:
+        _log(f"❌ {e}")
+        stop_event.set()
+        return 1
     if spot_tests is not None:
         _log(f"抽查 {len(all_tests)} 个测试（ref={args.ref}，每目录 {args.per_dir}，seed={args.seed}）")
     if args.filter:
         all_tests = [t for t in all_tests if any(f in t for f in args.filter)]
         if not all_tests:
             _log(f"⚠️  --filter {args.filter} 无匹配测试，退出")
-            return
+            stop_event.set()
+            return 1
         _log(f"--filter 匹配到 {len(all_tests)} 个测试: {all_tests}")
     completed = state.completed_set()
     failed    = state.failed_set()
@@ -373,7 +420,7 @@ def main():
         print_final_summary(state, pool)
         write_master(state)
         stop_event.set()
-        return
+        return e2e_exit_code(state, all_tests, pool, False)
 
     log_dir = dist_ctx.results_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -406,14 +453,15 @@ def main():
             f"剩余 {pool.remaining()}/{pool.total()} 未运行\n"
             f"进度已保存，下次运行将从断点续跑。"
         )
-        return
+        return 130
 
     print_final_summary(state, pool)
     write_master(state)
 
     if args.cleanup_servers:
-        cleanup_servers()
+        cleanup_servers(hosts_used)
+    return e2e_exit_code(state, all_tests, pool, False)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

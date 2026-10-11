@@ -1,9 +1,12 @@
 """任务池、进度状态与结果归档（state / master 通过清单 / by_commit / reset 归档）。"""
 
 import json
+import os
 import random
+import re
 import shutil
 import threading
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +15,103 @@ import cluster_config as config
 from cluster_config import DEFAULT_JDK
 import dist_ctx
 from dist_ctx import _log, _print_lock
+
+
+# ── 状态文件路径（唯一来源）与原子读写 ────────────────────────────────────────
+
+def state_path(results_dir: Path, jdk: int) -> Path:
+    """结果目录下某 JDK 主版本的进度状态文件。全量 / 抽查 / 巡检 / 已知失败分类一律经此取路径。"""
+    return Path(results_dir) / f"state_jdk{int(jdk)}.json"
+
+
+_STATE_RE = re.compile(r"^state_jdk(\d+)\.json$")
+
+
+def state_paths(results_dir: Path) -> dict[int, Path]:
+    """结果目录下全部 JDK 的状态文件：主版本 → 路径（按版本升序）。"""
+    d = Path(results_dir)
+    found = {}
+    if d.is_dir():
+        for p in d.iterdir():
+            if (m := _STATE_RE.match(p.name)) and p.is_file():
+                found[int(m.group(1))] = p
+    return dict(sorted(found.items()))
+
+
+class CorruptStateError(RuntimeError):
+    """状态 JSON 无法解析：原文件已备份为 .corrupt-<时间>，须人工核对后再运行。"""
+
+
+def load_json_strict(path: Path, default=None):
+    """读 JSON；文件不存在返回 default。解析失败时把原文件备份为 <name>.corrupt-<时间> 并抛
+    CorruptStateError——不静默清空（清空会让续跑把累计通过 / 失败记录全部丢掉）。"""
+    path = Path(path)
+    if not path.exists():
+        return default
+    raw = path.read_bytes()
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        backup = path.with_name(f"{path.name}.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}")
+        backup.write_bytes(raw)
+        raise CorruptStateError(
+            f"{path} 无法解析（{e}）；原文件已备份到 {backup}。核对修复后放回原处再运行，"
+            f"或确认放弃该进度后删除 {path.name}") from e
+
+
+def atomic_write_text(path: Path, text: str):
+    """原子写：同目录唯一临时文件写入并 fsync，再 os.replace 覆盖；中途被杀不会留下半截文件。"""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+# ── 测试名校验 ────────────────────────────────────────────────────────────────
+# 测试名会拼进远端 shell（--filter、rm -rf、pgrep）：所有入口（--tests、load_test_list、sample_passed、
+# 读租约）统一校验为 Java 标识符形（字母或下划线开头，后接字母 / 数字 / 下划线；字母含 Unicode，
+# 语料有 MöbiusFunction），远端命令再一律 shlex.quote。
+
+_TEST_NAME_RE = re.compile(r"[^\W\d]\w*")
+
+
+def valid_test_name(name: str) -> bool:
+    return isinstance(name, str) and _TEST_NAME_RE.fullmatch(name) is not None
+
+
+def check_test_names(names, source: str) -> list[str]:
+    """校验一批测试名，有非法名即抛 ValueError（指明来源）；全部合法时原样返回列表。"""
+    names = list(names)
+    bad = [n for n in names if not valid_test_name(n)]
+    if bad:
+        raise ValueError(f"{source} 含非法测试名（须为 Java 标识符）：{', '.join(map(repr, bad[:10]))}"
+                         + (f" 等 {len(bad)} 个" if len(bad) > 10 else ""))
+    return names
+
+
+# ── 续跑租约 ──────────────────────────────────────────────────────────────────
+
+def resume_deadline(orig_deadline: float, limit: float, now: float | None = None) -> float:
+    """接上旧租约时的期限：max(原期限, 接上时刻 + 时限)。停机间隔不计入单例时限，
+    原期限更晚（刚派发不久就中断）时沿用原期限。"""
+    return max(orig_deadline, (time.time() if now is None else now) + limit)
+
+
+def lease_ref_matches(lease_commit: str | None, target_commit: str | None) -> bool:
+    """租约所在提交是否就是本次要测的提交。本次目标解析不出（None）时不判不符。"""
+    if not target_commit:
+        return True
+    if not lease_commit:
+        return False
+    a, b = lease_commit.lower(), target_commit.lower()
+    n = min(len(a), len(b))
+    return n >= 7 and a[:n] == b[:n]
 
 
 # ── 测试列表枚举 ──────────────────────────────────────────────────────────────
@@ -23,7 +123,8 @@ def load_test_list() -> list[str]:
             "找不到本地 tests/e2e 目录。\n"
             "请用 --e2e-dir /path/to/tests/e2e 指定（缺省取主检出的 tests/e2e）"
         )
-    return sorted(f.stem for f in config.LOCAL_E2E_DIR.rglob("*.java"))
+    return check_test_names(sorted(f.stem for f in config.LOCAL_E2E_DIR.rglob("*.java")),
+                            str(config.LOCAL_E2E_DIR))
 
 
 # ── 抽查模式（--spot）─────────────────────────────────────────────────────────
@@ -48,7 +149,7 @@ def sample_passed(jdk: int, per_dir: int, seed: int) -> list[str]:
     for d in sorted(groups):
         names = sorted(set(groups[d]))
         picked += rng.sample(names, min(per_dir, len(names)))
-    return sorted(picked)
+    return check_test_names(sorted(picked), str(master))
 
 
 # ── 任务池 ─────────────────────────────────────────────────────────────────────
@@ -99,12 +200,9 @@ class State:
             self._save()
 
     def _load(self):
-        data = None
-        if self.path.exists():
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+        data = load_json_strict(self.path)
+        if data is not None and not isinstance(data, dict):
+            raise CorruptStateError(f"{self.path} 顶层不是对象（{type(data).__name__}），拒绝覆盖")
         if not data:
             data = {"jdk": DEFAULT_JDK}
         # 旧格式迁移：completed 列表（+ 可选的全局 commit）→ passed 按测试记提交
@@ -117,15 +215,14 @@ class State:
         data.setdefault("failed", {})
         # 派发租约：服务器标签 → {test, run_key, run_dir, work_dir, commit, start}；本地重启后据此接上远端运行
         data.setdefault("leases", {})
+        check_test_names([v.get("test") for v in data["leases"].values()], f"{self.path} 的派发租约")
         # 因网络 / 执行异常归还的次数（本轮），以及超过上限记为 infra 失败的测试（不计入 failed）
         data.setdefault("infra_returns", {})
         data.setdefault("infra_failed", {})
         return data
 
     def _save(self):
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)
+        atomic_write_text(self.path, json.dumps(self.data, indent=2, ensure_ascii=False))
 
     def mark_passed(self, tests: list[str], server: str, commit: str, timing: dict | None = None):
         now = datetime.now().isoformat(timespec="seconds")
@@ -173,7 +270,9 @@ class State:
 
     def leases(self) -> dict[str, dict]:
         with self._lock:
-            return {k: dict(v) for k, v in self.data["leases"].items()}
+            out = {k: dict(v) for k, v in self.data["leases"].items()}
+        check_test_names([v.get("test") for v in out.values()], f"{self.path} 的派发租约")
+        return out
 
     # ── infra 失败（网络 / 执行异常，区别于测试失败） ──
 
@@ -271,13 +370,11 @@ def write_master(state: "State"):
     paths = _test_paths()
     dist = ", ".join(f"{c}×{n}" for c, n in sorted(state.commit_counts().items(), key=lambda x: -x[1]))
     master = dist_ctx.results_dir / f"master_passed_jdk{jdk}.txt"
-    tmp = master.with_suffix(".tmp")
-    tmp.write_text(
+    atomic_write_text(
+        master,
         f"# rava 分布式测试累计通过清单  JDK {jdk}  {datetime.now().isoformat(timespec='seconds')}\n"
         f"# 提交分布: {dist}\n" + "".join(t + "\n" for t in sorted(paths.get(n, n) for n in names)),
-        encoding="utf-8",
     )
-    tmp.replace(master)
     return master
 
 
@@ -291,15 +388,13 @@ def write_timings(state: "State"):
     paths = _test_paths()
     rows.sort(key=lambda r: (-r[2]["timing"].get("run_s", 0), -r[2]["timing"].get("total_s", 0)))
     out = dist_ctx.results_dir / f"timings_jdk{jdk}.tsv"
-    tmp = out.with_suffix(".tmp")
     lines = ["test\tpath\tresult\trun_s\ttranspile_s\tbuild_s\ttotal_s\tserver\tcommit"]
     for t, res, v in rows:
         tm = v["timing"]
         lines.append("\t".join([t, paths.get(t, t), res] +
                                 [f"{tm.get(k, 0):.2f}" for k in ("run_s", "transpile_s", "build_s", "total_s")] +
                                 [v.get("server", ""), (v.get("commit") or "")[:12]]))
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(out)
+    atomic_write_text(out, "\n".join(lines) + "\n")
     return out
 
 
