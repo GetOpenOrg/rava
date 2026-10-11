@@ -299,10 +299,11 @@ impl<'a, T: 'static> Store<'a, T> {
             }
         }
         let addr = slots.as_ptr() as usize + start;
-        let lo = addr & !7usize;
-        let hi = (addr + width - 1) & !7usize;
-        let _g0 = STRIPES[(lo >> 4) % STRIPES.len()].lock();
-        let _g1 = (hi != lo).then(|| STRIPES[(hi >> 4) % STRIPES.len()].lock());
+        let s0 = ((addr & !7usize) >> 4) % STRIPES.len();
+        let s1 = (((addr + width - 1) & !7usize) >> 4) % STRIPES.len();
+        // 两字可落在同一条（同一 16 字节块内）：分条是非重入互斥，同条只锁一次
+        let _g0 = STRIPES[s0].lock();
+        let _g1 = (s1 != s0).then(|| STRIPES[s1].lock());
         let mut b = [0u8; 8];
         self.read_bytes(start, &mut b[..width]);
         let old = crate::native_memory::load_bits(&b[..width]);
