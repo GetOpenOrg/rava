@@ -3,7 +3,7 @@
 use crate::constant::{Const, ConstantPool, MethodHandle};
 use crate::insn::{decode, Insn};
 use crate::reader::Reader;
-use crate::Error;
+use crate::{Error, MAX_ANNOTATION_DEPTH};
 
 pub mod acc {
     pub const PUBLIC: u16 = 0x0001;
@@ -260,7 +260,7 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, Error> {
                     }
                 }
                 "RuntimeVisibleAnnotations" => m.annotations = annotations(&mut ar, &pool)?,
-                "AnnotationDefault" => m.annotation_default = Some(element_value(&mut ar, &pool)?),
+                "AnnotationDefault" => m.annotation_default = Some(element_value(&mut ar, &pool, 0)?),
                 "MethodParameters" => {
                     let n = ar.u1()?;
                     for _ in 0..n {
@@ -408,23 +408,27 @@ fn annotations(r: &mut Reader, pool: &ConstantPool) -> Result<Vec<Annotation>, E
     let n = r.u2()?;
     let mut v = Vec::with_capacity(n as usize);
     for _ in 0..n {
-        v.push(annotation(r, pool)?);
+        v.push(annotation(r, pool, 0)?);
     }
     Ok(v)
 }
 
-fn annotation(r: &mut Reader, pool: &ConstantPool) -> Result<Annotation, Error> {
+/// `depth`：外层已嵌套的注解 / 数组元素值层数（顶层 0），超过 [`MAX_ANNOTATION_DEPTH`] 即报错
+fn annotation(r: &mut Reader, pool: &ConstantPool, depth: usize) -> Result<Annotation, Error> {
     let type_desc = pool.utf8(r.u2()?)?.to_string();
     let n = r.u2()?;
     let mut elements = Vec::with_capacity(n as usize);
     for _ in 0..n {
         let name = pool.utf8(r.u2()?)?.to_string();
-        elements.push((name, element_value(r, pool)?));
+        elements.push((name, element_value(r, pool, depth + 1)?));
     }
     Ok(Annotation { type_desc, elements })
 }
 
-fn element_value(r: &mut Reader, pool: &ConstantPool) -> Result<ElementValue, Error> {
+fn element_value(r: &mut Reader, pool: &ConstantPool, depth: usize) -> Result<ElementValue, Error> {
+    if depth > MAX_ANNOTATION_DEPTH {
+        return Err(Error::AnnotationTooDeep(MAX_ANNOTATION_DEPTH));
+    }
     let tag = r.u1()?;
     Ok(match tag {
         b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z' => ElementValue::Const(tag, pool.loadable(r.u2()?)?),
@@ -435,15 +439,49 @@ fn element_value(r: &mut Reader, pool: &ConstantPool) -> Result<ElementValue, Er
             ElementValue::Enum { type_desc, name }
         }
         b'c' => ElementValue::Class(pool.utf8(r.u2()?)?.to_string()),
-        b'@' => ElementValue::Annotation(annotation(r, pool)?),
+        b'@' => ElementValue::Annotation(annotation(r, pool, depth)?),
         b'[' => {
             let n = r.u2()?;
             let mut v = Vec::with_capacity(n as usize);
             for _ in 0..n {
-                v.push(element_value(r, pool)?);
+                v.push(element_value(r, pool, depth + 1)?);
             }
             ElementValue::Array(v)
         }
         t => return Err(Error::BadAnnotationTag(t)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 常量池：#1 = Utf8 "x"
+    fn pool() -> ConstantPool {
+        ConstantPool::parse(&mut Reader::new(&[0x00, 0x02, 0x01, 0x00, 0x01, b'x'])).unwrap()
+    }
+
+    fn nested_arrays(levels: usize) -> Vec<u8> {
+        let mut v = Vec::new();
+        for _ in 0..levels {
+            v.extend_from_slice(&[b'[', 0, 1]);
+        }
+        v.extend_from_slice(&[b's', 0, 1]);
+        v
+    }
+
+    #[test]
+    fn element_value_depth_capped() {
+        let pool = pool();
+        let ok = element_value(&mut Reader::new(&nested_arrays(MAX_ANNOTATION_DEPTH)), &pool, 0);
+        assert!(ok.is_ok());
+        let deep = element_value(&mut Reader::new(&nested_arrays(MAX_ANNOTATION_DEPTH + 1)), &pool, 0);
+        assert!(matches!(deep, Err(Error::AnnotationTooDeep(_))));
+        // 注解互递归链超长：报错而不爆栈
+        let mut chain = vec![0, 1];
+        for _ in 0..100_000 {
+            chain.extend_from_slice(&[0, 1, 0, 1, 0, 1, b'@']);
+        }
+        assert!(matches!(annotations(&mut Reader::new(&chain), &pool), Err(Error::AnnotationTooDeep(_))));
+    }
 }

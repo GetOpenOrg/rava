@@ -17,6 +17,11 @@ pub use class::{acc, parse, Annotation, BootstrapMethod, ClassFile, Code, Elemen
 pub use constant::{Const, MemberRef, MethodHandle};
 pub use insn::{op, Insn, Operand};
 
+/// 注解（`@` 元素值）与数组元素值的嵌套深度上限。JVMS 未规定上限；注解类型不能直接或间接以自身为
+/// 成员类型（JLS §9.6.1），合法嵌套深度不超过注解类型链长度，实际远小于此值。超限视为畸形输入，
+/// 防止不可信 .class 以深嵌套耗尽解析栈。
+pub const MAX_ANNOTATION_DEPTH: usize = 256;
+
 #[derive(Debug)]
 pub enum Error {
     BadMagic,
@@ -26,6 +31,8 @@ pub enum Error {
     BadOpcode(u8, u32),
     BadCode(u32),
     BadAnnotationTag(u8),
+    /// 注解 / 元素值嵌套超过 [`MAX_ANNOTATION_DEPTH`]
+    AnnotationTooDeep(usize),
     Io(String, String),
 }
 
@@ -39,6 +46,7 @@ impl std::fmt::Display for Error {
             Error::BadOpcode(o, pc) => write!(f, "pc {pc} 处非法 opcode 0x{o:02x}"),
             Error::BadCode(pc) => write!(f, "pc {pc} 处 switch 表非法"),
             Error::BadAnnotationTag(t) => write!(f, "注解元素 tag {} 非法", *t as char),
+            Error::AnnotationTooDeep(d) => write!(f, "注解嵌套深度超过 {d}"),
             Error::Io(p, e) => write!(f, "{p}: {e}"),
         }
     }

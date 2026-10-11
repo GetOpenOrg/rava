@@ -39,7 +39,29 @@ impl FieldType {
     }
 }
 
+/// 数组类型维数上限（JVMS §4.3.2：描述符表示的数组类型不得超过 255 维）
+pub const MAX_ARRAY_DIMENSIONS: usize = 255;
+
+/// 解析一个字段类型：前导 `[` 循环计维（超过 [`MAX_ARRAY_DIMENSIONS`] 即非法），再解析元素类型，
+/// 不随维数递归（.class 中的描述符不可信）。
 fn parse_at(s: &[u8], i: &mut usize) -> Option<FieldType> {
+    let mut dims = 0usize;
+    while s.get(*i) == Some(&b'[') {
+        dims += 1;
+        if dims > MAX_ARRAY_DIMENSIONS {
+            return None;
+        }
+        *i += 1;
+    }
+    let mut t = parse_element(s, i)?;
+    for _ in 0..dims {
+        t = FieldType::Array(Box::new(t));
+    }
+    Some(t)
+}
+
+/// 非数组字段类型（基本类型或 `L…;`）
+fn parse_element(s: &[u8], i: &mut usize) -> Option<FieldType> {
     let c = *s.get(*i)?;
     *i += 1;
     match c {
@@ -53,7 +75,6 @@ fn parse_at(s: &[u8], i: &mut usize) -> Option<FieldType> {
             *i += 1;
             Some(FieldType::Object(name))
         }
-        b'[' => Some(FieldType::Array(Box::new(parse_at(s, i)?))),
         _ => None,
     }
 }
@@ -139,5 +160,21 @@ mod tests {
         assert_eq!(m.ret.unwrap().class_ref(), Some("java/util/List"));
         assert!(parse_method("()V").unwrap().ret.is_none());
         assert_eq!(class_refs("([[Ljava/lang/Object;Ljava/lang/String;)V"), ["java/lang/Object", "java/lang/String"]);
+    }
+
+    #[test]
+    fn array_dimensions_capped_at_255() {
+        let ok = format!("{}I", "[".repeat(255));
+        let t = parse_field(&ok).expect("255 维合法");
+        assert_eq!(t.descriptor(), ok);
+        assert_eq!(parse_field(&format!("{}I", "[".repeat(256))), None, "256 维被拒");
+        assert_eq!(parse_method(&format!("({}Ljava/lang/Object;)V", "[".repeat(256))), None);
+        assert_eq!(parse_method(&format!("(){}J", "[".repeat(256))), None);
+        // 不可信输入的超长前缀：循环计维，不递归，不爆栈
+        assert_eq!(parse_field(&format!("{}I", "[".repeat(65535))), None);
+        assert_eq!(parse_field("[[["), None, "无元素类型");
+        let multi = parse_field("[[Ljava/lang/String;").unwrap();
+        assert_eq!(multi.class_ref(), Some("java/lang/String"));
+        assert!(matches!(multi, FieldType::Array(ref e) if matches!(**e, FieldType::Array(_))));
     }
 }
