@@ -75,8 +75,42 @@
 
 **Miri**：`cargo +nightly miri test` 跑 rava_rawmem 全部 8 例，取 4 个种子（`-Zmiri-many-seeds=0..4`），均通过，未报 UB 或数据竞争。并发用例在 Miri 下降为 40 次迭代。rava_coro 含内联汇编栈切换与 mmap，Miri 无法执行，未跑。没有用 loom：rava_rawmem 只用 std 原子，Miri 的弱内存模拟已覆盖。
 
+**验收结果**
+
+- 本机：generator `cargo check --release --tests` 无误；emit 单测 93 + 2、classfile 15、rava_rawmem 9（含偏移 0..8 × 长度 0..40 穷举）、rava_coro release 与 debug 均通过。
+- 全量单测作业 `rs-ut2`（sg1，a6c8fcac）：`ut-closure`（closure_cli 11 例，3654 s）与 `ut-rest` 两条都是 rc=0，无失败。
+- 抽查 `rs-spot2`（sg1，a6c8fcac）：DeepCopy、HelloWorld、StreamDemo、TestAtomics、TestByteArrayViewVarHandle、TestDirectBuffer、TestDirectBufferPaging 7 例 PASS；其余（TestUnsafePrimitiveArray、TestVarHandleBitwise、TestThreadNatives、TestThreadJoin）仍在 sg1 排队，结果待补。该 ref 上的 TestDirectMemoryAtomics 是旧 VarHandle 版且无期望文件，以 rs-spot3 为准。
+- 抽查 `rs-spot3`（kr1，a3b7ca0a）：TestDirectMemoryAtomics（Unsafe 版）PASS，1/1。
+
+**计时**（作业 `rs-bench5`，kr1 同机，前 96fc1cf4 → 后 a3b7ca0a，各 5 次）
+
+基准是 sun.misc.Unsafe 绝对地址热循环（DirectMemBench，跑在 rava 生成的 release 二进制上）：
+
+- CAS 段：getAndAddInt 加 compareAndSwapLong，500 万次；
+- 普通段：putInt / getInt，204.8 万次；
+- 批量段：copyMemory 4 KiB 加 setMemory 96 B，2 万次。
+
+| 段 | 前 | 后（a3b7ca0a） |
+|---|---|---|
+| CAS | 413–441 ms（中位 417） | 439–445 ms（中位 441，+6%） |
+| 普通 | 63–66 ms | 57–58 ms（−10%） |
+| 批量 | 3 ms | 59–61 ms（**20 倍回退**） |
+| 进程总耗时 | 0.517–0.548 s | 0.595–0.599 s |
+| 构建 | 转译 58.9 s、编译 11 m 52 s | 转译 58.6 s、编译 11 m 46 s |
+| 二进制 | 53 168 904 B | 53 181 072 B（+12 KB） |
+
+批量段回退的原因：拷贝经 512 字节栈缓冲，`spans` 闭包每个字都切段并逐字节复制。57564806 改了两处：
+
+- 读、写、填充改为「头段 / 整字 / 尾段」显式循环；
+- 源与目标字内偏移相同的拷贝走逐字一读一写的快路径。
+
+本机微基准（`copy` 4 KiB 加 `fill` 96 B，2 万次）由 26 ms 降到 3 ms，与 memcpy 基线同量级。偏移不同的拷贝由 27 ms 降到 4.7 ms。Miri 2 种子 9/9 通过。**57564806 的 kr1 同机复测未做**（用户指令暂停后收尾），列入下一步。
+
 **遗留**
 
 - 堆上基本类型数组经 `__update_bytes` 做跨元素读-改-写（例如在 `byte[]` 上经 int 字路径做 byte CAS）时，走 stripe 锁下的读-改-写，可能丢失同时发生的普通元素写。这不在本步「直接内存」范围内，需在 `array/store.rs` 用同样的字粒度原子单元解决。
 - 直接内存还有 FFI 写入方（zlib 的 `inflate` / `deflate`、`read(2)` 写入直接缓冲区、`CStr::from_ptr(c_path(address))` 读路径），它们在 Rust 内存模型之外，与 Java 线程并发访问同一缓冲区属于 Java 程序自身的数据竞争。
+- 预先存在的缺陷（main 96fc1cf4 上同样存在，与本分支无关）：在 `ByteBuffer.allocateDirect` 上用 `MethodHandles.byteBufferViewVarHandle` 做原子访问时，程序启动即抛 `IllegalStateException`（无消息）。kr1 上 rs-bench4 前后两版二进制都是约 7 ms 内抛出。因此 TestDirectMemoryAtomics 改用 Unsafe 绝对地址；VarHandle 直接缓冲视图需另立任务查根因。
+- 下一步：① 57564806 在 kr1 同机复测 DirectMemBench，判据是批量段 ≤5 ms，CAS 和普通段不劣于 a3b7ca0a。命令见下条。② CAS 段的 +6% 来自 `update` 的 `&mut dyn FnMut` 动态调用与两次掩码运算；若要求持平，可以把 `update` 改为泛型 `impl FnMut` 内联（native_memory 调用点不变）。③ 堆数组跨元素读-改-写（见上条）。④ VarHandle 直接缓冲视图 ISE（见上条）。
+- 计时脚本已入库 `scripts/direct_mem_bench.sh`：内嵌 DirectMemBench.java 与期望输出；对当前检出与基线 ref（缺省 96fc1cf4）分别 `run_tests.py --release --keep-artifacts`，再把生成的二进制各跑 5 次。复测命令：`distribute_tests.py --job <tag> --ref 57564806 --servers kr1 --cmd "bash scripts/direct_mem_bench.sh"`。
 - 为跑 Miri，本机装了 nightly 工具链及 miri、rust-src 组件（`~/.rustup/toolchains/nightly-*`，Miri sysroot 在 `~/.cache/miri`）。
