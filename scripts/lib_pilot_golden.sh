@@ -11,6 +11,9 @@
 #   scripts/lib_pilot_golden.sh sc2    # spring-core 切片：AntPathMatcher
 #   scripts/lib_pilot_golden.sh sc3    # spring-core 切片：PropertyPlaceholderHelper + StringUtils
 #   scripts/lib_pilot_golden.sh sc4    # spring-core 切片：StreamUtils + MultiValueMap
+#   scripts/lib_pilot_golden.sh sb1    # spring-beans 切片（矩阵 #12）：BeanUtils
+#   scripts/lib_pilot_golden.sh sb2    # spring-beans 切片：BeanWrapperImpl 属性读写与嵌套路径
+#   scripts/lib_pilot_golden.sh sb3    # spring-beans 切片：PropertyEditor 族与类型转换
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
 #
 # 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
@@ -39,7 +42,7 @@ PY
 # 语料 JDK 与 run_tests.py 同口径：golden JVM 与转译语料同源于参考构建
 . "$REPO_ROOT/scripts/corpus_jdk.sh" "$REPO_ROOT"
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
-MODE="${1:?用法: $0 m1|m2|m3|m4|m5|sc1|sc2|sc3|sc4 [--no-transpile|--emit-only]}"
+MODE="${1:?用法: $0 m1|m2|m3|m4|m5|sc1..sc4|sb1..sb3 [--no-transpile|--emit-only]}"
 TRANSPILE=1
 EMIT_ONLY=0
 [[ "${2:-}" == "--no-transpile" ]] && TRANSPILE=0
@@ -97,12 +100,25 @@ sc1|sc2|sc3|sc4)
     CP="$LIBS/spring-core-6.2.19.jar:$LIBS/spring-jcl-6.2.19.jar"
     LIB_ARGS=(--deps "$LOCK" --cp spring-core,spring-jcl)
     ;;
+sb1|sb2|sb3)
+    # spring-beans 切片（矩阵 #12）：同 sc 口径，用户 main 为唯一入口；spring-beans 依赖 spring-core / spring-jcl
+    case "$MODE" in
+        sb1) MAIN=SpringBeanUtilsMain ;;
+        sb2) MAIN=SpringBeanWrapperMain ;;
+        sb3) MAIN=SpringPropertyEditorMain ;;
+    esac
+    CP="$LIBS/spring-beans-6.2.19.jar:$LIBS/spring-core-6.2.19.jar:$LIBS/spring-jcl-6.2.19.jar"
+    LIB_ARGS=(--deps "$LOCK" --cp spring-beans,spring-core,spring-jcl)
+    ;;
 *) echo "未知模式: $MODE" >&2; exit 2;;
 esac
 
 echo "== [1/3] JVM 侧 golden（真 jar）=="
 rm -rf classes && "$JAVAC" -d classes -cp "$CP" "$MAIN.java"
+# 三测点（运行 / 构建耗时、二进制大小）与 JVM 运行耗时对照，结尾汇总一行 METRICS
+_t0=$EPOCHREALTIME
 "$JAVA" -Dstdout.encoding=UTF-8 -cp "classes:$CP" "$MAIN" > "golden/${MODE}_jvm.txt"
+JVM_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.3f}')")
 echo "JVM 侧 $(wc -l < "golden/${MODE}_jvm.txt" | tr -d ' ') 行"
 
 echo "== [2/3] 转译 + 编译 + 运行（翻译 crate）=="
@@ -112,20 +128,28 @@ import re, sys
 print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', sys.argv[1]).lower())
 PY
 )"
+TRANSPILE_S=-
 if [[ "$TRANSPILE" == 1 ]]; then
+    _t0=$EPOCHREALTIME
     "$RAVA" build "tests/lib_pilot/$MAIN.java" "${CORPUS_JDK_ARGS[@]}" --clean "${LIB_ARGS[@]}" \
         --out "$SCRATCH" --stop-after emit > "/tmp/${MODE}_transpile.log" 2>&1 \
         || { echo "转译失败，见 /tmp/${MODE}_transpile.log" >&2; exit 1; }
+    TRANSPILE_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.1f}')")
 fi
 if [[ "$EMIT_ONLY" == 1 ]]; then
     echo "emit-only：$SCRATCH"
     exit 0
 fi
+_t0=$EPOCHREALTIME
 "$RAVA" compile "$SCRATCH" > "/tmp/${MODE}_cargo.err" 2>&1 \
     || { echo "编译失败，见 /tmp/${MODE}_cargo.err 与 $SCRATCH/build_status.json" >&2; exit 1; }
+COMPILE_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.1f}')")
 EXE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["exe"])' "$SCRATCH/build_status.json")"
+_t0=$EPOCHREALTIME
 "$EXE" > "$REPO_ROOT/tests/lib_pilot/golden/${MODE}_rs.txt" 2>>"/tmp/${MODE}_cargo.err" \
     || { echo "运行失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
+RUN_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.3f}')")
+echo "METRICS ${MODE} run_s=${RUN_S} jvm_run_s=${JVM_S} transpile_s=${TRANSPILE_S} compile_s=${COMPILE_S} bin_bytes=$(stat -c %s "$EXE")"
 
 echo "== [3/3] 逐字对账 =="
 if diff -u "tests/lib_pilot/golden/${MODE}_jvm.txt" "tests/lib_pilot/golden/${MODE}_rs.txt"; then
