@@ -15,8 +15,9 @@
 
 use super::*;
 
-/// 增长枢纽精确接收者数的升级阈值：高于语料（e2e 全集）单例闭包的最大增长枢纽接收者数（实测见计划 §4.12）
-pub(super) const HUB_SHARE: usize = 4096;
+/// 增长枢纽精确接收者数的升级阈值：高于语料（e2e 全集）单例闭包的最大增长枢纽接收者数（10-11 关闭共享实测
+/// 最大 16391，TestSystemProxySelector；取其上的 2 的幂，见计划 §4.12）
+pub(super) const HUB_SHARE: usize = 32768;
 /// 返回值与接收者无关的按调用点建模目标：全部接收者同一效果键
 const SKEY_ANY: u32 = u32::MAX;
 
