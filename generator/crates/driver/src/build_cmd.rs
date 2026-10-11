@@ -185,7 +185,7 @@ pub(crate) fn analyze<R: Send>(
     then: impl FnOnce(&ClosureFacts, &mut Perf) -> Result<R, String> + Send,
 ) -> Result<R, String> {
     let man = Manifest::load(rt)?;
-    let hw = Handwritten::new(rt);
+    let hw = Handwritten::new(rt, cp.release());
     let h = Hierarchy::new(cp);
     let roots: Vec<&String> = o.roots.iter().collect();
     let seeds: Vec<&String> = seed_classes.iter().collect();

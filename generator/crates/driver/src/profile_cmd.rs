@@ -204,7 +204,7 @@ impl Env {
         let cp = crate::build_cmd::class_path(&classes, &libs, &self.home, &self.images, None)?;
         let main = crate::build_cmd::user_order(&cp, &java, e.main.as_deref())?.remove(0);
         let man = Manifest::load(&self.rt)?;
-        let hw = Handwritten::new(&self.rt);
+        let hw = Handwritten::new(&self.rt, cp.release());
         let h = Hierarchy::new(&cp);
         let seeds: Vec<&String> = e.seed_classes.iter().collect();
         let input = closure::Input {

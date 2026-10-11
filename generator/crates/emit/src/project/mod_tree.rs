@@ -31,9 +31,10 @@ fn seg_name(s: &str) -> &str {
 }
 
 impl CompanionDeps {
-    pub fn new(runtime_dir: &Path, src_root: &Path) -> CompanionDeps {
+    /// `jdk_major`：参考 JDK 主版本（手写层 cfg 按它求值，与闭包所见同源）
+    pub fn new(runtime_dir: &Path, jdk_major: Option<u32>, src_root: &Path) -> CompanionDeps {
         CompanionDeps {
-            hw: HwTypeRefs::new(runtime_dir),
+            hw: HwTypeRefs::new(runtime_dir, jdk_major),
             hw_items: pub_item_names(&runtime_dir.join("src")),
             src_root: src_root.to_path_buf(),
         }
@@ -331,7 +332,13 @@ fn companions(
 /// 包目录名是 Java 包名段或手写模块名，不含 `.`，不会被当成 `_impl.rs` / `_ext.rs`。
 /// 各目录的 mod.rs 只取决于该目录的列举与手写依赖判定（写 mod.rs 不改变任何目录的
 /// `_impl` / `_ext` / 类文件在场情况），按 `jobs` 并行生成与落盘，写出顺序同目录序
-pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, jobs: usize, writer: &mut Writer) -> Result<()> {
+pub fn write_mod_tree(
+    src_root: &Path,
+    runtime_dir: Option<&Path>,
+    jdk_major: Option<u32>,
+    jobs: usize,
+    writer: &mut Writer,
+) -> Result<()> {
     let handwritten_src = runtime_dir.map(|r| r.join("src"));
     let mut listing = walk(src_root);
     let markers = sweep_stale(&mut listing, src_root, handwritten_src.as_deref(), writer, jobs)?;
@@ -341,7 +348,7 @@ pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, jobs: usize, 
     let tree = scan_tree(&listing, src_root, handwritten_src.as_deref(), &markers);
     prune_stale_pkg_dirs(&listing, src_root, handwritten_src.as_deref(), &tree)?;
     let files_of: BTreeMap<&Path, &[String]> = listing.iter().map(|(d, _, f)| (d.as_path(), f.as_slice())).collect();
-    let deps = runtime_dir.map(|r| CompanionDeps::new(r, src_root));
+    let deps = runtime_dir.map(|r| CompanionDeps::new(r, jdk_major, src_root));
     let dirs: Vec<(&PathBuf, &BTreeSet<String>)> = tree.iter().filter(|(d, _)| d.as_path() != src_root).collect();
     let texts = crate::par::par_map(jobs, &dirs, |&(dir, children)| {
         let files = files_of.get(dir.as_path()).copied().unwrap_or(&[]);

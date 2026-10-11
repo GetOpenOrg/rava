@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use syn::visit::Visit;
 
-use super::{collect_uses, path_segs, TypeRef, GENERATED_MARK};
+use super::{collect_uses, path_segs, HwCfg, TypeRef, GENERATED_MARK};
 
 /// 共置手写模块后缀：`use super::<类>_impl::…` 要求该类在生成范围内（其 mod.rs 才声明该模块）
 pub const MODULE_SUFFIXES: [&str; 2] = ["_impl", "_ext"];
@@ -58,11 +58,11 @@ impl<'ast> Visit<'ast> for TypePaths {
 }
 
 /// 一个手写文件（无生成标记）中的类型路径；解析失败返回 Err
-pub fn scan(content: &str, prelude: &HashMap<String, Vec<String>>) -> Result<BTreeSet<TypeRef>, String> {
+pub fn scan(content: &str, cfg: HwCfg, prelude: &HashMap<String, Vec<String>>) -> Result<BTreeSet<TypeRef>, String> {
     if content.contains(GENERATED_MARK) {
         return Ok(BTreeSet::new());
     }
-    let file = syn::parse_file(content).map_err(|e| e.to_string())?;
+    let file = cfg.parse_file(content).map_err(|e| e.to_string())?;
     let mut uses = prelude.clone();
     for item in &file.items {
         if let syn::Item::Use(u) = item {
@@ -79,7 +79,7 @@ mod tests {
     use super::*;
 
     fn refs(src: &str) -> Vec<String> {
-        scan(src, &HashMap::new()).unwrap().into_iter().map(|t| t.0.join("::")).collect()
+        scan(src, HwCfg::default(), &HashMap::new()).unwrap().into_iter().map(|t| t.0.join("::")).collect()
     }
 
     #[test]

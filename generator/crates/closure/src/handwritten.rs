@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use classfile::MemberRef;
 
+mod cfg;
 mod generic_fns;
 mod guards;
 mod hooks;
@@ -31,6 +32,7 @@ mod thread_local_lint;
 mod type_refs;
 mod units;
 mod vm_writes;
+pub use cfg::HwCfg;
 pub use type_refs::MODULE_SUFFIXES;
 pub use units::CRATE_ROOT;
 use scan::{close_transitive, collect_uses, prelude_uses, scan_file, FileFns};
@@ -231,6 +233,8 @@ impl MemberHw {
 
 pub struct Handwritten {
     src: PathBuf,
+    /// 条件编译求值环境（参考 JDK）：cfg 为假的手写部分不建模
+    cfg: HwCfg,
     /// `lib.rs` 的 `mod prelude` 导出（手写文件 `use crate::prelude::*` 引入）
     prelude: HashMap<String, Vec<String>>,
     cache: RefCell<HashMap<String, Rc<ClassHw>>>,
@@ -245,7 +249,13 @@ pub struct Handwritten {
 }
 
 /// 类的手写文件（共置 `_impl` / `_ext` 与整体手写 `<snake>.rs`）中的编译期类型路径；解析错误追加到 `errors`
-fn class_type_refs(src: &Path, prelude: &HashMap<String, Vec<String>>, cls: &str, errors: &mut Vec<String>) -> BTreeSet<TypeRef> {
+fn class_type_refs(
+    src: &Path,
+    cfg: HwCfg,
+    prelude: &HashMap<String, Vec<String>>,
+    cls: &str,
+    errors: &mut Vec<String>,
+) -> BTreeSet<TypeRef> {
     let (pkg, simple) = cls.rsplit_once('/').unwrap_or(("", cls));
     let mut out = BTreeSet::new();
     let stem = to_snake(simple);
@@ -257,7 +267,7 @@ fn class_type_refs(src: &Path, prelude: &HashMap<String, Vec<String>>, cls: &str
         }
         let path = src.join(pkg).join(format!("{stem}{suf}"));
         let Ok(content) = layout::read_unit(src, &path) else { continue };
-        match type_refs::scan(&content, prelude) {
+        match type_refs::scan(&content, cfg, prelude) {
             Ok(t) => out.extend(t),
             Err(e) => errors.push(format!("{}：{e}", path.display())),
         }
@@ -269,6 +279,7 @@ fn class_type_refs(src: &Path, prelude: &HashMap<String, Vec<String>>, cls: &str
 /// `type_refs` 同源同值，供落盘阶段按目录并行判定共置手写的模块依赖
 pub struct HwTypeRefs {
     src: PathBuf,
+    cfg: HwCfg,
     prelude: HashMap<String, Vec<String>>,
 }
 
@@ -323,21 +334,22 @@ pub fn pub_item_names(src: &Path) -> BTreeSet<String> {
 }
 
 impl HwTypeRefs {
-    /// `runtime_dir` = runtime/java_runtime
-    pub fn new(runtime_dir: &Path) -> Self {
-        HwTypeRefs { src: runtime_dir.join("src"), prelude: load_prelude(runtime_dir) }
+    /// `runtime_dir` = runtime/java_runtime；`jdk_major` = 参考 JDK 主版本（None：cfg 一律保留）
+    pub fn new(runtime_dir: &Path, jdk_major: Option<u32>) -> Self {
+        let cfg = HwCfg { jdk_major };
+        HwTypeRefs { src: runtime_dir.join("src"), cfg, prelude: load_prelude(runtime_dir, cfg) }
     }
 
     /// 同 `Handwritten::class(cls).type_refs`（解析错误忽略）
     pub fn class(&self, cls: &str) -> BTreeSet<TypeRef> {
-        class_type_refs(&self.src, &self.prelude, cls, &mut Vec::new())
+        class_type_refs(&self.src, self.cfg, &self.prelude, cls, &mut Vec::new())
     }
 }
 
-fn load_prelude(runtime_dir: &Path) -> HashMap<String, Vec<String>> {
+fn load_prelude(runtime_dir: &Path, cfg: HwCfg) -> HashMap<String, Vec<String>> {
     std::fs::read_to_string(runtime_dir.join("src/lib.rs"))
         .ok()
-        .and_then(|c| syn::parse_file(&c).ok())
+        .and_then(|c| cfg.parse_file(&c).ok())
         .map(|f| prelude_uses(&f))
         .unwrap_or_default()
 }
@@ -372,8 +384,10 @@ pub fn member_matches(fn_name: &str, member: &str) -> bool {
 }
 
 impl Handwritten {
-    /// `runtime_dir` = runtime/java_runtime
-    pub fn new(runtime_dir: &Path) -> Self {
+    /// `runtime_dir` = runtime/java_runtime；`jdk_major` = 构建单元的参考 JDK 主版本（手写层 `jdk_ge_<N>` cfg
+    /// 按它求值，与 runtime/java_runtime/build.rs 注入口径一致）
+    pub fn new(runtime_dir: &Path, jdk_major: u32) -> Self {
+        let cfg = HwCfg::jdk(jdk_major);
         let mut abbrev = HashMap::new();
         if let Ok(s) = std::fs::read_to_string(runtime_dir.join("overload_abbrev.txt")) {
             for line in s.lines() {
@@ -387,9 +401,10 @@ impl Handwritten {
                 }
             }
         }
-        let prelude = load_prelude(runtime_dir);
+        let prelude = load_prelude(runtime_dir, cfg);
         Handwritten {
             src: runtime_dir.join("src"),
+            cfg,
             prelude,
             cache: RefCell::new(HashMap::new()),
             units: RefCell::new(None),
@@ -420,13 +435,13 @@ impl Handwritten {
             if content.contains(GENERATED_MARK) {
                 continue;
             }
-            match syn::parse_file(&content) {
+            match self.cfg.parse_file(&content) {
                 Ok(file) => scan_file(&file, &self.prelude, &mut raw),
                 Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
             }
             hw.files.extend(layout::unit_files(&self.src, &path));
         }
-        hw.type_refs = class_type_refs(&self.src, &self.prelude, cls, &mut self.errors.borrow_mut());
+        hw.type_refs = class_type_refs(&self.src, self.cfg, &self.prelude, cls, &mut self.errors.borrow_mut());
         close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
         hw.objects = objects::close(&raw);
         hw.rets = std::mem::take(&mut raw.rets);
