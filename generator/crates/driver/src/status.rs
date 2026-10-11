@@ -50,6 +50,8 @@ pub struct BuildStatus {
     pub stage: Stage,
     pub jdk: Option<JdkChoice>,
     pub heavy: Option<Heavy>,
+    /// 内存感知作业数决定（编译段）
+    pub mem: Option<crate::mem_budget::MemPlan>,
     pub emit: Option<EmitSummary>,
     /// 编译失败现场（仅 cargo 阶段）
     pub failure: Option<Failure>,
@@ -77,6 +79,7 @@ impl BuildStatus {
                 "home": j.home, "major": j.major, "source": j.source.to_string(),
             })),
             "heavy": self.heavy.as_ref().map(Heavy::to_json),
+            "mem": self.mem.as_ref().map(crate::mem_budget::MemPlan::to_json),
             "emit": self.emit.as_ref().map(|e| json!({
                 "bin": e.bin,
                 "jdk_classes": e.jdk_classes,

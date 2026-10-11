@@ -21,6 +21,8 @@ mod closure_run;
 mod compile_cmd;
 mod deps_lock;
 mod gates_cmd;
+mod mem_budget;
+mod mem_probe;
 mod profile_cmd;
 mod predefined;
 mod profile_emit;
