@@ -970,8 +970,36 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   - 手写文件不止 `_impl.rs`：基础设施文件（`error.rs`、`lib.rs`、`monitor.rs`、`reflect_dispatch.rs`、`array_impl.rs` 等）也直接调用生成类的方法，同样需要显式导入。K4 把基础设施拆进 `runtime/java_marker/` 时，标记层文件不得调用 `X__Methods`（标记层无方法面）。依赖行为的调用须留在行为层，或经 `extern "Rust"` 转交。
   - 合成调用（indy 降级、ObjectMethods、反射分派臂、引导映像、main 钩子）不经字节码 invoke 指令，必须在生成点逐一登记。漏登记表现为 E0599 / E0425（找不到关联函数）。补登记以 invoke 入口统一登记为主，避免散点。
   - K6：`X__Methods` 的定义与 impl 须留在声明 crate（与方法体同层），不能进标记 crate。孤儿规则允许：trait 本地、类型外来。导入路径须随之改指声明 crate 的 `pub use`。
+- **K3 收尾（10-11 晚，s7-k3 15276d82）：峰值 +24–31% 分解归因、切段漂移修复、trait 展开收窄到 +8%**
+  - **归因（固定切段分解）**：
+    - 成因 1（切段漂移，主因之一）：K3 把文件头全部 `use …__Methods as _;` 无条件保留在声明层文件（`prune_uses` 对匿名导入不作单名剪枝）。D8 建图按 `crate::` 路径扫全文件 → 每条匿名导入都是类→类边；钉底文件（伴生宿主、手写引用类）的导入边级联把闭包拉进底段：HelloWorld 底段 342→476 类、DeepCopy 1895→2458（权重也计入这些行：两例底段分别 1 186 行 / 65 KB、11 363 行 / 638 KB）。模拟器同期失配（实际 {0:2326} vs 复现 {0:2122}）：`as _` 别名在 `local` 表互相覆盖。
+    - 成因 2（trait 展开，主因之二）：每类成员签名在 trait 声明 + trait impl 各一份。rustc 分段剖面（`-Z time-passes`，本机，修复前口径基线→修复前）：expand_crate 351→426 MB、type_check_crate 696→837、MIR_borrow_checking 877→1012、monomorphization graph walk 1032→1193、generate_crate_metadata 1052→1202——全管线抬升，是签名双份 + trait 项进 crate 元数据的结构性成本。
+    - 成因 3（次要）：匿名导入行的名称解析（修复后底段仍 538 行 / 30 KB）。
+  - **修复（15276d82，三个成分）**：
+    1. 声明层文件头匿名导入按词剪枝：`use crate::…::X__Methods as _;` 同单名规则——词干 `X` 出现在声明层文本（属性串 / 签名 / 反射分派尾巴）才保留。纯外壳文件的声明层跨类方法调用全部出自宏生成外壳，所指类名必在属性串或签名里，按词剪枝不漏。
+    2. 留体文件精确保留：留在声明层的方法体（泛型类整类、wrapper 上下文体、不可函数化体）按推断类型解析方法调用，接收者类名可不在文本中（实测例：`concurrent_hash_map_tree_bin.rs` 的 `_t1.compareTo(_t3)`，全文件无 `String` 词），词剪枝不安全——剥体计划（宏 `plan.rs` `StayBodies`）给出留体 fn 的 (java_method name, descriptor)，生成器按方法体发射前后差分出它所需的方法 trait（`ProjectState::method_traits`），拆层时按名单精确保留；缺属性的留体 fn 退全保留。中间测点：只做成分 1 而留体文件全保留时底段 370 类（多拉 28 类），成分 2 把它收回基线。
+    3. 内部成员留固有 impl：字段访问器（`__get_*` / `__set_*`）、`_init_not_null`、`__init_on` 不再入 trait——它们的跨 crate 调用点都在实现层或对本类，固有即可解析；trait 项省一份签名（底段 trait 成员 11 073 → 7 891，−29%）。K6 搬 struct 后固有失效，并入 K6 前置项（见下）。
+    4. 模拟器 `decl_scc_graph.py`：匿名导入按 D8 的 `crate::` 路径无条件建边（`as _` 别名不再互相覆盖），复现与实际分段一致。
+  - **修复后实测（本机 dev，32 核 / 120 GB，预热依赖后单 crate 重建 `/usr/bin/time` %M KB；基线 9baa7c22 → K3 2e310b56 → 修复 15276d82；切段与基线逐类一致：HelloWorld 底段 341 / 上段 237）**：
+
+    | crate（HelloWorld） | 基线 | K3 | 修复 | 修复 vs 基线 |
+    |---|---:|---:|---:|---:|
+    | java_base_decl（底段） | 1 031 756 | 1 295 500 | 1 111 940 | +7.8% |
+    | java_base_decl_1 | 544 928 | 422 244 | 588 680 | +8.0% |
+    | java_base_body_1 / _2 | 865 604 / 1 061 384 | 887 232 / 1 021 992 | 878 384 / 1 017 132 | +1.5% / −4.2% |
+
+  - **剩余与结论**：底段 / 上段 +7.8% / +8.0%，仍超 ±5%；body crate 达标。剩余成分是 java 方法外壳的 trait 展开（底段 7 891 项 trait 成员中 7 453 项为方法外壳，94%）：这正是 K6 需要的跨 crate 可读成员面，「每类一个全量方法 trait」形态内不可再减。进一步压低的已量化选项（供 K4 / 用户取舍，本轮未实施）：
+    1. `__class_init`（底段 90 项）与静态字段访问器（348 项）也留固有 impl：−5.6% trait 项，估 −0.5–1.5 pp；再扩大 K6 前置项。
+    2. 选择性 trait：只为「方法被跨文件调用」的类生成 trait（HelloWorld 底段实测 75% 的类被用到，25% 可省，估 −2–3 pp）；需两遍发射（全部文件的方法 trait 账本汇总后回写块内属性再触发展开），正确性风险在合成调用登记的完备性（漏登记即 E0599）。
+    3. 1+2 叠加估到 +4–5%（临界达标）。
+    4. 或修订 K3 过渡期阈值（±5% → ±10%）：D8 自身的 ≤1.3 GB 段目标不受影响（修复后 HelloWorld 底段约 1.11 GB < 1.3 GB；DeepCopy 底段基线本就 4.15 GB 超 1.3 GB，归 K5/K7 底段收窄）。
+  - **验证状态**：
+    - 本机：`cargo check --release --tests` 过；宏单测 26/26（`--features plan`）与缺省 21/21、emit layers 4/4；生成树工作区构建 0 错（HelloWorld、TestDynamicProxy，dev）。
+    - 服务器（作业 `s7k3-fix1-*`）：复测（同机基线 vs 修复 × HelloWorld / CollectorsDemo / DeepCopy 逐 crate 峰值 + 全工作区构建，即 DeepCopy f3368359 后复测）、单测 A（closure_cli）/ B（workspace 除 driver + 宏，含 `no_jdk_literals` / `jdk_literal_lint`）、DeepCopy release 二进制对照 batch-1011k。结果见下「K3 收尾服务器数据」。
+  - **K6 前置项（K3 相关，搬 struct 进标记 crate 前必须处理）**：std 同名成员（E0034）与接口载体成员（固有）之外，新增本轮留固有的字段访问器、`_init_not_null`、`__init_on`——须改名经 `__`-前缀内部名转发、并入方法 trait，或由 K6 的标记层机制另行承载。
+  - **待验证清单（交主会话合批）**：七例抽查集（HelloWorld、CollectorsDemo、DeepCopy、TestDynamicProxy、TestAnnoReflect、TestSerialLookupPairing、TestXmlTransform）＋相关例（InheritanceChain、InterfaceDispatch、LambdaBasic、StreamDemo、TestCollections、TestGenerics、Polymorphism、TestZonedDateTime、TestArrayList）；生成树对照（`compare_trees.sh`，基线 9baa7c22 对 15276d82：预期方法体文本不变、差异只在文件头匿名导入行与 D8 段归属复原）。
 - **K4 及后续方案**（10-11 用户暂停派发新代理，K4 未派，以下为续作入口）：
-  - **K3 收尾**（先做）：完成上面未完成项 1–4，达标后合入；第 5 项并入 K6 前置。
+  - **K3 收尾**：10-11 晚已完成分解归因与两轮修复（15276d82，见上「K3 收尾」节）：切段漂移全部收回（与基线逐类一致）、底段峰值 +24–31% 收窄到 +8%（本机口径）、body crate 达标、DeepCopy 工作区复测与全量单测已发服务器作业。**剩余决策**：声明 crate ±5% 阈值是否放宽到 ±10%（或实施上面选项 1/2 追加收窄），须用户裁决后合入。
   - **K4** 运行时基础设施分层：按上表实施。新增两项要求：
     - 标记层基础只含类型与句柄，不含任何 `use …__Methods`；
     - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层。
@@ -980,5 +1008,6 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   - **K7** D8 共置手写随宿主：独立。注意 K3 增加的 `use` 行改变了按体量切段的结果，模拟器（`decl_scc_sim.py`）的体量口径需同步计入导入行，或改为不计 `use` 行。
   - **K8** 档案验收：按上表；连同 K2 留下的 §4.3 热循环用例、StockTrans 计时一并补测。
 - 下一步：
-  - K3 收尾（未完成项 1–4），然后 K4（运行时基础设施分层）；
+  - K3 收口：服务器作业（s7k3-fix1-*）数字回填 + 用户裁决 ±5%/±10% 阈值后合入；
+  - 然后 K4（运行时基础设施分层）；
   - K5（类初始化骨架）与 K1–K4 互不依赖，可并行派发。
