@@ -1,7 +1,8 @@
 // 进程内 CPU 采样器（a3-T6 剖析用；服务器 perf_event_paranoid=4 时 perf 不可用的替代）。
 // LD_PRELOAD 注入：ITIMER_PROF 定时（按进程 CPU 时间计）发 SIGPROF，处理器在被打断的线程上 backtrace()，
 // 样本（线程号 + 返回地址）写入预分配缓冲；进程 exit 时连同 /proc/self/maps 落盘，由 sampler_report.py 符号化。
-// 环境：SAMPLER_OUT=<输出前缀>（必需），SAMPLER_HZ（缺省 499）。
+// 环境：SAMPLER_OUT=<输出前缀>（必需），SAMPLER_HZ（缺省 499），SAMPLER_MAIN=1 只采主线程（按主线程 CPU 时间的
+// 线程定时器 + SIGEV_THREAD_ID，不受进程级 ITIMER_PROF 同一时刻只挂一个待决信号的限制，主线程样本足量）。
 // 编译：cc -O2 -shared -fPIC -o sampler.so sampler.c
 #define _GNU_SOURCE
 #include <execinfo.h>
@@ -13,6 +14,7 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #define DEPTH 64
@@ -27,6 +29,8 @@ struct sample {
 static struct sample *buf;
 static atomic_long next;
 static const char *out;
+static timer_t main_timer;
+static int main_only;
 
 static void on_prof(int sig, siginfo_t *si, void *uc) {
     (void)sig; (void)si; (void)uc;
@@ -41,6 +45,7 @@ static void dump(void) {
     if (!buf) return;
     struct itimerval off = {0};
     setitimer(ITIMER_PROF, &off, NULL);
+    if (main_only) timer_delete(main_timer);
     char path[4096];
     snprintf(path, sizeof path, "%s.%d.samples", out, getpid());
     FILE *f = fopen(path, "w");
@@ -80,6 +85,23 @@ __attribute__((constructor)) static void init(void) {
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGPROF, &sa, NULL);
+    if (getenv("SAMPLER_MAIN")) {
+        struct sigevent ev;
+        memset(&ev, 0, sizeof ev);
+        ev.sigev_notify = SIGEV_THREAD_ID;
+        ev.sigev_signo = SIGPROF;
+        ev._sigev_un._tid = (int)syscall(SYS_gettid);
+        if (timer_create(CLOCK_THREAD_CPUTIME_ID, &ev, &main_timer) == 0) {
+            struct itimerspec ts;
+            ts.it_interval.tv_sec = 0;
+            ts.it_interval.tv_nsec = 1000000000L / hz;
+            ts.it_value = ts.it_interval;
+            timer_settime(main_timer, 0, &ts, NULL);
+            main_only = 1;
+            atexit(dump);
+            return;
+        }
+    }
     struct itimerval it;
     it.it_interval.tv_sec = 0;
     it.it_interval.tv_usec = 1000000 / hz;

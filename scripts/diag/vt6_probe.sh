@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # a3-T6 虚拟线程规模剖析（服务器作业用，Linux）：参考 JDK 两次运行 TestVirtualThreadScale 取 expected，
 # 转译 tests/perf/VirtualThreadScale 后按各模式采样内存时间线与耗时。产物在 build/vt6/。
-# 用法：scripts/diag/vt6_probe.sh <dev|release> [n=100000] [模式...（缺省 sleep park unstarted split）]
-# 环境：SKIP_JDK=1 跳过参考 JDK 运行；SAMPLE=1 每模式另跑一次进程内 CPU 采样（scripts/diag/sampler.c），报告写 build/vt6/<profile>_<mode>_prof.txt
+# 用法：scripts/diag/vt6_probe.sh <dev|dev-opt|release> [n=100000] [模式...（缺省 sleep park unstarted split）]
+# 环境：SCHED=1 另跑主线程调度时间线；SKIP_JDK=1 跳过参考 JDK 运行；SAMPLE=1 每模式另跑一次进程内 CPU 采样（scripts/diag/sampler.c），报告写 build/vt6/<profile>_<mode>_prof.txt
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 PROFILE=${1:-dev}; N=${2:-100000}; shift 2 2>/dev/null || shift $#
@@ -19,14 +19,15 @@ if [ "$PROFILE" = dev ] && [ -z "${SKIP_JDK:-}" ]; then
   cmp $OUT/jdk1.txt $OUT/jdk2.txt && echo "== jdk outputs identical" && cat $OUT/jdk1.txt
 fi
 
-REL=(); [ "$PROFILE" = release ] && REL=(--release)
+REL=(); case "$PROFILE" in release) REL=(--release);; dev-opt) REL=(--dev-opt);; esac
 WS=$OUT/ws_$PROFILE
+cargo build --release -q -p driver --manifest-path generator/Cargo.toml --target-dir build/analyzer-target || exit 1
 /usr/bin/time -v build/analyzer-target/release/rava build tests/perf/VirtualThreadScale.java --stop-after compile \
   --out $WS --clean --java-home "$JH" "${REL[@]}" > $OUT/build_$PROFILE.log 2>&1
 rc=$?
 echo "== rava build ($PROFILE) rc=$rc $(grep -E 'Elapsed|Maximum resident' $OUT/build_$PROFILE.log | tr -s ' ' | tr '\n' ' ')"
 [ $rc -eq 0 ] || { tail -40 $OUT/build_$PROFILE.log; exit 1; }
-DIR=debug; [ "$PROFILE" = release ] && DIR=release
+DIR=debug; case "$PROFILE" in release) DIR=release;; dev-opt) DIR=dev-opt;; esac
 BIN=build/target/$DIR/virtual_thread_scale
 [ -x "$BIN" ] || BIN=$(find build -path "*/$DIR/virtual_thread_scale" -type f | head -1)
 echo "== bin $BIN $(stat -c %s "$BIN") B"
@@ -43,6 +44,11 @@ for mode in $MODES; do
     > /dev/null 2> $OUT/${PROFILE}_${mode}_mem.err
   echo "== $PROFILE $mode rc=$? (memory)"
   grep -E '^phase|rss_timeline' $OUT/${PROFILE}_${mode}_mem.err
+  if [ -n "${SCHED:-}" ]; then
+    # 主线程调度时间线：在 CPU / 就绪排队 / 阻塞三段占比（scripts/diag/sched_timeline.py）
+    python3 scripts/diag/sched_timeline.py --interval 0.1 -- "$BIN" $N $ms $mode 2> $OUT/${PROFILE}_${mode}_sched.err
+    grep -E '^phase|all sleeping' $OUT/${PROFILE}_${mode}_sched.err
+  fi
   if [ -n "${SAMPLE:-}" ]; then
     # 进程内 CPU 采样（服务器 perf_event_paranoid=4，perf 不可用）
     [ -f $OUT/sampler.so ] || cc -O2 -shared -fPIC -o $OUT/sampler.so scripts/diag/sampler.c || exit 1
@@ -50,7 +56,7 @@ for mode in $MODES; do
     SAMPLER_OUT=$OUT/${PROFILE}_${mode}_prof LD_PRELOAD=$PWD/$OUT/sampler.so "$BIN" $N $ms $mode > /dev/null 2> $OUT/${PROFILE}_${mode}_prof.err
     echo "== sample $mode rc=$?"
     S=$(ls $OUT/${PROFILE}_${mode}_prof.*.samples 2>/dev/null | head -1)
-    [ -n "$S" ] && python3 scripts/diag/sampler_report.py "$BIN" "$S" 50 > $OUT/${PROFILE}_${mode}_prof.txt && head -60 $OUT/${PROFILE}_${mode}_prof.txt
+    [ -n "$S" ] && python3 scripts/diag/sampler_report.py "$BIN" "$S" ${TOP:-50} > $OUT/${PROFILE}_${mode}_prof.txt && grep -n "=====" $OUT/${PROFILE}_${mode}_prof.txt
     rm -f $OUT/${PROFILE}_${mode}_prof.*.samples
   fi
 done
