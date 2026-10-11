@@ -27,7 +27,7 @@ from dist_remote import (
     spot_remote_dir, prepare_spot_checkout, prepare_main_checkout, remove_checkout,
     ensure_reference_jdk, refjdk_env, mem_limited, parse_oom_line, NO_MEMLIMIT_MARK,
 )
-from dist_state import TaskPool, State
+from dist_state import TaskPool, State, resume_deadline, lease_ref_matches, valid_test_name
 from dist_job import server_lock_prefix, BUSY_MARK
 import remote_run
 from remote_run import make_run_key, runs_root
@@ -107,12 +107,12 @@ def _test_cmd(server: dict, test: str, jdk: int, remote_dir: str) -> str:
         + refjdk_env(server)
         + (slot_cargo_config(server, f"{remote_dir}/{out}") if out_flag else "")
         + mem_limited(
-            f"cd {remote_dir} && "
+            f"cd {shlex.quote(remote_dir)} && "
             f"uv run python3 scripts/run_tests.py "
             f"{jdk_flag}-j 1 {out_flag}"
             + (f"{dist_ctx.run_tests_args} " if dist_ctx.run_tests_args else "")
             # run_tests 的 --filter 是全路径子串匹配：带前导 / 才只命中本测试（Bell.java 会连带 LynchBell.java）
-            + f"--filter /{test}.java 2>&1",
+            + f"--filter {shlex.quote(f'/{test}.java')} 2>&1",
             server,
         )
         + " 2>&1"
@@ -135,10 +135,12 @@ def _scratch_rm(remote_dir: str, jdk: int, out: str, test: str, whole: bool) -> 
     root = shlex.quote(_jdk_root(remote_dir, jdk, out))
     if whole:
         return f"rm -rf {root}/;"
-    b = _to_bin_name(test)
+    if not valid_test_name(test):
+        raise ValueError(f"非法测试名，拒绝拼入远端 rm：{test!r}")
+    b = shlex.quote(_to_bin_name(test))
     return (
-        f"r={root}; rm -rf \"$r/{b}\" \"$r/expected-classes/{b}\" \"$r/logs/{b}.build.log\" "
-        f"\"$r/logs/{b}.run.log\" \"$r/logs/dyn/{b}.json\"; "
+        f"r={root}; b={b}; rm -rf \"$r/$b\" \"$r/expected-classes/$b\" \"$r/logs/$b.build.log\" "
+        f"\"$r/logs/$b.run.log\" \"$r/logs/dyn/$b.json\"; "
         f"t=\"$r/target\"; if [ -d \"$t\" ] && [ \"$(du -sm \"$t\" 2>/dev/null | cut -f1)\" -gt {TARGET_CAP_GB * 1024} ]; "
         f"then rm -rf \"$t\"; fi;"
     )
@@ -146,10 +148,19 @@ def _scratch_rm(remote_dir: str, jdk: int, out: str, test: str, whole: bool) -> 
 
 def new_lease(test: str, jdk: int, remote_dir: str, commit: str, tag: str) -> dict:
     """派发租约：run_key 由 测试名 + jdk + 提交 + 实例标签 决定，结果目录在检出目录内。"""
+    if not valid_test_name(test):
+        raise ValueError(f"非法测试名：{test!r}")
     run_key = make_run_key(test, f"jdk{jdk}", (commit or "unknown")[:12], tag)
+    start, limit = time.time(), task_timeout()
     return {"test": test, "jdk": jdk, "run_key": run_key, "work_dir": remote_dir,
-            "run_dir": f"{runs_root(remote_dir)}/{run_key}", "commit": commit, "start": time.time(),
-            "task_timeout": task_timeout()}
+            "run_dir": f"{runs_root(remote_dir)}/{run_key}", "commit": commit, "start": start,
+            "task_timeout": limit, "deadline": start + limit}
+
+
+def lease_deadline(lease: dict) -> float:
+    """租约的结束期限：新租约派发时记 start + 时限；接上旧租约时由 _resume_lease 按
+    resume_deadline 重算（停机间隔不计入）。无 deadline 字段的旧租约按 start + 时限。"""
+    return float(lease.get("deadline") or lease["start"] + task_timeout(lease))
 
 
 def task_timeout(lease: dict | None = None) -> int:
@@ -270,7 +281,7 @@ def run_task(client, server: dict, lease: dict, log_dir: Path) -> tuple[str | No
         try:
             out = remote_run.run_detached(
                 server, client, run_dir, _test_cmd(server, test, jdk, remote_dir),
-                on_line=on_line, post=post, timeout_at=lease["start"] + task_timeout(lease),
+                on_line=on_line, post=post, timeout_at=lease_deadline(lease),
                 kill_extra=_kill_cmd(remote_dir, "KILL", test), on_client=on_client,
             )
         finally:
@@ -524,6 +535,13 @@ def _resume_lease(server: dict, pool: TaskPool, state: State, log_dir: Path) -> 
     lease = state.leases().get(label)
     if not lease:
         return True
+    if not lease_ref_matches(lease.get("commit"), dist_ctx.target_commit):
+        # 旧租约跑的不是本次要测的提交：回收重派（远端残留运行由物理机初始化的 cleanup_orphans 结束）
+        _log(f"[{label}] ♻ 租约 {lease['test']} 在 {(lease.get('commit') or '?')[:9]} 上，"
+             f"本次目标 {dist_ctx.target_commit[:9]}，回收重派")
+        state.clear_lease(label)
+        pool.push_back([lease["test"]])
+        return True
     _set_st(label, status="connecting", current="接上租约")
     client, _ = _connect_with_retry(server)
     if client is None:
@@ -533,6 +551,9 @@ def _resume_lease(server: dict, pool: TaskPool, state: State, log_dir: Path) -> 
             state.clear_lease(label)
             pool.push_back([lease["test"]])
         return False
+    # 期限 = max(原期限, 接上时刻 + 时限)：本地停机期间不计入单例时限，避免接上即判 TIMEOUT
+    lease["deadline"] = resume_deadline(lease_deadline(lease), task_timeout(lease))
+    state.set_lease(label, **lease)
     try:
         _log(f"[{label}] ↪ 接上上次派发的 {lease['test']}（{lease['run_key']}）")
         _set_st(label, git_hash=(lease.get("commit") or "?")[:8])

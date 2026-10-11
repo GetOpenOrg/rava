@@ -207,7 +207,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ◐ 声明层底段收窄：模拟分析完成（S7 计划 §9.8）；10-11 用户裁决类型标记 crate 路线 A（每类方法 trait，属内部细节，同 `ObjectVTable`；常数级分派开销；标记 crate 按档案生成；语料档案目标 ⑤），实施分解 K1–K8 见 §9.9（分支 s7-marker；K1 wrapper 只持句柄 10-11 完成，单测与抽查 12/12 过）；D8 上段已改按上游感知峰值预算切分（d8-mb，§9.8.4，待攒批合入）；目标所有声明 crate ≤1.3 GB
 │   ├─ ⏸ 等 dev 恢复（换内存条，数天）：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例
 │   ├─ ⏸ 不实施 / 挂起（10-06 用户定）：方法句柄对象化、T2 余 4b、b1 序列化收窄、a5 关系型边界推理
-│   └─ ⏸ 缓：虚拟线程余项（T6 规模、pinned）、T1-M3、第三方库通用机制（JNI 层 / 构建期捕获运行期生成类）
+│   └─ ⏸ 缓：虚拟线程余项（T6 规模；pinned 已消解 0/260，vt-rest）、T1-M3、第三方库通用机制（JNI 层 / 构建期捕获运行期生成类）
 │
 └─ 【远期】
     ├─ ◇ 线程模型终态（2026-09-26-real-multithreading.md）
@@ -235,7 +235,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | A 正确性缺陷 | A1 TestModuleLayerDefine NPE（引导映像第 3 步）、A2 TestClassModuleFace 具名模块（第 4 步）、A4 JNDI / HTTP 转译超时、A5 C4 全量 e2e | 继续 |
 | A 正确性缺陷 | A3 URL 协议可靠口径（c1d-urlhost） | 依赖提速，随 D2 搁置 |
 | B 架构终态 | B1 a3 `#[jvm_boundary]` 归零、B2 引导映像求值器第 2–7 步 | 继续 |
-| B 架构终态 | B3 虚拟线程余项（T6 规模 / T1b 审计 / pinned 偶发）、B4 T1-M3 按模块登记 | 缓 |
+| B 架构终态 | B3 虚拟线程余项（T6 规模 / T1b 审计；pinned 偶发 10-11 已消解：rava 0/260、PinnedRace 与 JDK 同量级，见 c1d §21.8.5）、B4 T1-M3 按模块登记 | 缓 |
 | C 闭包精度与规模 | C1 c1d-elem、C2 clsfact、C3 a5-4 收窄（DeepCopy ≤2803，§29 三项能力优先）、C5 C1d-b（T2 余 / b1 / b2 / b3 余） | 继续 |
 | C 闭包精度与规模 | C4 a5 关系型边界推理（HelloWorld ≤371） | 缓 |
 | C 闭包精度与规模 | C6 jar 签名收窄 / jar·URL class-path（并入 §29 能力①）、§29 能力② JCA 提供者序求值 | 继续，优先（10-06 用户定） |

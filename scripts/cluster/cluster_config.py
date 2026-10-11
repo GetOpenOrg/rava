@@ -80,6 +80,22 @@ def _load_cluster(path: Path) -> tuple[list[dict], dict | None, str | None]:
 
 SERVERS, FALLBACK_PROXY, REPO_URL = _load_cluster(CONFIG_PATH)
 
+
+def _known_hosts_path(path: Path) -> Path:
+    """rava 维护的 SSH 主机密钥文件：环境变量 RAVA_KNOWN_HOSTS > cluster.toml 顶层 known_hosts 键 >
+    缺省 ~/.config/rava/known_hosts。建连时先读系统 ~/.ssh/known_hosts 再读它，未登记的主机一律拒绝
+    （RejectPolicy）；首次接入用 --trust-new-host（TOFU）或 ssh_client.py trust 登记。"""
+    if os.environ.get("RAVA_KNOWN_HOSTS"):
+        return Path(os.environ["RAVA_KNOWN_HOSTS"]).expanduser()
+    if path.exists():
+        v = tomllib.loads(path.read_text()).get("known_hosts")
+        if v:
+            return Path(v).expanduser()
+    return Path.home() / ".config" / "rava" / "known_hosts"
+
+
+KNOWN_HOSTS_PATH = _known_hosts_path(CONFIG_PATH)
+
 # ── 连接重试策略（2s → 5s → 稳定 10s，共 30 次） ─────────────────────────────
 
 RETRY_WAITS      = [2, 5] + [10] * 28   # 2→5→10×28，共 30 次，累计等待约 4.8 分钟

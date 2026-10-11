@@ -16,6 +16,7 @@ run_all() {  # $1=标签 其余=命令
 }
 mkdir -p $OUT/prc && "$JH/bin/javac" -d $OUT/prc scripts/diag/PinnedRace.java
 run_all jdk "$JH/bin/java" -cp $OUT/prc PinnedRace
+cargo build --release -q -p driver --manifest-path generator/Cargo.toml --target-dir build/analyzer-target || exit 1
 build/analyzer-target/release/rava build scripts/diag/PinnedRace.java --stop-after compile --out $OUT/pr --clean \
   --java-home "$JH" > $OUT/pr_build.log 2>&1 || { tail -30 $OUT/pr_build.log; exit 1; }
 B=$(find build -path "*/debug/pinned_race" -type f | head -1)

@@ -1776,6 +1776,52 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
     预期失败，不阻塞 a3-T6 合入。a3-T6 本身的交付止于：monitor 侧表分片（4a983fe8）、剖析结论与 opt-level 实测、
     TestContinuationPinned 第 1d 段按规范改写。
 
+**B3 余项现状（2026-10-11，分支 vt-rest）**
+
+- ① pinned 偶发：**已消解，0 失败**，无需新的运行时改动。
+  - 实测（作业 vtrest-rep-13b7d483，jp2，dev 构建，`scripts/diag/vt_repeat.sh`：顺序 100 次 + 8 进程并行 20 轮，逐次对照 expected）：
+    TestContinuationPinned rava **0 / 260**，参考 JDK 21.0.11 同口径 0 / 260。
+  - 机制对照（作业 vtrest-prof-04b329b2，jp2，`scripts/diag/pinned_race.sh`，PinnedRace 300 轮 × 顺序 1 + 并行 8，各 2700 轮）：
+
+    | | intr | nointr |
+    |---|---|---|
+    | 参考 JDK 21.0.11 | 2 / 2700 | 2 / 2700 |
+    | rava dev（main 13b7d483） | 1 / 2700，中途 RUNNABLE 0 | 2 / 2700 |
+    | rava dev（10-05 vt6-race-91685ba3，对照） | 61 / 2700，中途 RUNNABLE 5 | 36 / 2700 |
+
+  - 根因不变（上文：载体 park 许可由 ForkJoinPool 唤醒协议与 pin 停泊共用，JDK 21 设计，HotSpot 同样出现）。消解来自两处：
+    测试第 1d 段按规范循环 parkNanos 至截止（48f173c4，用户批准）；R1-next / S7 等运行期提速把两个竞态窗口压短，PinnedRace 残余
+    频率与 HotSpot 同量级（≤0.1%）。1c（pin 中 sleep 中途 RUNNABLE）在本轮 5400 轮中 0 次。
+  - 抽查（vtrest-051b9773，jp2）：VirtualThread 系列、并发与 HelloWorld / DeepCopy 共 14 例，13 / 14 通过，唯一失败为已知
+    TestVirtualThreadScale。
+  - 后续：无。残余提前返回是规范允许的虚假唤醒，运行时不得吞许可。失败原因登记 `docs/failure_patterns.toml`
+    `vt-pinned-carrier-permit`（status fixed）。
+- ② T6 规模（TestVirtualThreadScale）：仍失败，唯一差异 `all sleeping at once: false`。
+  - 实测（作业 vtrest-rep-13b7d483，us1）：dev 档 3 / 3 失败（墙钟约 33 s）；dev-opt 档 5 / 5 失败，墙钟 7.5–9 s、峰值 RSS 约 1.03–1.1 GB
+    （墙钟 ≤10 s、RSS ≤2 GiB 两项过线）。
+  - 差距：主线程建 + 启 10⁵ 个须在 2 s 睡眠窗口内完成（≤约 16 µs/VT，留出最后一批入睡的余量）；dev-opt sleep 模式实测 25.6 µs/VT
+    （2.56 s），split 模式建 3.3 µs + 启 16.5 µs。
+  - 全线程剖析（vtrest-prof-04b329b2，dev-opt）热点：libc 自身约 21%（malloc / free / memcpy）、`rava_coro::Context::new` 2–4%、
+    `Object::eq` 约 3%、按类名 `binary_search` 的 instanceof 1–1.5%、`Thread::currentThread`、持锁计数（`hold_slot` / `held`）、
+    monitor 侧表 HashMap、`instance_field_by_id` / `__field_slot`、`native_memory::is_raw`。主线程分解见下。
+  - 主线程调度时间线（作业 vtrest-sched-9731d052，us1，`scripts/diag/sched_timeline.py`）：建 + 启循环期间主线程在 CPU 上
+    约 100%、就绪排队约 0、阻塞约 0——**循环纯 CPU 受限**，不是锁争用或 CPU 争用；循环 2.6–3.0 s（26–30 µs/VT，前 10⁴ 个约
+    30 µs、后段约 18.5 µs，前段含 CHM 扩容与堆增长）。判据 `lateStarts == 0` 要求最后一个虚拟线程在第一个睡满 2 s 前开跑，
+    即循环须 ≤约 1.8 s（≤18 µs/VT），差 1.5–1.6 倍。split 模式（建与启分开）`true`。
+  - 主线程剖析（作业 vtrest-mprof2-45e38d28，`SAMPLER_MAIN=1`，2 kHz 线程 CPU 定时器；% 为主线程样本，含 join 段约 30%）：
+    `Thread.Builder.start` 60%，其中 `VirtualThread.start` 45%（`ThreadContainers.TrackingRootContainer.onStart` 的
+    CHM 键集 add 17.7%——`jdk.trackAllThreads` 缺省即跟踪，忠实语义；`submitRunContinuation` → `ForkJoinPool.execute` 23%，
+    内 `WorkQueue.push` 11.5%、`signalWork` 7.9%，后者含 `unpark` 载体的 futex 唤醒 6.2%，与 HotSpot 同为必需），
+    创建（`newVirtualThread` / `<init>`）14.6%。横向热点：Unsafe 字段访问按名解析（偏移 id → (声明类, 字段名) →
+    `__field_slot` 沿超类链 + `binary_search` → `__unsafe_word(名)`，含 `instance_field_by_id` / `ClassDesc` 遍历 /
+    `meta::supertypes` / `is_raw`）合计约 8–9% 自身；malloc（`VirtualThread` 分配、CHM 节点、AQS 节点）约 8%；
+    用户代码 `mode.equals(...)` 3.6%。monitor park / unpark 本身只有 futex 系统调用，无可省开销。
+  - 结论：剩余 1.6 倍不在本线（线程 / Continuation / monitor）边界内，属生成代码与运行期的通用常数：① Unsafe 偏移解析改为
+    按类直接槽位（宏生成的偏移表或按 (类, id) 缓存，涉及 rava_macros 与 `unsafe__impl` / `reflect_dispatch`，S7 / R1）；
+    ② instanceof / checkcast 走 `__ClassDesc`（F 线已列）；③ 分配次数（R1-next 续）。三项合计预计 20–25%，单靠它们仍可能
+    不够，需叠加构建档位（dev-opt 已过墙钟与内存，release 未测）。均属 tasks.md F「纯优化 暂停」，本轮不实施；
+    TestVirtualThreadScale 维持 known_failures（签名不变）。T1b 复审按派发顺序排在 ② 之后，本轮未做。
+
 ### 21.9 a3 实施记录（2026-10-05，分支 c1d-a3）
 
 口径：HelloWorld `--stop-after emit` 审计；闭包类数为本机 `rava closure` 实测，前后在同一提交上只差该子项的改动（反向应用补丁取底数）。

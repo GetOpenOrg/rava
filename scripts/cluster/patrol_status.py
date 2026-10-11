@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cluster_config import CONFIG_PATH, REPO_ROOT, RESULTS_DIR  # noqa: E402
+from dist_state import state_paths  # noqa: E402
 
 REPO = REPO_ROOT
 WS_ROOT = REPO.parent
@@ -121,12 +122,31 @@ def job_line(d: Path) -> str | None:
     return f"  job {d.name}: " + ", ".join(parts)
 
 
-def spot_counts(d: Path) -> tuple[int, dict, int] | None:
-    st = d / "state_jdk21.json"
-    if not st.exists():
-        return None
-    j = json.loads(st.read_text())
-    return len(j.get("passed", [])), j.get("failed", {}), len(j.get("leases", {}))
+def spot_counts(d: Path) -> list[tuple[int, int, dict, int]]:
+    """结果目录下各 JDK 的状态（遍历全部 state_jdk*.json）：[(JDK, 通过数, 失败表, 在跑租约数)]。
+    状态文件损坏时失败表记 {"<状态损坏>": …}，巡检只读、不备份不改写。"""
+    out = []
+    for jdk, st in state_paths(d).items():
+        try:
+            j = json.loads(st.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            out.append((jdk, 0, {"<状态损坏>": st.name}, 0))
+            continue
+        out.append((jdk, len(j.get("passed", {})), j.get("failed", {}), len(j.get("leases", {}))))
+    return out
+
+
+def spot_lines(prefix: str, d: Path, done: bool, limit: int) -> list[str]:
+    """按 JDK 分行汇报一个结果目录。"""
+    lines = []
+    for jdk, npass, failed, nlease in spot_counts(d):
+        tail = (f"：{', '.join(list(failed)[:limit])}" if failed else "")
+        if done:
+            lines.append(f"  {prefix} [JDK{jdk}]: 通过 {npass}，失败 {len(failed)}"
+                         + (f"，中断 {nlease}" if nlease else "") + tail)
+        else:
+            lines.append(f"  {prefix} [JDK{jdk}]: 通过 {npass} 失败 {len(failed)} 在跑 {nlease}" + tail)
+    return lines
 
 
 def report_results(disp: list[dict]) -> None:
@@ -141,10 +161,7 @@ def report_results(disp: list[dict]) -> None:
         if d.parent.name == "job":
             line = job_line(d)
         else:
-            c = spot_counts(d)
-            line = None if c is None else (
-                f"  spot {d.name}: 通过 {c[0]}，失败 {len(c[1])}" + (f"，中断 {c[2]}" if c[2] else "")
-                + (f"：{', '.join(list(c[1])[:12])}" if c[1] else ""))
+            line = "\n".join(spot_lines(f"spot {d.name}", d, True, 12)) or None
         if line:
             print(line)
             newly.append(str(d))
@@ -154,11 +171,14 @@ def report_results(disp: list[dict]) -> None:
     else:
         print("  无")
     section("在跑作业 / 抽查")
+    shown: set[Path] = set()
     for d in disp:
-        base = CR / d["kind"] / d["tag"]
-        if d["kind"] == "spot" and (c := spot_counts(base)):
-            print(f"  spot {d['tag']}: 通过 {c[0]} 失败 {len(c[1])} 在跑 {c[2]}"
-                  + (f"：{', '.join(list(c[1])[:8])}" if c[1] else ""))
+        base = CR if d["kind"] == "full" else CR / d["kind"] / d["tag"]
+        if base in shown:   # 同一结果目录（如 JDK21 / JDK25 两个全量分发器）只汇报一次，已按 JDK 分行
+            continue
+        shown.add(base)
+        if d["kind"] in ("spot", "full") and (ls := spot_lines(f"{d['kind']} {d['tag']}", base, False, 8)):
+            print("\n".join(ls))
         elif d["kind"] == "job" and (base / "summary.json").exists():
             j = json.loads((base / "summary.json").read_text())
             st = []
