@@ -127,6 +127,11 @@ pub fn gen_invokevirtual(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
         site.obj_node = Expr::raw(site.obj_e.clone());
         site.obj_ty = view;
     }
+    // 接收者静态类型比 owner 更具体（协变返回 / 上游已知子类）时，调用落在接收者类的 wrapper 上：
+    // 自接收者类起沿超类链登记方法 trait（§9.9 K3）
+    if let Some(recv_bin) = erased_binary(env, &site.obj_ty).filter(|b| *b != call.owner) {
+        crate::method_traits::record_member(&env.ctx, &recv_bin, &call.name, Some(&call.desc));
+    }
     if args::try_early_receiver_paths(env, sim, log, obj_is_typevar, call, &site)? {
         return Ok(());
     }
