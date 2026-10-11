@@ -193,8 +193,12 @@ pub struct Manifest {
     constructor_lookups: HashSet<String>,
     /// `[facts.reflect] constructor_enumerations`：构造器枚举调用（接收者所指类的全部构造器成为反射构造目标）
     constructor_enumerations: HashSet<String>,
-    /// `[facts.reflect] constructor_lookup_internals`：查找体内的枚举调用者（其枚举只为按描述符挑选，不另行请求）
-    constructor_lookup_internals: HashSet<String>,
+    /// `[facts.reflect] constructor_enumeration_wrappers`：包装枚举的查找 / 枚举方法（请求由其自身调用点给出，体内枚举不另行请求）
+    constructor_enumeration_wrappers: HashSet<String>,
+    /// `[facts.reflect] constructor_metadata_readers`：只读枚举结果元数据（修饰符 / 形参类型）、不构造的调用者
+    constructor_metadata_readers: HashSet<String>,
+    /// `[facts.reflect] record_constructor_lookups`：构造器查找的 Class 数组实参恒为接收者的 record 分量类型（规范构造器）
+    record_constructor_lookups: HashSet<String>,
     class_initializers: HashSet<String>,
     mirror_subtype_tests: HashSet<String>,
     member_owner_initializers: HashMap<String, LinkRoute>,
@@ -521,7 +525,9 @@ impl Manifest {
             method_lookups: reflect("method_lookups").into_iter().collect(),
             constructor_lookups: reflect("constructor_lookups").into_iter().collect(),
             constructor_enumerations: reflect("constructor_enumerations").into_iter().collect(),
-            constructor_lookup_internals: reflect("constructor_lookup_internals").into_iter().collect(),
+            constructor_enumeration_wrappers: reflect("constructor_enumeration_wrappers").into_iter().collect(),
+            constructor_metadata_readers: reflect("constructor_metadata_readers").into_iter().collect(),
+            record_constructor_lookups: reflect("record_constructor_lookups").into_iter().collect(),
             class_initializers: reflect("class_initializers").into_iter().collect(),
             mirror_subtype_tests: reflect("mirror_subtype_tests").into_iter().collect(),
             member_owner_initializers: reflect("handle_owner_initializers")
@@ -862,9 +868,15 @@ impl Manifest {
         self.constructor_enumerations.contains(member)
     }
 
-    /// 查找体内的构造器枚举调用者（`[facts.reflect] constructor_lookup_internals`）
-    pub fn is_constructor_lookup_internal(&self, member: &str) -> bool {
-        self.constructor_lookup_internals.contains(member)
+    /// 调用者 caller 上的构造器枚举请求接收者全部构造器：包装方法（`constructor_enumeration_wrappers`）与只读元数据的
+    /// 调用者（`constructor_metadata_readers`）不请求
+    pub fn constructor_enumeration_requests(&self, caller: &str) -> bool {
+        !self.constructor_enumeration_wrappers.contains(caller) && !self.constructor_metadata_readers.contains(caller)
+    }
+
+    /// 方法体内构造器查找的 Class 数组实参恒为接收者的 record 分量类型（`[facts.reflect] record_constructor_lookups`）
+    pub fn is_record_constructor_lookup(&self, member: &str) -> bool {
+        self.record_constructor_lookups.contains(member)
     }
 
     /// 反射对象（Method）转成方法句柄（`[facts.reflect] method_to_handle`）

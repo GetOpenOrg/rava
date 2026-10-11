@@ -517,7 +517,8 @@ impl<'a> Engine<'a> {
     ///
     /// 查找的构造器描述符（[`Self::ctor_request`]）：查找只接 Class 接收者、无其他形参（`Class.newInstance`）为无参
     /// 构造器；带 Class 数组形参的按该数组的元素（[`Self::ctor_params`]）；其余（如按 MethodType 查找）与数组推不出时
-    /// 为全部构造器
+    /// 为全部构造器；`[facts.reflect] record_constructor_lookups` 方法体内的查找按接收者的 record 分量类型（规范构造器），
+    /// 非 record 接收者不可达（分量数组为 null，查找前即抛出）
     pub(super) fn constructor_lookup(&mut self, m: usize, off: u32, k: &str, mref: &MemberRef, opcode: u8, args: &[V]) {
         let Some(md) = parse_method(&mref.desc) else { return };
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
@@ -527,10 +528,12 @@ impl<'a> Engine<'a> {
         }
         let class_array = format!("[L{CLASS};");
         let mut filter: Option<Rc<str>> = (skip == 1 && mref.owner == CLASS && md.params.is_empty()).then(|| Rc::from("()"));
+        let mut record = false;
         for (p, a) in md.params.iter().zip(args.iter().skip(skip)) {
             if matches!(p, FieldType::Object(c) if c == CLASS) {
                 vals.push(a.clone());
             } else if matches!(p, FieldType::Array(_)) && parse_field(&class_array).as_ref() == Some(p) {
+                record = self.man.is_record_constructor_lookup(&self.methods[m].key.to_string());
                 filter = self.ctor_params(m, off, a);
             }
         }
@@ -540,15 +543,22 @@ impl<'a> Engine<'a> {
         }
         self.ctor_lookups.insert((m, off), (k.to_string(), vals));
         for cls in classes.into_iter().filter(|c| !c.starts_with('[')) {
+            // record 规范构造器查找：形参为接收者的分量类型；非 record 接收者取不到分量（null），查找不可达
+            let filter = if record {
+                let Some(comps) = self.h.class(&cls).and_then(|cf| cf.record_components.clone()) else { continue };
+                Some(Rc::from(format!("({})", comps.iter().map(|(_, d)| d.as_str()).collect::<String>())))
+            } else {
+                filter.clone()
+            };
             let c = self.id(&cls);
-            let grew = self.ctor_request(c, filter.clone());
+            let grew = self.ctor_request(c, filter);
             if (self.enumerated.insert((Members::Constructors, c)) || grew) && self.invokable.contains(&Members::Constructors) {
                 self.expose(Members::Constructors, c);
             }
         }
     }
 
-    /// 构造器枚举调用（`[facts.reflect] constructor_enumerations`，查找体内的调用者除外）：接收者所指类的全部构造器
+    /// 构造器枚举调用（`[facts.reflect] constructor_enumerations`，包装方法与只读元数据的调用者除外）：接收者所指类的全部构造器
     /// 被请求（枚举结果交给调用者，任一构造器都可能被反射构造）。推不出所指类的接收者记为反射缺口
     pub(super) fn constructor_enumeration(&mut self, m: usize, off: u32, k: &str, opcode: u8, args: &[V]) {
         if opcode == classfile::op::INVOKESTATIC {
