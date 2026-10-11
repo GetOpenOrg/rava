@@ -111,7 +111,7 @@ impl Engine<'_> {
                 }
             } else {
                 // 静态成员没有接收者：open 部分不灌入其形参 0（`rcall_widen` 已登记本体并接实参池）
-                let st = self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|mm| mm.is_static()));
+                let st = self.ctx_flat_mode != 0 && self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|mm| mm.is_static()));
                 if !st {
                     let o = TypeSet { classes: IdSet::default(), open: IdSet::from_sorted(opens) };
                     let o = self.filter(&o, owner);
@@ -160,7 +160,7 @@ impl Engine<'_> {
             let m = &self.rcall_members[i];
             (m.key.clone(), m.iface, m.virt, m.mask)
         };
-        let st = self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|mm| mm.is_static()));
+        let st = self.ctx_flat_mode != 0 && self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|mm| mm.is_static()));
         if !virt && st {
             self.rcall_stats.static_recvs += 1;
             return;
