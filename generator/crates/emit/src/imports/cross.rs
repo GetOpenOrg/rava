@@ -89,13 +89,16 @@ pub fn claim_structural(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>,
     Ok(())
 }
 
-/// 超类链祖先的 `Ancestor__VTable`（宏生成 `impl Ancestor__VTable for Self`）
+/// 超类链祖先的 `Ancestor__VTable`（宏生成 `impl Ancestor__VTable for Self`）与方法 trait
 fn vtable_claims(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>) {
     let mut cur = ci.super_class();
     while !cur.is_empty() && cur != lang::OBJECT {
         if inp.generated.is_none_or(|g| g.contains(cur)) || !cur.contains('/') {
             ctx.ty.derived(cur, "__VTable");
         }
+        // 宏展开的 `<Super>::__class_init()` 与继承转发 `<Owner as From<Self>>::from(..).m(..)`
+        // 落在祖先 wrapper 的方法 trait 上（§9.9 K3）
+        ctx.ty.use_methods(cur);
         match ctx.ty.reg.get(cur) {
             Some(c) => cur = c.super_class(),
             None => break,

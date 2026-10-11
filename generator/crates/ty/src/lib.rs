@@ -91,6 +91,13 @@ impl<'a> TyCtx<'a> {
         }
     }
 
+    /// 登记调用点用到类 `binary` 的方法 trait（`X__Methods`，匿名导入；无作用域时无操作）
+    pub fn use_methods(&self, binary: &str) {
+        if let Some(s) = self.scope {
+            s.methods_trait(binary);
+        }
+    }
+
     /// 结构化引用集按 binary 序预认领（无作用域时无操作）
     pub fn preclaim<'s>(&self, bins: impl IntoIterator<Item = &'s str>) {
         if let Some(s) = self.scope {

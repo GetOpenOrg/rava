@@ -5,10 +5,12 @@
 //! - 本文件：§5 wrapper struct 与基础 trait impl，并按固定顺序拼装各段
 //! - `into_object`：§6 `From<Wrapper> for Object`
 //! - `methods`：§7 wrapper impl 块（访问器 / 虚方法委托 / 继承转发 / 构造器 / 静态与类初始化）
+//! - `method_trait`：每类方法 trait `X__Methods`（可读层成员由固有 impl 移入，§9.9 K3）
 //! - `body_fns`：方法体函数化（体移入模块级 `__jbm_<类>__<方法>`，wrapper 方法为外壳）
 
 mod body_fns;
 mod methods;
+mod method_trait;
 mod into_object;
 
 pub(crate) use body_fns::functionize_applicable;

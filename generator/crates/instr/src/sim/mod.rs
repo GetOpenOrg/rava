@@ -68,6 +68,8 @@ fn load_const(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, load: &Ins
 }
 
 pub(crate) fn sim_insn(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &Insn) -> InstrResult<()> {
+    // 成员引用的 owner → 本文件导入的方法 trait（§9.9 K3）
+    crate::method_traits::record_insn(&env.ctx, ins);
     let handled = consts::sim_consts(env, sim, log, ins)?
         || locals::sim_locals(env, sim, ins)?
         || arith::sim_arith(env, sim, ins)?

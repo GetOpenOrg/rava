@@ -22,14 +22,11 @@ use super::super::super::util::{attr_str, strip_meta_attrs};
 use super::super::context::GenContext;
 use super::super::storage_hooks::hook_ident;
 use super::body_fns::{functionize, functionize_moved};
+use super::method_trait;
 
 /// 返回 (wrapper impl 段, 方法体函数化后的模块级体函数)
 pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
-    let struct_ident = &ctx.struct_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
-    let impl_g = &ctx.impl_g;
-    let ty_g = &ctx.ty_g;
-    let where_c = &ctx.where_c;
 
     // ══════════════════════════════════════════════════════════════════════════
     // 7. Impl block on wrapper（字段访问器委托 + 虚方法委托 + 构造器双入口）
@@ -285,15 +282,17 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         &ctx.struct_ident, &ctx.meta.binary_name, ctx.meta.superclass.as_ref(),
         &ctx.meta.init_interfaces, has_clinit, ctx.meta.boot_initialized);
 
+    // 可读层成员移入每类方法 trait `X__Methods`（§9.9 K3）；const fn / std 同名方法 /
+    // 关联常量留在固有 impl
+    let members = method_trait::split(ctx, quote! {
+        #(#wrapper_methods)*
+        #(#static_accessors)*
+        #class_init_fn
+    })?;
     let wrapper_impl = quote! {
         #(#static_storage)*
         #init_state
-
-        impl #impl_g #struct_ident #ty_g #where_c {
-            #(#wrapper_methods)*
-            #(#static_accessors)*
-            #class_init_fn
-        }
+        #members
     };
 
     Ok((wrapper_impl, body_fns))

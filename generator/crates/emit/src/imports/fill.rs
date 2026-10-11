@@ -2,7 +2,7 @@
 //!
 //! 文件里出现的每个类名都在本文件作用域认领过（结构化引用集预认领 + 渲染时认领），
 //! 认领记录即导入来源：类名导入（binary 序）→ 派生名导入（`__VTable` / `__m_base`，
-//! binary 序）。路径按目标类所在位置定向：同 crate 用户类走其模块，其余生成类走包路径
+//! binary 序）→ 方法 trait 匿名导入（`use …::X__Methods as _;`，binary 序）。路径按目标类所在位置定向：同 crate 用户类走其模块，其余生成类走包路径
 //! （crate 前缀按归属定向，lib crate 只导入依赖方向允许的 crate）；不在生成集的类不导入。
 
 use std::collections::BTreeSet;
@@ -92,5 +92,20 @@ pub fn import_lines(ctx: &EmitCtx<'_>, site: &ImportSite<'_>, scope: &NameScope)
             out.push(line);
         }
     }
+    // 方法 trait（`X__Methods`，宏生成）：匿名导入，不占名字。本类的在本模块定义；
+    // 不透明类（无方法）、不可导入的类不导入
+    for b in st.methods_traits() {
+        if b == self_bin || ctx.is_opaque(b) {
+            continue;
+        }
+        let Some(m) = module_path(ctx, site, b, false) else { continue };
+        let line = format!("use {m}::{}{METHODS_SUFFIX} as _;", declared(ctx, b));
+        if seen.insert(line.clone()) {
+            out.push(line);
+        }
+    }
     out
 }
+
+/// 方法 trait 名后缀（宏 `java_class!` 生成的 `<类名>__Methods`）
+pub const METHODS_SUFFIX: &str = "__Methods";

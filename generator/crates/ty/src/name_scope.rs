@@ -52,6 +52,8 @@ pub struct ScopeState {
     by_name: BTreeMap<String, String>,
     /// 用到的派生名（binary, 后缀），如 `__VTable`、`__m_base`
     derived: BTreeSet<(String, String)>,
+    /// 用到方法 trait（`X__Methods`，宏生成）的类：匿名导入 `use …::X__Methods as _;`，不认领名字
+    methods: BTreeSet<String>,
 }
 
 impl ScopeState {
@@ -63,6 +65,11 @@ impl ScopeState {
     /// 派生名记录（binary 序）：(binary, 后缀)
     pub fn derived(&self) -> impl Iterator<Item = (&str, &str)> {
         self.derived.iter().map(|(b, s)| (b.as_str(), s.as_str()))
+    }
+
+    /// 方法 trait 记录（binary 序）
+    pub fn methods_traits(&self) -> impl Iterator<Item = &str> {
+        self.methods.iter().map(String::as_str)
     }
 
     /// binary 的显示名（已认领）
@@ -146,6 +153,14 @@ impl NameScope {
         let n = self.claim(global, binary);
         self.lock().derived.insert((binary.to_string(), suffix.to_string()));
         format!("{n}{suffix}")
+    }
+
+    /// 登记方法 trait 的使用（匿名导入，不认领名字：不影响本文件其余类的取名）
+    pub fn methods_trait(&self, binary: &str) {
+        let mut st = self.lock();
+        if !st.methods.contains(binary) {
+            st.methods.insert(binary.to_string());
+        }
     }
 
     /// 显示名 → binary（仅本作用域）
