@@ -104,7 +104,10 @@ impl Vm {
             let fd = site.field();
             let decl: Rc<str> = Rc::from(site.class.name.as_str());
             let key = self.fkey(&decl, &fd.name);
-            let memo = env.cfg().memo_fields.contains(&format!("{decl}.{}", fd.name));
+            let qual = format!("{decl}.{}", fd.name);
+            let memo = env.cfg().memo_fields.contains(&qual);
+            let registry = env.cfg().registry_statics.get(&qual).map(|r| Rc::from(r.as_str()));
+            let imaged = env.cfg().image_statics.contains(&qual);
             let fin = fd.access & acc::FINAL != 0 || self.init_only(env, &site.class, fd);
             Rc::new(FRes {
                 key,
@@ -113,6 +116,8 @@ impl Vm {
                 desc: fd.desc.clone(),
                 fin,
                 memo,
+                registry,
+                imaged,
                 constant: fd.constant_value.clone(),
             })
         });
@@ -219,7 +224,7 @@ impl Vm {
             self.ext_put_static(&fr.decl, &fr.name)?;
             self.jlog_static(fr.key);
         }
-        if let (true, true, CV::R(o)) = (self.image > 0, fr.fin, v) {
+        if let (true, true, CV::R(o)) = (self.image > 0, fr.fin || fr.registry.is_some(), v) {
             if matches!(self.heap[o as usize].body, Body::Inst(_)) && self.heap[o as usize].epoch == 0 {
                 self.image_roots.entry(o).or_insert_with(|| fr.mref());
             }

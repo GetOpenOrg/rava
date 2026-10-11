@@ -191,14 +191,11 @@ impl<'a> Engine<'a> {
         let mut out = IdSet::from_sorted(exact);
         {
             for o in s.open.iter() {
-                match (self.cur_call, self.cur_site) {
-                    (Some(c), _) => {
-                        self.open_calls.entry((o, owner)).or_default().insert(c);
-                    }
-                    (None, Some(w)) => {
+                match self.cur_site {
+                    Some(w) => {
                         self.open_sites.entry((o, owner)).or_default().insert(w);
                     }
-                    (None, None) => {
+                    None => {
                         self.open_methods.entry((o, owner)).or_default().insert(m);
                     }
                 }

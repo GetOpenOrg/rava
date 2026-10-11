@@ -26,6 +26,8 @@ pub struct Diag {
     pub site_prof: bool,
     /// 触发边留在内存（`Closure::edges`，方法源一律带偏移），供门排名（`engine/gates/`）建触发图
     pub keep_edges: bool,
+    /// `--lambda-prof <秒>`：枢纽 lambda 重放与方法引用接收者展开剖析的 stderr 打印间隔（0 = 关闭，`lambda_prof.rs`）
+    pub lambda_prof: u64,
 }
 
 #[derive(Default)]

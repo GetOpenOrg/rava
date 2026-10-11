@@ -19,6 +19,13 @@ pub struct ConcreteCfg {
     /// 写入引导映像的内存缓存字段（`类.字段`，须同在 `memo_fields`）：具体求值中类镜像上该字段的写入值（求值结束时的
     /// 对象图）物化进引导映像，运行期命中缓存；全部缓存写入都可物化的实参组合只按热求值的轨迹入闭包
     pub image_memo_fields: HashSet<String>,
+    /// 一次写入的登记表静态字段（`类.字段` → 登记者类）：只由登记者类的 `<clinit>` 跨类写入一次（如访问器登记表）。
+    /// 闭包期具体求值放行登记者 `<clinit>` 的这次写入（写前须为 null）；读取不受「可变静态不可读」限制，
+    /// 读到 null 先初始化登记者再读，仍为 null 即失败。求值 VM 创建时按类名序先初始化全部登记者（同运行期「首次使用前已登记」）
+    pub registry_statics: HashMap<String, String>,
+    /// 取引导映像值的静态字段（`类.字段`）：声明类构建期初始化，字段只在为 null 时惰性写入或单调置位一次，
+    /// 映像中已是终值（运行期不再改写），闭包期具体求值读到映像值（对象图按值导入），走与运行期相同的已初始化快路径
+    pub image_statics: Vec<String>,
     /// 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结。
     /// 依据是类的不可变契约（如正则模式及其节点图编译后只读），由清单逐类声明
     pub stable_types: Vec<String>,
@@ -97,6 +104,8 @@ pub fn parse(t: Option<&toml::Value>) -> Result<ConcreteCfg, String> {
         natives: table(get("natives"), "natives")?,
         memo_fields: strs(get("memo_fields")).into_iter().collect(),
         image_memo_fields: strs(get("image_memo_fields")).into_iter().collect(),
+        registry_statics: table(get("registry_statics"), "registry_statics")?,
+        image_statics: strs(get("image_statics")),
         stable_types: strs(get("stable_types")),
         vm_fields: table(get("vm_fields"), "vm_fields")?,
         soft_references: strs(get("soft_references")).into_iter().collect(),

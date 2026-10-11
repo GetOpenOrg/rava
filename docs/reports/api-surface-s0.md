@@ -92,6 +92,32 @@ Engine::run → process → process_bytecode → event → invoke → invoke_inn
 
 第 4 次取栈是 lambda 套 lambda：接收者本身是 lambda，于是 `invoke_lambda → lambda_dispatch → dispatch_one → invoke_lambda` 嵌套了两层。从结构看，增长量与「枢纽链入的调用点数 × 枢纽上的 lambda 数 × 方法引用的开放接收者数」成正比，而 `dispatched` 去重键 `(off, r, via_lambda)` 按调用点区分，挡不住这种乘积。release 构建（debug=1、fat LTO）只有行表、没有局部变量，分析器在这一阶段也不打进度，因此**具体是哪个 Java 枢纽 / 方法引用无法从栈上读出**。要定位到类 / 方法，需要给分析器加诊断输出（枢纽重放计数、lambda 展开计数按枢纽打点），这属于分析器改动，不在本任务（只分析）范围内，列为闸门 G1。
 
+**G1 分析器任务（`s0-g1`，2026-10-11，dev）**：加了 `--lambda-prof` 诊断（`API_SURFACE_LAMBDA_PROF=<秒>`）后，乘积路径定位到
+`StreamSpliterators$WrappingSpliterator` 一族的 k9 方法引用（`buffer::accept`，Sink / Consumer 及 Int / Long / Double 变体）：
+它们经 open Sink 枢纽送达约 2200–2700 个调用点，每个带 50–150 个绑定接收者。每次接收者增长都在每个调用点新建精确集合枢纽，
+枢纽上的 lambda 又逐调用点派发，读者（lambda 调用单元）到数百万。逐步改造与实测见性能计划
+[`2026-09-30-closure-analyzer-performance.md`](../plans/2026-09-30-closure-analyzer-performance.md) §4.9。最终形态 74ef5f3f 有两处改动：
+方法引用接收者改经增长枢纽增量并入；枢纽 lambda 改为「枢纽 × lambda」一个读者，实参取枢纽节点。改后读者从 291 万降到 6.9 万，
+枢纽重放从 2065 万降到 18 万，HelloWorld / DeepCopy / TestSerialLookupPairing 在种子 0/1/2 下的集合与 main 一致。
+
+| 提交 | 变体 A | 变体 B |
+|---|---|---|
+| e3cafda3（改造前段） | 322 s：18.6 GB；520 s：30.4 GB，58 万方法上下文 | 525 s：21.9 GB |
+| e6384922（增长枢纽） | 445 s：23.7 GB，读者 291 万 | 458 s：19.5 GB |
+| 74ef5f3f（枢纽 × lambda 一个读者） | 210 s：7.9 GB；615 s：26.7 GB，61 万方法上下文，读者 6.9 万（主动停止） | 563 s：19.1 GB，64 万方法上下文 |
+
+lambda 乘积消除后，S0 仍不收敛：A 以约 40 MB/s、每分钟约 3 万个方法上下文的速度增长。新的主项是方法上下文克隆，
+142a1c54 的上下文前列（A，161 s，23.6 万方法上下文）如下：
+- 按方法：`Object.<init>` 10275、`Objects.requireNonNull` 3296、`ConcurrentHashMap$Node.<init>` 2466、
+  `ConcurrentHashMap.comparableClassFor` / `compareComparables` 2453、`Math.min` 2051、`MethodType.makeImpl` / `checkPtypes` 一族 1606、
+  `LambdaForm.argument` 1283；
+- 按上下文：`@level:0` 5849、`@level:2` 5844，其余是 `java.lang.invoke` 的 `DirectMethodHandle$StaticAccessor` /
+  `BoundMethodHandle$Species_*` 分配点（各约 125）。
+
+试验 929de3b8（已回退）把同一方法的抽象对象上下文限到 64 个，超出部分并入无上下文本体。S0 的增长放缓了，但 963 s 时仍不收敛：A 峰值 16.2 GB、27.9 万上下文；B 峰值 16.9 GB、枢纽 78 万。同时 DeepCopy 的闭包被拖到 16 分钟、14.6 GB 后被杀，因为合并进本体使精度崩塌。
+
+下一步是性能计划 P5 的上下文预算与合并：按类型或分配类合并，保住精度（§4.9 下一步）。这一步不再属于 lambda 重放。
+
 闭包未产出，所以「闭包面对比一跳面」这一节暂时没有数据。面仍按退回口径计算（一跳 ∪ JVM 实载命中，`chain_mode = "jvm-loaded"`）。
 
 ### 5.2 面规模
@@ -191,7 +217,11 @@ Engine::run → process → process_bytecode → event → invoke → invoke_inn
 
 ## 六、闸门项
 
-1. **G1 闭包规模（实测，未解除）**：S0 档案闭包在 dev 上同样不可完成。A（只以 main 为入口）到 RSS 58451 MiB（2251 s，上限 57344 MiB）被终止；B（加 1987 个种子）到 31822 MiB（1831 s，上限 30720 MiB）被终止。两者都是单线程近似线性增长，没有不动点迹象。栈定位在「分派枢纽向新调用点重放 lambda（hub.rs:170 `link_hub`）× 方法引用 lambda 按开放接收者展开（lambda.rs:157 `lambda_dispatch`）」的乘积路径上（§5.1）。解除条件是 S0 的 A / B 两个变体都在 dev 上产出闭包，终态目标为峰值 ≤ 16 GiB、耗时 ≤ 30 min（可在 15G 机型外的常规开发机上完成）。下一步属于分析器任务：(1) 加诊断，按枢纽 / 方法引用计数重放与展开次数，定位到具体的 Java 类和方法；(2) 改造枢纽 lambda 重放，按「枢纽 × lambda」而非「调用点 × lambda」只连接一次，并让方法引用接收者展开随开放集增量传播，不在每个调用点重新做全量展开。这是 S0 一跳面以外所有口径的前置条件。
+1. **G1 闭包规模（实测，未解除；lambda 乘积已消除）**：S0 档案闭包在 dev 上仍不可完成。原始状态：A（只以 main 为入口）到 RSS 58451 MiB（2251 s）被终止；B（加 1987 个种子）到 31822 MiB（1831 s）被终止。栈落在「分派枢纽向新调用点重放 lambda（`link_hub`）× 方法引用 lambda 按接收者展开（`lambda_dispatch`）」的乘积路径上（§5.1）。解除条件：A / B 都在 dev 上产出闭包，峰值 ≤ 16 GiB，耗时 ≤ 30 min。
+
+   **10-11 分析器任务 `s0-g1` 的结果**：诊断与改造已完成。枢纽 lambda 改为按「枢纽 × lambda」只建一个读者，方法引用接收者经增长枢纽增量并入，读者从 291 万降到 6.9 万，既有用例集合与 main 一致。但 S0 仍线性增长：A 在 615 s 时 26.7 GB、61 万方法上下文。新的主项是方法上下文克隆（`Object.<init>` 等叶方法上万份，`@level` 档位上下文与 `java.lang.invoke` 分配点上下文为主），见 §5.1。
+
+   **剩余工作**：上下文预算与合并（性能计划 P5，§4.9 下一步），完成后复测 S0。G1 是 S0 一跳面以外所有口径的前置条件。
 2. **G2 反射实例化与组件扫描**：Boot 的 bean 类由 `@ComponentScan` 包扫描、`AutoConfiguration.imports` 与 `spring.factories` 按名装载，再经反射构造。只以 main 为入口（A）看不见这些类，只能靠 JVM 实载种子（B）补。在档案口径下，需要分析器对「资源枚举 → `Class.forName` / 构造器反射」做通用建模（K10 资源枚举）。按原则，不往 runtime/ 加库种子。
 3. **G3 CGLIB 子类合成（K11）**：`@Configuration` 增强类 `$$SpringCGLIB$$` 在运行期定义，实载类中可见。这属于运行期类定义点，需要走构建期合成或 AOT 产物，不能靠静态闭包。
 4. **G4 面的精度**：在闭包产出前，「命中」是类级近似（声明类被加载即算命中），会高估。例如 `Thread.ofVirtual`、`Transformer.setOutputProperty` 因 `Thread` / `Transformer` 类被加载而计为命中，但 S0 启动路径未必调用它们。

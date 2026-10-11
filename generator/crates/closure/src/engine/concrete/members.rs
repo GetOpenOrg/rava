@@ -19,6 +19,12 @@ impl Vm {
                     st.push(if &*fr.desc == "J" { CV::J(x) } else { CV::I(x as i32) });
                     return Ok(());
                 }
+                // 取映像值的静态字段 / 一次写入的登记表静态字段：值在运行期首次使用前已定且不再改写（concrete/registry.rs）
+                if !self.boot && (fr.imaged || fr.registry.is_some()) {
+                    let v = self.pinned_static(env, &fr)?;
+                    st.push(v);
+                    return Ok(());
+                }
                 // 非 final 静态字段只在其类初始化期间可读：初始化之后它可能被程序其它部分改写
                 let running = matches!(self.init.get(&fr.decl), Some(Init::Running));
                 if !self.boot && !fr.fin && !fr.memo && !running {
@@ -73,7 +79,9 @@ impl Vm {
             0xb3 => {
                 self.ensure_init(env, &fr.decl)?;
                 let v = pop(st)?;
-                if !self.boot && self.image > 0 && !matches!(self.init.get(&fr.decl), Some(Init::Running)) && !fr.memo {
+                if !self.boot && (fr.imaged || fr.registry.is_some()) {
+                    self.pinned_put_check(&fr)?;
+                } else if !self.boot && self.image > 0 && !matches!(self.init.get(&fr.decl), Some(Init::Running)) && !fr.memo {
                     return fail(format!("类初始化写入它类静态字段 {}.{}", fr.decl, fr.name));
                 }
                 self.put_static(&fr, v)?;

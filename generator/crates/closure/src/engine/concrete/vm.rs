@@ -144,6 +144,10 @@ pub(super) struct FRes {
     pub desc: String,
     pub fin: bool,
     pub memo: bool,
+    /// 一次写入的登记表静态字段的登记者类（`[concrete] registry_statics`）
+    pub registry: Option<Rc<str>>,
+    /// 取引导映像值的静态字段（`[concrete] image_statics`）
+    pub imaged: bool,
     pub constant: Option<classfile::Const>,
 }
 
@@ -247,6 +251,8 @@ pub(super) struct Vm {
     /// 物化时以该静态字段的抽象值代表（抽象分析对 `<clinit>` 的建模给出同一对象）
     pub image_roots: HashMap<u32, MemberRef>,
     pub ihash: HashMap<u32, i32>,
+    /// 已从引导映像导入值的静态字段（字段键；`[concrete] image_statics`，concrete/registry.rs）
+    pub img_statics: HashSet<u32>,
     pub steps: u64,
     /// 调用栈（调用方类查询）
     pub frames: Vec<MemberRef>,
@@ -308,6 +314,7 @@ impl Vm {
             singletons: HashMap::default(),
             image_roots: HashMap::default(),
             ihash: HashMap::default(),
+            img_statics: HashSet::default(),
             steps: 0,
             frames: Vec::new(),
             trace: Trace::default(),

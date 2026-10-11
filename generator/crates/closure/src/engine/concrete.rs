@@ -25,6 +25,7 @@ mod members;
 mod natives;
 pub(super) mod persist;
 mod reflect;
+mod registry;
 mod snap;
 mod stable;
 mod taint;
@@ -233,6 +234,7 @@ impl<'a> Engine<'a> {
         let entry = self.method_ctx(resolved.clone(), self.concrete.ctx, Via::method("concrete", m, Some(off)));
         self.dispatch.entry((m, off)).or_default().insert(entry);
         self.callers.entry(entry).or_default().insert(m);
+        self.dcallers.entry(entry).or_default().insert(m);
         for (((c, r), &h), b) in outs.into_iter().zip(&hot).zip(&bad) {
             if b.is_some() || !self.concrete.applied.insert((m, off, c.clone())) {
                 continue;
@@ -383,8 +385,9 @@ impl<'a> Engine<'a> {
         if let Some(r) = self.concrete.memo.get(&key) {
             return r.clone();
         }
-        let mut vm = self.concrete.vm.take().unwrap_or_else(|| Box::new(Vm::new()));
         let env = Env { ctx: &self.ctx, cp: self.cp };
+        let img = self.img.as_deref().map(|i| (&*i.data, &i.statics));
+        let mut vm = self.concrete.vm.take().unwrap_or_else(|| Vm::closure_vm(&env, img));
         let r = eval(&mut vm, &env, site, args);
         self.concrete.vm = Some(vm);
         let r = Rc::new(r);
