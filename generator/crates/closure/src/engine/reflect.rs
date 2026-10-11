@@ -514,6 +514,10 @@ impl<'a> Engine<'a> {
     /// 此时同构造器枚举：所指类记为已枚举（用户类照常有分派臂），JDK 类不点名，查找点记为反射缺口。
     /// 「齐全」随值集增长可以变为不齐全（非单调）：所指类即时记为已枚举（单调），点名登记查找点、留到工作队列
     /// 排空时按当时的值集判定（[`Self::seed_ctor_lookups`]），结果与处理顺序无关。数组类没有构造器
+    ///
+    /// 查找的构造器描述符（[`Self::ctor_request`]）：查找只接 Class 接收者、无其他形参（`Class.newInstance`）为无参
+    /// 构造器；带 Class 数组形参的按该数组的元素（[`Self::ctor_params`]）；其余（如按 MethodType 查找）与数组推不出时
+    /// 为全部构造器
     pub(super) fn constructor_lookup(&mut self, m: usize, off: u32, k: &str, mref: &MemberRef, opcode: u8, args: &[V]) {
         let Some(md) = parse_method(&mref.desc) else { return };
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
@@ -521,9 +525,13 @@ impl<'a> Engine<'a> {
         if skip == 1 && mref.owner == CLASS {
             vals.extend(args.first().cloned());
         }
+        let class_array = format!("[L{CLASS};");
+        let mut filter: Option<Rc<str>> = (skip == 1 && mref.owner == CLASS && md.params.is_empty()).then(|| Rc::from("()"));
         for (p, a) in md.params.iter().zip(args.iter().skip(skip)) {
             if matches!(p, FieldType::Object(c) if c == CLASS) {
                 vals.push(a.clone());
+            } else if matches!(p, FieldType::Array(_)) && parse_field(&class_array).as_ref() == Some(p) {
+                filter = self.ctor_params(m, off, a);
             }
         }
         let mut classes: BTreeSet<String> = BTreeSet::new();
@@ -533,9 +541,96 @@ impl<'a> Engine<'a> {
         self.ctor_lookups.insert((m, off), (k.to_string(), vals));
         for cls in classes.into_iter().filter(|c| !c.starts_with('[')) {
             let c = self.id(&cls);
-            if self.enumerated.insert((Members::Constructors, c)) && self.invokable.contains(&Members::Constructors) {
+            let grew = self.ctor_request(c, filter.clone());
+            if (self.enumerated.insert((Members::Constructors, c)) || grew) && self.invokable.contains(&Members::Constructors) {
                 self.expose(Members::Constructors, c);
             }
+        }
+    }
+
+    /// 构造器枚举调用（`[facts.reflect] constructor_enumerations`，查找体内的调用者除外）：接收者所指类的全部构造器
+    /// 被请求（枚举结果交给调用者，任一构造器都可能被反射构造）。推不出所指类的接收者记为反射缺口
+    pub(super) fn constructor_enumeration(&mut self, m: usize, off: u32, k: &str, opcode: u8, args: &[V]) {
+        if opcode == classfile::op::INVOKESTATIC {
+            return;
+        }
+        let Some(recv) = args.first().cloned() else { return };
+        for cls in self.mirror_classes_of(m, off, k, &recv, true).0 {
+            if cls.starts_with('[') {
+                continue;
+            }
+            let c = self.id(&cls);
+            if self.ctor_request(c, None) && self.enumerated.contains(&(Members::Constructors, c)) && self.invokable.contains(&Members::Constructors) {
+                self.expose(Members::Constructors, c);
+            }
+        }
+    }
+
+    /// 类 c 的构造器请求并入形参描述符 d（None = 全部）；有新增返回 true
+    fn ctor_request(&mut self, c: u32, d: Option<Rc<str>>) -> bool {
+        match (self.ctor_reqs.get_mut(&c), d) {
+            (None, d) => {
+                self.ctor_reqs.insert(c, d.map(|d| BTreeSet::from([d])));
+                true
+            }
+            (Some(None), _) => false,
+            (Some(cur), None) => {
+                *cur = None;
+                true
+            }
+            (Some(Some(set)), Some(d)) => set.insert(d),
+        }
+    }
+
+    /// 构造器查找点 (m, off) 上 Class 数组实参 a 的元素所给出的形参描述符（`(…)` 部分）；推不出为 None。
+    /// - null（反射 API 视同空数组）与常量长度 0 的数组：无参；
+    /// - 本方法新建的常量长度数组：除本查找调用外的全部用途都是常量下标上存入类字面量（每个下标恰存一次，
+    ///   如变长实参的 `anewarray` + `aastore`），数组不逃出本方法、元素无从改写。
+    ///
+    /// 基本类型类（`Integer.TYPE` 等）不是类字面量，含之的数组推不出（保守为全部构造器）
+    fn ctor_params(&mut self, m: usize, off: u32, a: &V) -> Option<Rc<str>> {
+        let desc = |cs: &[Rc<str>]| -> Rc<str> {
+            let mut d = String::from("(");
+            for c in cs {
+                if c.starts_with('[') {
+                    d.push_str(c);
+                } else {
+                    d.push('L');
+                    d.push_str(c);
+                    d.push(';');
+                }
+            }
+            d.push(')');
+            Rc::from(d)
+        };
+        if *a == V::Null {
+            return Some(Rc::from("()"));
+        }
+        match a.obj().map(|o| &**o) {
+            // 长度 0 的数组没有可改写的元素
+            Some(&Obj::Len(0)) => Some(Rc::from("()")),
+            Some(&Obj::Len(n)) if n >= 0 => {
+                let site = super::class_lookup::site_of(a)?;
+                let an = self.site_analysis(m)?;
+                super::class_lookup::event_at(&an, site, |e| matches!(e, Event::NewArray(..)))?;
+                let mut es: Vec<Option<Rc<str>>> = vec![None; usize::try_from(n).ok()?];
+                for (o, e, _) in super::class_lookup::uses(&an, site) {
+                    match e {
+                        Event::ArrayStore { array, index: V::Int(i), value: V::Class(c, _) } if super::class_lookup::site_of(array) == Some(site) => {
+                            let slot = es.get_mut(usize::try_from(*i).ok()?)?;
+                            if slot.as_ref().is_some_and(|p| p != c) {
+                                return None;
+                            }
+                            *slot = Some(c.clone());
+                        }
+                        Event::Invoke { .. } if o == off => {}
+                        _ => return None,
+                    }
+                }
+                let cs: Option<Vec<Rc<str>>> = es.into_iter().collect();
+                cs.map(|cs| desc(&cs))
+            }
+            _ => None,
         }
     }
 
@@ -577,7 +672,15 @@ impl<'a> Engine<'a> {
         // 构造器无按名形状：非用户类的构造器经按名取类解析到的类（常量名拼出的具体类）、构造器查找
         // （`constructor_lookup`）点名的类给出，其余经清单补种（如 JCA 服务实现类）
         let named = k == Members::Constructors && self.named_ctors.contains(&c);
-        let user = (self.domain(&cls) == Domain::User || named || self.exposed_all.contains(&(k, c))) && self.enumerated.contains(&(k, c));
+        let full = self.domain(&cls) == Domain::User || self.exposed_all.contains(&(k, c));
+        let user = (full || named) && self.enumerated.contains(&(k, c));
+        // 非用户类的构造器只取被请求的描述符（查找点按形参类型、枚举调用全部，见 `ctor_reqs`）
+        let reqs: Option<Option<BTreeSet<Rc<str>>>> = if full { Some(None) } else { self.ctor_reqs.get(&c).cloned() };
+        let requested = |desc: &str| match &reqs {
+            None => false,
+            Some(None) => true,
+            Some(Some(ds)) => desc.strip_suffix('V').is_some_and(|p| ds.contains(p)),
+        };
         let names = self.reflect_names.get(&c).cloned().unwrap_or_default();
         // 可被覆写的实例方法：反射调用按接收者虚分派（覆写可在子类，含未枚举的类）
         let overridable = |mm: &classfile::Method| reflect_virtual(mm.access, cf.access);
@@ -586,7 +689,7 @@ impl<'a> Engine<'a> {
             .iter()
             .filter(|mm| match k {
                 Members::Methods => !mm.name.starts_with('<') && (user || names.contains_key(&mm.name)),
-                Members::Constructors => mm.name == "<init>" && user,
+                Members::Constructors => mm.name == "<init>" && user && requested(&mm.desc),
                 Members::RecordAccessors => comps.iter().any(|(n, d)| mm.name == *n && mm.desc == format!("(){d}")),
             })
             .map(|mm| (mm.name.clone(), mm.desc.clone(), k != Members::Constructors && overridable(mm)))

@@ -266,6 +266,7 @@ impl<'a> Engine<'a> {
             reflect_names: HashMap::default(),
             named_ctors: BTreeSet::new(),
             ctor_lookups: BTreeMap::new(),
+            ctor_reqs: BTreeMap::new(),
             invokable: BTreeSet::new(),
             lwraps: HashMap::default(),
             reflect_gaps: BTreeSet::new(),

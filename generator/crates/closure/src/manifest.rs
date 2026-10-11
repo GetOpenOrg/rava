@@ -191,6 +191,10 @@ pub struct Manifest {
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
     constructor_lookups: HashSet<String>,
+    /// `[facts.reflect] constructor_enumerations`：构造器枚举调用（接收者所指类的全部构造器成为反射构造目标）
+    constructor_enumerations: HashSet<String>,
+    /// `[facts.reflect] constructor_lookup_internals`：查找体内的枚举调用者（其枚举只为按描述符挑选，不另行请求）
+    constructor_lookup_internals: HashSet<String>,
     class_initializers: HashSet<String>,
     mirror_subtype_tests: HashSet<String>,
     member_owner_initializers: HashMap<String, LinkRoute>,
@@ -516,6 +520,8 @@ impl Manifest {
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
             constructor_lookups: reflect("constructor_lookups").into_iter().collect(),
+            constructor_enumerations: reflect("constructor_enumerations").into_iter().collect(),
+            constructor_lookup_internals: reflect("constructor_lookup_internals").into_iter().collect(),
             class_initializers: reflect("class_initializers").into_iter().collect(),
             mirror_subtype_tests: reflect("mirror_subtype_tests").into_iter().collect(),
             member_owner_initializers: reflect("handle_owner_initializers")
@@ -849,6 +855,16 @@ impl Manifest {
     /// 查找构造器（Class 实参 / 接收者所指类的构造器成为反射构造目标）
     pub fn is_constructor_lookup(&self, member: &str) -> bool {
         self.constructor_lookups.contains(member)
+    }
+
+    /// 构造器枚举调用（`[facts.reflect] constructor_enumerations`）
+    pub fn is_constructor_enumeration(&self, member: &str) -> bool {
+        self.constructor_enumerations.contains(member)
+    }
+
+    /// 查找体内的构造器枚举调用者（`[facts.reflect] constructor_lookup_internals`）
+    pub fn is_constructor_lookup_internal(&self, member: &str) -> bool {
+        self.constructor_lookup_internals.contains(member)
     }
 
     /// 反射对象（Method）转成方法句柄（`[facts.reflect] method_to_handle`）

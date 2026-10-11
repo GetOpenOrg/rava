@@ -582,6 +582,19 @@ constructor_lookups = [
     "java/lang/Class.getDeclaredConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
     "java/lang/Class.newInstance:()Ljava/lang/Object;",
 ]
+# 构造器请求（非用户类的构造器只取被请求的描述符，用户类被枚举即全部）：
+#   constructor_lookups 调用点按形参类型数组请求——null / 长度 0 / 本方法内以类字面量逐个填满且不逃出的数组给出
+#   确定描述符（Class.newInstance 为无参），推不出时请求全部；
+# constructor_enumerations  构造器枚举调用：接收者所指类的全部构造器被请求（getConstructors /
+#                     getDeclaredConstructors / getEnclosingConstructor 都经此取枚举结果）；
+# constructor_lookup_internals  查找体内的枚举调用者：枚举只为按描述符挑选（实参数组逐元素相等），
+#                     挑选口径由 constructor_lookups 调用点给出，不另行请求
+constructor_enumerations = [
+    "java/lang/Class.privateGetDeclaredConstructors:(Z)[Ljava/lang/reflect/Constructor;",
+]
+constructor_lookup_internals = [
+    "java/lang/Class.getConstructor0:([Ljava/lang/Class;I)Ljava/lang/reflect/Constructor;",
+]
 # method_to_handle   反射对象（Method）转成方法句柄的入口（`Lookup.unreflect*` 与 LambdaForm 具名函数都经此构造 MemberName）：
 #                     按 Method 实参的来源追踪——来自常量名查找（getDeclaredMethod 等）的只点名该方法经方法句柄通道调用，
 #                     来自形参的回溯到调用点，来源不明时全部按反射对象查到的方法另接方法句柄通道的实参池（见下）

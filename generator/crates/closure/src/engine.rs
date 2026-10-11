@@ -625,6 +625,9 @@ pub struct Engine<'a> {
     named_ctors: BTreeSet<u32>,
     /// 构造器查找点（方法, 偏移）→（查找键, Class 实参与 Class 接收者的值）：点名与否在工作队列排空时按终态值集判定
     ctor_lookups: BTreeMap<(usize, u32), (String, Vec<V>)>,
+    /// 构造器请求：所指类 → 被请求的构造器形参描述符（`(…)` 部分；None = 全部）。非用户类的构造器只在被请求时
+    /// 入反射面——查找点按形参类型数组给出描述符（推不出时全部），枚举调用请求全部（见 `reflect.rs`）
+    ctor_reqs: BTreeMap<u32, Option<BTreeSet<Rc<str>>>>,
     /// 按名查方法的包装方法（方法键 → 查找类形参 × 名字形参的配对），见 `lookup_pair.rs`
     lwraps: HashMap<MemberRef, Vec<lookup_pair::LookupWrap>>,
     /// 反射缺口：接收者镜像推不出的成员枚举
