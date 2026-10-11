@@ -88,7 +88,7 @@ impl LibPlan {
             let crates = ctx.crates();
             let mut deps = vec![root_decl_dep(crates, top)];
             deps.extend(crates.others().iter().map(|c| path_dep(&c.name, &c.name)));
-            deps.push(format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display()));
+            deps.push(super::vendor::macros_dep());
             deps.extend(self.routes[..i].iter().map(|(prev, _)| dep_line(prev)));
             w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, name, &deps))?;
         }

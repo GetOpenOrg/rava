@@ -64,10 +64,41 @@
 - 微基准改后仍约 43 µs / 迭代（JVM 为微秒以下），剩余开销在 `Method.invoke` 的字节码翻译路径（访问检查、参数装箱、`MethodAccessor` 链），未剖析；属后续性能项。
 - 既有缺陷：`Method.invoke` 返回的装箱 `Integer` 经 `(Integer)` checkcast 抛 `ClassCastException: java/lang/Integer cannot be cast to java/lang/Integer`（`try_cast<Integer>` 失配，前后均复现），微基准改经 `hashCode()` 取值绕开；需另修。
 
+### 生成器修复（分支 `review-generator`，自 96fc1cf4）
+
+待办「生成器 / 宏」七项（描述符 / 注解递归深度上限除外，未列入本批）：
+
+| 项 | 提交 | 终态 |
+|---|---|---|
+| 宏分类两份实现 | 4f2fb0a5 | `mc/block/classify.rs` 的 `BodyFacts`（语法树访问器，token 兜底）为唯一分类来源，`base_fns` 改用之（只影响宏展开，生成树不变） |
+| `java_try!` 全局计数器 | 16017542 | 标签 `'java_try_{深度}` / `'java_try_end_{深度}` / `'java_loop_{n}` 用 `Span::mixed_site` 卫生、按词法嵌套深度编号；删 plan 侧重编号 |
+| 清单两套解析、IndyKind 两份 | 11ba980a | `closure::manifest::sections` 为唯一读取与校验（IndyKind 六变体、`InjectedValue`、`EmitSections`）；`input::manifest` 由 closure `Manifest` 投影并 `pub use` IndyKind。closure.json `indy_models` 类别名改取 `IndyKind::as_str`，模式 switch 调用点由 `native` 细化为 `type_switch` / `enum_switch`（行为不变） |
+| 类名路径分量未校验 | 5d3a4cea | `classfile::names` 在读入档案时校验（`Error::BadClassName`），`Writer::new(out_dir, …)` 落盘前断言目标在 scratch 内 |
+| `Audit::FieldNpe` 无发射点 | 61bfe804 | `sim/fields.rs::null_checked` 每发射一次接收者 `__nn()?` 即记审计；`[equiv-audit] field-npe` 计数由 0 变为实际值 |
+| `jdk.rs` 测试改进程环境 | 5851d080 | `JdkEnv`（JAVA_HOME / HOMEBREW_PREFIX / JVM 目录）注入，`choose_in` / `find_major` 取 env；测试移入 `mod tests`，临时 JVM 目录沙箱，不改进程环境 |
+| 产物绝对路径依赖仓库 | e11a3191 | 两目标不冲突，已实施：`java_runtime` 兄弟依赖闭包（rava_macros / rava_macros_core / rava_coro）落入 `<scratch>/vendor/`，相对路径引用；包版本取 `0.0.<内容摘要>`、文件 mtime 取真源 mtime，跨 scratch 共享 target 仍命中；真源删除的文件与出闭包的 crate 同步清除；`cargo::owned` 排除 vendor |
+
+验收（云服务器 sg1 / jp2 / kr1，dev 满载未用）：
+
+- cargo check：generator `--tests` 与 runtime（rava_macros / rava_macros_core / rava_coro）无告警通过。
+- 单测 `rg-ut2-e11a3191`（jp2）：ut-closure、ut-rest 两作业 rc=0，全部 `test result: ok`、0 failed。
+- 生成树 `rg-cmp3-e11a3191`（sg1，gen_trees 27 例 base 96fc1cf4 对 e11a3191）：生成 `.rs` **零差异**，raw-audit identical，closure.json `indy_models` 零差异（验收集无模式 switch 调用点）。差异只有四类，均为预期：① 各例新增 `vendor/`，Cargo.toml 宏 / 协程依赖改指 `../vendor/<名>`（修复 7）；② 日志 `[equiv-audit]` 多出 `field-npe=N`（修复 5，482–3128），其余审计计数逐例一致；③ 日志中的 scratch 路径（base 在 `base_wt/` 下）；④ 物化峰值内存噪声（±2%，对象数与回退组数一致）。宏分类统一（修复 1）与 try 标签（修复 2）只影响宏展开，不进生成树。
+- seed_check：DeepCopy / HelloWorld / TestNestedTry / TestTryInLoop 均 `seed-diff-lines=0`。
+- DeepCopy `--stop-after emit --perf`（sg1 同机新旧交替各 4 次）：首轮冷启动两版均约 216 s（closure 冷）；热态合计 base 10.94 / 10.99 / 10.95 s，new 10.79 / 10.80 / 10.76 s，无回归（overlay 阶段因落 vendor 多 3 ms）。
+- vendor 可搬移：scratch 内 Cargo.toml 无仓库绝对路径；DeepCopy 先编宏 crate，HelloWorld scratch 共享同一 target 时宏 crate 全部 `Fresh`；搬移后 `cargo metadata` 可解析、可构建（复核用 `cp -r`，不保留 mtime，宏 crate 重编属预期；保留 mtime 的 `cp -a` / `mv` 复核见下方未完成项）。
+- 抽查 `rg-spot-e11a3191`（kr1，15 例：验收集 12 例 TestNestedTry / TestTryInLoop / TestSuppressed / TestSwitchExpression / TestSwitchString / TestSwitchFallthrough / TestCasting / TestHashMapOps / TestSynchronized / TestArrayList / TestStreamBasic / TestCompletableFuture，加 HelloWorld / DeepCopy / TestAnnoReflect）：收尾时 6/15 PASS（DeepCopy、HelloWorld、TestAnnoReflect、TestArrayList、TestCasting、TestCompletableFuture），0 失败；kr1 与其他代理争用，单槽排队，其余 9 例仍在跑。
+
+未完成项与下一步（10-11 收尾，用户指令暂停派发）：
+
+1. 收 `rg-spot-e11a3191` 余下 9 例结果（`cluster_results/spot/rg-spot-e11a3191/`）；全过即可攒批合入，有失败按修复 2 / 5（try 标签、field-npe 判空）与修复 1（宏分类）排查。
+2. vendor 搬移保留 mtime 的复核未完成：作业 `rg-vmove-e11a3191`（sg1）远端进程三次无 done 被归还，已停。脚本在 worktree `build/review/vendor_move.sh`（HelloWorld emit → 宏 crate 首编 → `cp -a` / `mv` 到 /tmp 再编，预期均 `Fresh`）；换空闲服务器重发即可。若搬移后仍重编，根因在 cargo 指纹含 workspace 绝对路径，终态改为 `--remap-path-prefix` 不足以解决时再议，代码层无需改动 vendor 方案。
+3. 待办余项「描述符 / 注解递归无深度上限」未纳入本批。
+4. 分支 `review-generator` 只推 origin 与 github，未合入 main（按派发约束），等抽查全过后攒批。
+
 ## 二、待办（不派，主线空档或相关改动顺手做）
 
 - 健全性：`Handoff<T>` 无界 Send（`gil.rs:158`）；`native_memory` 批量拷贝与 CAS 混访、未对齐 CAS 退化、`fill` 负数（`native_memory.rs:83-162`）；`rava_coro` Drop 中 `expect`（`stack.rs:393,409`）。
-- 生成器 / 宏：宏分类两份实现且已分歧（`classify.rs:18-46` / `base_fns.rs:41`）；`java_try!` 全局计数器致展开不确定（`try_macro.rs:55`）；清单两套解析、IndyKind 两份枚举（`closure/src/manifest.rs` / `input/src/manifest.rs`）；class 名路径分量未校验（`emit/src/project/layout.rs`、`fs.rs`、`input/src/build.rs`）；描述符 / 注解递归无深度上限；`Audit::FieldNpe` 无发射点；`resolve/src/jdk.rs:236-284` 测试在 `mod tests` 外且改进程环境；产物以绝对路径依赖 rava 仓库（`emit/src/ctx.rs:132`、`overlay.rs:137-141`）。
+- 生成器 / 宏：描述符 / 注解递归无深度上限（其余七项已由「一、生成器修复」处理）。
 - 运行时其他：`runtime_impl.rs:44-50` 无条件读 `/proc`（macOS 恒 0）。
 - 工具：`ssh_client.py:47` AutoAddPolicy（报告所列 :77 不存在）。
 

@@ -147,9 +147,15 @@ impl Failure {
 }
 
 /// 一个 cargo JSON 消息是否属于本 scratch（build-script-executed 无 manifest_path，按 package_id 判定）
+/// scratch 内 `vendor/` 下的兄弟 crate（宏 crate 等）跨例共享产物，不属于本 scratch
 fn owned(msg: &Value, scratch: &str) -> bool {
+    let vendor = format!("{}/{}/", scratch.trim_end_matches('/'), emit::project::vendor::VENDOR_DIR);
     let manifest = msg.get("manifest_path").and_then(Value::as_str).unwrap_or_default();
-    manifest.starts_with(scratch) || msg.get("package_id").and_then(Value::as_str).is_some_and(|p| p.contains(scratch))
+    if manifest.starts_with(&vendor) {
+        return false;
+    }
+    let id = msg.get("package_id").and_then(Value::as_str).unwrap_or_default();
+    manifest.starts_with(scratch) || (id.contains(scratch) && !id.contains(&vendor))
 }
 
 /// cargo JSON 消息流 → (本 scratch 的产物路径集合（升序去重）, bin 可执行文件)
@@ -321,6 +327,11 @@ mod tests {
             json!({"reason":"build-script-executed","package_id":"path+file:///w/build/t1/java_runtime#0.1.0",
                    "out_dir":"/tg/debug/build/java_runtime-9f/out"}),
             json!({"reason":"compiler-message","manifest_path":"/w/build/t1/user/Cargo.toml"}),
+            // vendor/ 下的宏 crate 跨例共享，不登记
+            json!({"reason":"compiler-artifact","manifest_path":"/w/build/t1/vendor/rava_macros/Cargo.toml",
+                   "target":{"name":"rava_macros"},"filenames":["/tg/debug/deps/librava_macros-5.so"],"executable":null}),
+            json!({"reason":"build-script-executed","package_id":"path+file:///w/build/t1/vendor/rava_coro#0.0.1",
+                   "out_dir":"/tg/debug/build/rava_coro-7/out"}),
         ];
         let text: String = msgs.iter().map(|m| format!("{m}\n")).chain(["not json\n".to_string()]).collect();
         let (paths, exe) = collect_artifacts(&text, Path::new(s), "t1");

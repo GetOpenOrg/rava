@@ -12,7 +12,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{Ident, Type};
 
-use super::super::classify::{vtable_body_kind_gated, VTableBodyKind};
+use super::super::classify::{vtable_body_kind_gated, BodyFacts, VTableBodyKind};
 use super::super::erasure::{
     erase_item_signature_with, erase_signature, erase_signature_with, erased_args_of_same_arity,
     erased_hook_call, erasure_set_of, forward_conv_spec, result_inner_ty, same_type_tokens,

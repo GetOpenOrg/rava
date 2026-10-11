@@ -1,6 +1,7 @@
 //! 手写层三清单（runtime/java_runtime/{closure,seeds,vm_intrinsics}.toml）的读取与域判定。
 //!
-//! 发射层的清单读取见 `input::manifest`（同一数据源、同一语义）；库知识（类名）只出现在清单里。
+//! 三清单只在此解析一次：发射层的 `input::manifest::RuntimeManifest` 由本清单投影（见 `manifest/sections.rs`）；
+//! 库知识（类名）只出现在清单里。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,16 +17,6 @@ pub enum Domain {
     Boundary,
     /// 根类（java/lang/Object）：手写 ObjectVTable
     Root,
-}
-
-/// invokedynamic 引导方法分类（vm_intrinsics.toml [indy]）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndyKind {
-    Lambda,
-    Concat,
-    Native,
-    /// record 的 equals / hashCode / toString（native 的细分）：各引用分量派发同名 Object 方法
-    ObjectMethods,
 }
 
 /// 手写方法写入实参数组的元素（`[facts.array_writes]`；形参序号按描述符，不含接收者）
@@ -76,6 +67,7 @@ mod field_names;
 pub use concrete::{BootCall, ConcreteCfg};
 pub use field_names::NameResolver;
 mod indy_helpers;
+mod sections;
 mod keyed;
 pub use keyed::{KeyedLookup, KeyedLookups};
 mod direct;
@@ -85,6 +77,7 @@ pub use gates::{GateCategory, GateHints};
 mod vm_state;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
+pub use sections::{EmitSections, IndyKind, InjectedValue};
 pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, PropWrite, SysProps};
 
@@ -139,7 +132,7 @@ pub struct Manifest {
     release: Vec<String>,
     /// VM 注入的静态字段（`[vm_constants.injected_statics]` 的键 `类.字段`）：运行期值由 VM 给出；
     /// 取值是整数 / 布尔字面量时记其值（分析器按该值折叠）
-    injected_statics: HashMap<String, Option<i64>>,
+    injected_statics: HashMap<String, InjectedValue>,
     /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
     hw_dropped: Vec<String>,
     intrinsics: HashSet<String>,
@@ -232,6 +225,8 @@ pub struct Manifest {
     pub vm_state: VmState,
     /// 门排名的处理类别提示（closure.toml `[gates]`，见 `manifest/gates.rs`）
     pub gate_hints: GateHints,
+    /// 只由发射层消费的节（`input::manifest::RuntimeManifest` 由本清单投影）
+    pub emit: EmitSections,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -244,12 +239,14 @@ fn load(dir: &Path, name: &str) -> Result<toml::Table, String> {
     }
 }
 
-fn strings(t: &toml::Table, sec: &str, key: &str) -> Vec<String> {
-    t.get(sec)
-        .and_then(|s| s.get(key))
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-        .unwrap_or_default()
+/// `t[sec][key]` 字符串数组（严格：存在但不是字符串数组时报错，见 `sections::str_list`）
+fn strings(t: &toml::Table, sec: &str, key: &str) -> Result<Vec<String>, String> {
+    sections::str_list(sections::get(t, sec, key), &format!("[{sec}] {key}"))
+}
+
+/// `t[sec][key]` 逐类条目（同 [`strings`]，且不得以 `/` 结尾）
+fn classes(t: &toml::Table, sec: &str, key: &str) -> Result<Vec<String>, String> {
+    sections::class_list(sections::get(t, sec, key), &format!("closure.toml [{sec}] {key}"))
 }
 
 impl Manifest {
@@ -259,14 +256,15 @@ impl Manifest {
         let seeds = load(runtime_dir, "seeds.toml")?;
         let vm = load(runtime_dir, "vm_intrinsics.toml")?;
 
-        let release = strings(&closure, "vm_boundary", "translate_nested");
+        let release = classes(&closure, "vm_boundary", "translate_nested")?;
 
         let mut intrinsics = HashSet::new();
         let mut class_definitions = Vec::new();
         if let Some(arr) = vm.get("intrinsic").and_then(|v| v.as_array()) {
             for e in arr {
-                let member = e.get("member").and_then(|v| v.as_str()).unwrap_or_default();
-                if e.get("kind").is_none() || e.get("reason").is_none() {
+                let get = |k: &str| e.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+                let member = get("member").unwrap_or_default();
+                if get("kind").is_none() || get("reason").is_none() {
                     return Err(format!("vm_intrinsics.toml：内建条目须写明 kind 与 reason：{member}"));
                 }
                 if e.get("kind").and_then(|v| v.as_str()) == Some("class_definition") {
@@ -277,7 +275,8 @@ impl Manifest {
         }
 
         let mut returns = HashMap::new();
-        for m in strings(&vm, "vm_constants", "null_returns") {
+        let emit = EmitSections::parse(&seeds, &vm)?;
+        for m in emit.null_returns.iter().cloned() {
             returns.insert(m, Fact::Null);
         }
         if let Some(t) = vm.get("facts").and_then(|s| s.get("returns")).and_then(|v| v.as_table()) {
@@ -338,13 +337,8 @@ impl Manifest {
             }
         }
 
-        let facts = |sec: &str, key: &str| -> Vec<String> {
-            vm.get("facts")
-                .and_then(|s| s.get(sec))
-                .and_then(|t| t.get(key))
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .unwrap_or_default()
+        let facts = |sec: &str, key: &str| -> Result<Vec<String>, String> {
+            sections::str_list(vm.get("facts").and_then(|s| s.get(sec)).and_then(|t| t.get(key)), &format!("vm_intrinsics.toml [facts.{sec}] {key}"))
         };
 
         let mut array_writes = HashMap::new();
@@ -434,29 +428,21 @@ impl Manifest {
         let reflect = |key: &str| facts("reflect", key);
         let mut member_enumerators = HashMap::new();
         for (key, kind) in [("methods", Members::Methods), ("constructors", Members::Constructors), ("record_accessors", Members::RecordAccessors)] {
-            for m in reflect(key) {
+            for m in reflect(key)? {
                 member_enumerators.insert(m, kind);
             }
         }
         let mut member_invokers: HashMap<String, Vec<Members>> = HashMap::new();
         for (key, kind) in [("method_invokers", Members::Methods), ("constructor_invokers", Members::Constructors)] {
-            for m in reflect(key) {
+            for m in reflect(key)? {
                 member_invokers.entry(m).or_default().push(kind);
             }
         }
 
-        let mut indy = HashMap::new();
-        // 细分类别在后：同时列于 native 时取细分
-        for (key, kind) in [
-            ("lambda", IndyKind::Lambda),
-            ("concat", IndyKind::Concat),
-            ("native", IndyKind::Native),
-            ("object_methods", IndyKind::ObjectMethods),
-        ] {
-            for m in strings(&vm, "indy", key) {
-                indy.insert(m, kind);
-            }
-        }
+        let indy_list = sections::indy_kinds(&vm)?;
+        let has_kind = |k: IndyKind| indy_list.iter().any(|(_, x)| *x == k);
+        let indy_helpers = IndyHelpers::from_toml(vm.get("indy"), has_kind(IndyKind::Concat), has_kind(IndyKind::ObjectMethods))?;
+        let indy: HashMap<String, IndyKind> = indy_list.into_iter().collect();
         let boxing: HashMap<u8, String> = vm
             .get("boxing")
             .and_then(|s| s.as_table())
@@ -470,83 +456,74 @@ impl Manifest {
 
         Ok(Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
-            vm_boundary: strings(&closure, "vm_boundary", "classes").into_iter().collect(),
-            vm_clinit_carried: strings(&closure, "vm_boundary", "clinit_carried").into_iter().collect(),
+            vm_boundary: classes(&closure, "vm_boundary", "classes")?.into_iter().collect(),
+            vm_clinit_carried: classes(&closure, "vm_boundary", "clinit_carried")?.into_iter().collect(),
             release,
-            injected_statics: vm
-                .get("vm_constants")
-                .and_then(|s| s.get("injected_statics"))
-                .and_then(|v| v.as_table())
-                .map(|t| t.iter().map(|(k, v)| (k.clone(), literal_value(v))).collect())
-                .unwrap_or_default(),
+            injected_statics: sections::injected_statics(vm.get("vm_constants").and_then(|s| s.get("injected_statics")))?.into_iter().collect(),
             hw_dropped: Vec::new(),
             intrinsics,
             class_definitions,
-            predefined_definers: reflect("predefined_definers").into_iter().collect(),
-            null_to_false: strings(&vm, "vm_constants", "null_to_false").into_iter().collect(),
+            predefined_definers: reflect("predefined_definers")?.into_iter().collect(),
+            null_to_false: strings(&vm, "vm_constants", "null_to_false")?.into_iter().collect(),
             returns,
-            receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
-            field_enumerators: field_writes("enumerators").into_iter().collect(),
-            serial_enumerators: field_writes("serial_enumerators").into_iter().collect(),
-            instance_field_users: field_writes("instance_field_users").into_iter().collect(),
-            static_offset_getters: field_writes("static_offset_getters"),
-            static_base_returns: field_writes("static_bases").into_iter().collect(),
-            field_handle_access: field_writes("handle_getters")
+            receiver_returns: strings(&vm, "facts", "receiver_returns")?.into_iter().collect(),
+            field_enumerators: field_writes("enumerators")?.into_iter().collect(),
+            serial_enumerators: field_writes("serial_enumerators")?.into_iter().collect(),
+            instance_field_users: field_writes("instance_field_users")?.into_iter().collect(),
+            static_offset_getters: field_writes("static_offset_getters")?,
+            static_base_returns: field_writes("static_bases")?.into_iter().collect(),
+            field_handle_access: field_writes("handle_getters")?
                 .into_iter()
                 .map(|m| (m, false))
-                .chain(field_writes("handle_setters").into_iter().map(|m| (m, true)))
+                .chain(field_writes("handle_setters")?.into_iter().map(|m| (m, true)))
                 .collect(),
-            field_handle_writers: field_writes("handle_writers").into_iter().collect(),
-            field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
+            field_handle_writers: field_writes("handle_writers")?.into_iter().collect(),
+            field_handle_bridges: field_writes("handle_bridges")?.into_iter().collect(),
             field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
-            deserializers: field_writes("deserializers").into_iter().collect(),
-            serializable_markers: field_writes("serializable_markers"),
-            serial_persistent_fields: field_writes("serial_persistent_fields")
+            deserializers: field_writes("deserializers")?.into_iter().collect(),
+            serializable_markers: field_writes("serializable_markers")?,
+            serial_persistent_fields: field_writes("serial_persistent_fields")?
                 .iter()
                 .filter_map(|x| x.split_once(':').map(|(n, d)| (n.to_string(), d.to_string())))
                 .collect(),
             array_writes,
-            handle_interpreters: facts("handle_interpreters", "members"),
+            handle_interpreters: facts("handle_interpreters", "members")?,
             memory_reads,
             array_returns,
-            mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
-            superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
-            declaring_returns: reflect("declaring_of_receiver").into_iter().collect(),
-            primitive_class_returns: reflect("primitive_class").into_iter().collect(),
+            mirror_returns: reflect("mirror_of_receiver")?.into_iter().collect(),
+            superclass_returns: reflect("superclass_of_receiver")?.into_iter().collect(),
+            declaring_returns: reflect("declaring_of_receiver")?.into_iter().collect(),
+            primitive_class_returns: reflect("primitive_class")?.into_iter().collect(),
             defined_class_returns,
             serial_allocators,
             array_allocators,
-            caller_class_returns: reflect("caller_class").into_iter().collect(),
-            caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
-            component_returns: reflect("component_of_receiver").into_iter().collect(),
+            caller_class_returns: reflect("caller_class")?.into_iter().collect(),
+            caller_sensitive: strings(&vm, "caller_sensitive", "annotations")?.into_iter().collect(),
+            component_returns: reflect("component_of_receiver")?.into_iter().collect(),
             member_enumerators,
-            exposing_enumerators: reflect("exposing_enumerators").into_iter().collect(),
+            exposing_enumerators: reflect("exposing_enumerators")?.into_iter().collect(),
             member_invokers,
-            method_lookups: reflect("method_lookups").into_iter().collect(),
-            constructor_lookups: reflect("constructor_lookups").into_iter().collect(),
-            constructor_enumerations: reflect("constructor_enumerations").into_iter().collect(),
-            constructor_enumeration_wrappers: reflect("constructor_enumeration_wrappers").into_iter().collect(),
-            constructor_metadata_readers: reflect("constructor_metadata_readers").into_iter().collect(),
-            record_constructor_lookups: reflect("record_constructor_lookups").into_iter().collect(),
-            class_initializers: reflect("class_initializers").into_iter().collect(),
-            mirror_subtype_tests: reflect("mirror_subtype_tests").into_iter().collect(),
-            member_owner_initializers: reflect("handle_owner_initializers")
+            method_lookups: reflect("method_lookups")?.into_iter().collect(),
+            constructor_lookups: reflect("constructor_lookups")?.into_iter().collect(),
+            constructor_enumerations: reflect("constructor_enumerations")?.into_iter().collect(),
+            constructor_enumeration_wrappers: reflect("constructor_enumeration_wrappers")?.into_iter().collect(),
+            constructor_metadata_readers: reflect("constructor_metadata_readers")?.into_iter().collect(),
+            record_constructor_lookups: reflect("record_constructor_lookups")?.into_iter().collect(),
+            class_initializers: reflect("class_initializers")?.into_iter().collect(),
+            mirror_subtype_tests: reflect("mirror_subtype_tests")?.into_iter().collect(),
+            member_owner_initializers: reflect("handle_owner_initializers")?
                 .into_iter()
                 .map(|c| (c, LinkRoute::Handle))
-                .chain(reflect("reflect_owner_initializers").into_iter().map(|c| (c, LinkRoute::Reflect)))
+                .chain(reflect("reflect_owner_initializers")?.into_iter().map(|c| (c, LinkRoute::Reflect)))
                 .collect(),
-            method_to_handle: reflect("method_to_handle").into_iter().collect(),
+            method_to_handle: reflect("method_to_handle")?.into_iter().collect(),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
-            indy_helpers: IndyHelpers::from_toml(
-                vm.get("indy"),
-                !strings(&vm, "indy", "concat").is_empty(),
-                !strings(&vm, "indy", "object_methods").is_empty(),
-            )?,
+            indy_helpers,
             keyed_lookups: KeyedLookups::from_toml(vm.get("facts").and_then(|s| s.get("keyed_lookups")))?,
             direct_invokers: DirectInvokers::from_toml(vm.get("facts").and_then(|s| s.get("reflect")).and_then(|s| s.get("direct_invokers")))?,
             boxing,
-            value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
+            value_equals: strings(&vm, "facts", "value_equals")?.into_iter().collect(),
             string_ops,
             string_shapes,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
@@ -555,6 +532,7 @@ impl Manifest {
             concrete: concrete::parse(vm.get("concrete"))?,
             vm_state: VmState::from_toml(&vm)?,
             gate_hints: GateHints::from_toml(closure.get("gates"))?,
+            emit,
         })
     }
 
@@ -625,7 +603,7 @@ impl Manifest {
         if self.injected_statics.is_empty() {
             return None;
         }
-        self.injected_statics.get(&format!("{owner}.{name}")).copied().flatten()
+        self.injected_statics.get(&format!("{owner}.{name}")).and_then(InjectedValue::literal)
     }
 
     /// VM 内建（手写承载、不分析 Java 体）
@@ -941,12 +919,3 @@ fn member_is(s: &str, key: &classfile::constant::MemberRef) -> bool {
 
 #[cfg(test)]
 mod tests;
-
-/// 取值的字面量值：整数 / 布尔（取值表达式字符串不是字面量）
-fn literal_value(v: &toml::Value) -> Option<i64> {
-    match v {
-        toml::Value::Integer(n) => Some(*n),
-        toml::Value::Boolean(b) => Some(i64::from(*b)),
-        _ => None,
-    }
-}

@@ -102,6 +102,7 @@
 埋点状态（2026-09-21）：除下两条外均已接入 `[equiv-audit]`——
 
 - ~~`monitor-mt`：待 S-20 合入后补埋~~（已补埋：同步方法监视器发射点 `generator/crates/method/src/body.rs`，monitorenter 指令 `instr/src/sim/dynamic.rs`）。
+- `field-npe`：2026-10-11 补埋（此前只有枚举无发射点）：`instr/src/sim/fields.rs` `null_checked`，getfield / putfield / getfield 折叠点对非 `this` 接收者发射 `__nn()?` 时计一次。
 - `stacktrace`：无独立 codegen 发射点（`fillInStackTrace` 行为在 runtime 侧），随 S 候选条目立项后另行接入。
 
 ## 5. 与外部模型（ruva）的关系

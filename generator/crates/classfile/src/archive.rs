@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use crate::names::is_valid_binary_name;
 use crate::Error;
 
 enum Kind {
@@ -21,6 +22,8 @@ pub struct Archive {
     resources: HashMap<String, usize>,
     /// 根目录的 `module-info.class` 条目下标
     module_info: Option<usize>,
+    /// 目录档案：打开时枚举并校验的类（binary name，已排序）
+    dir_classes: Vec<String>,
 }
 
 impl Archive {
@@ -29,14 +32,22 @@ impl Archive {
     /// `META-INF/versions/` 下的路径不以任何形态进入类索引；非多版本 jar 的版本化条目完全不可见
     pub fn open(path: &Path, release: u32) -> Result<Self, Error> {
         if path.is_dir() {
+            let mut dir_classes = Vec::new();
+            walk(path, path, &mut dir_classes);
+            dir_classes.sort();
+            if let Some(bad) = dir_classes.iter().find(|b| !is_valid_binary_name(b)) {
+                return Err(Error::BadClassName(path.display().to_string(), bad.clone()));
+            }
             return Ok(Archive {
                 path: path.to_path_buf(),
                 kind: Kind::Dir(path.to_path_buf()),
                 index: HashMap::new(),
                 resources: HashMap::new(),
                 module_info: None,
+                dir_classes,
             });
         }
+        let bad_name = |bin: &str| Error::BadClassName(path.display().to_string(), bin.to_string());
         let io = |e: std::io::Error| Error::Io(path.display().to_string(), e.to_string());
         let file = File::open(path).map_err(io)?;
         let prefix = if path.extension().is_some_and(|e| e == "jmod") { "classes/" } else { "" };
@@ -67,6 +78,9 @@ impl Archive {
                 module_info = Some(i);
             } else if let Some(bin) = rest.strip_suffix(".class") {
                 if !bin.ends_with("module-info") {
+                    if !is_valid_binary_name(bin) {
+                        return Err(bad_name(bin));
+                    }
                     index.insert(bin.to_string(), i);
                 }
             } else if !rest.ends_with('/') {
@@ -79,6 +93,9 @@ impl Archive {
                     module_info = Some(i);
                 } else if let Some(bin) = rest.strip_suffix(".class") {
                     if !bin.ends_with("module-info") {
+                        if !is_valid_binary_name(bin) {
+                            return Err(bad_name(bin));
+                        }
                         index.insert(bin.to_string(), i);
                     }
                 } else if !rest.ends_with('/') {
@@ -86,7 +103,7 @@ impl Archive {
                 }
             }
         }
-        Ok(Archive { path: path.to_path_buf(), kind: Kind::Zip(zip), index, resources, module_info })
+        Ok(Archive { path: path.to_path_buf(), kind: Kind::Zip(zip), index, resources, module_info, dir_classes: Vec::new() })
     }
 
     /// 档案内全部类的 binary name（目录档案递归枚举）
@@ -97,19 +114,15 @@ impl Archive {
                 v.sort();
                 v
             }
-            Kind::Dir(root) => {
-                let mut v = Vec::new();
-                walk(root, root, &mut v);
-                v.sort();
-                v
-            }
+            Kind::Dir(_) => self.dir_classes.clone(),
         }
     }
 
     pub fn contains(&self, bin: &str) -> bool {
         match &self.kind {
             Kind::Zip(_) => self.index.contains_key(bin),
-            Kind::Dir(root) => root.join(format!("{bin}.class")).is_file(),
+            // 按名直读前校验：名字可能来自常量池引用（未经档案枚举），不得解析到目录之外
+            Kind::Dir(root) => is_valid_binary_name(bin) && root.join(format!("{bin}.class")).is_file(),
         }
     }
 
@@ -121,7 +134,7 @@ impl Archive {
             }
             Kind::Dir(root) => {
                 let p = root.join(format!("{bin}.class"));
-                if !p.is_file() {
+                if !is_valid_binary_name(bin) || !p.is_file() {
                     return Ok(None);
                 }
                 std::fs::read(&p).map(Some).map_err(|e| Error::Io(p.display().to_string(), e.to_string()))
@@ -362,6 +375,31 @@ mod tests {
         assert_eq!(manifest_attr(mf, "Automatic-Module-Name").as_deref(), Some("org.example.lib"));
         assert_eq!(manifest_attr("Name: x\n", "Automatic-Module-Name"), None);
         assert_eq!(manifest_attr("Manifest-Version: 1.0\n", "Multi-Release"), None);
+    }
+
+    /// 类名在打开档案时校验：段为空 / `.` / `..` / 非标识符即报错（jar 与目录档案同口径）
+    #[test]
+    fn invalid_class_names_rejected_at_open() {
+        for bad in ["../evil.class", "p/../q/A.class", "a-b/C.class"] {
+            let p = mr_jar("badname", None, &[("p/Ok.class", &[1u8]), (bad, &[2u8])]);
+            assert!(matches!(Archive::open(&p, 21), Err(Error::BadClassName(_, _))), "{bad}");
+            std::fs::remove_dir_all(p.parent().unwrap()).ok();
+        }
+        let p = mr_jar("okname", None, &[("p/package-info.class", &[1u8]), ("q/r.txt", &[2u8])]);
+        assert_eq!(Archive::open(&p, 21).unwrap().class_names(), vec!["p/package-info".to_string()]);
+        let dir = p.parent().unwrap().join("tree");
+        std::fs::create_dir_all(dir.join("x-y")).unwrap();
+        std::fs::write(dir.join("x-y/A.class"), [3u8]).unwrap();
+        assert!(matches!(Archive::open(&dir, 21), Err(Error::BadClassName(_, _))));
+        std::fs::remove_dir_all(dir.join("x-y")).unwrap();
+        std::fs::create_dir_all(dir.join("q")).unwrap();
+        std::fs::write(dir.join("q/B.class"), [4u8]).unwrap();
+        std::fs::write(p.parent().unwrap().join("Out.class"), [5u8]).unwrap();
+        let mut d = Archive::open(&dir, 21).unwrap();
+        // 按名直读不得解析到目录之外
+        assert!(d.contains("q/B") && !d.contains("../Out"));
+        assert!(d.read_class("../Out").unwrap().is_none());
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
     }
 }
 

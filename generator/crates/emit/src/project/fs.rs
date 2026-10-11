@@ -10,6 +10,8 @@ pub const GEN_MARKER: &str = "rava_macros::java_class";
 
 /// scratch 写出器：记录本轮写出（或内容相同跳过）的路径
 pub struct Writer {
+    /// scratch 根：一切写入的目标须在其下（兜底断言，见 [`Writer::confined`]）
+    out_dir: PathBuf,
     /// scratch 的各 JDK 模块 crate 源码树（手写伴随文件可落入其中任一）
     jdk_srcs: Vec<PathBuf>,
     /// 手写真源 `runtime/java_runtime/src`
@@ -18,8 +20,9 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn new(jdk_srcs: &[PathBuf], runtime_src: &Path) -> Writer {
+    pub fn new(out_dir: &Path, jdk_srcs: &[PathBuf], runtime_src: &Path) -> Writer {
         Writer {
+            out_dir: out_dir.to_path_buf(),
             jdk_srcs: jdk_srcs.to_vec(),
             runtime_src: runtime_src.to_path_buf(),
             written: BTreeSet::new(),
@@ -62,8 +65,21 @@ impl Writer {
         Ok(())
     }
 
+    /// 兜底断言：目标在 scratch 根之下且不含 `.` / `..` / 根等非普通分量。类名在读入档案时已校验
+    /// （`classfile::names`），此处只防发射层自身的路径拼接缺陷越出 scratch
+    fn confined(&self, path: &Path) -> Result<()> {
+        use std::path::Component;
+        let ok = path.strip_prefix(&self.out_dir).is_ok_and(|rel| rel.components().all(|c| matches!(c, Component::Normal(_))));
+        if ok {
+            Ok(())
+        } else {
+            Err(crate::error::EmitError::Assert(format!("写入目标 {} 不在 scratch {} 之内", path.display(), self.out_dir.display())))
+        }
+    }
+
     /// 单文件落盘；返回是否计入本轮已写（手写文件不计）
     fn put(&self, path: &Path, content: &str) -> Result<bool> {
+        self.confined(path)?;
         if self.is_handwritten(path) {
             return Ok(false);
         }
@@ -79,6 +95,7 @@ impl Writer {
 
     /// 写二进制（内容相同不重写）
     pub fn write_bytes(&mut self, path: &Path, data: &[u8]) -> Result<()> {
+        self.confined(path)?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
         }

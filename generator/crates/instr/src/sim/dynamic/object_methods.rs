@@ -64,9 +64,9 @@ fn pop_bound(sim: &mut StackSim) -> InstrResult<sim::StackEntry> {
 }
 
 /// 在接收者上读一个分量（getfield 同一翻译）
-fn read(env: &InstrEnv, sim: &mut StackSim, recv: &sim::StackEntry, g: &MemberRef) -> InstrResult<sim::StackEntry> {
+fn read(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, recv: &sim::StackEntry, g: &MemberRef) -> InstrResult<sim::StackEntry> {
     sim.push(recv.expr.clone(), recv.ty.clone());
-    getfield(env, sim, g)?;
+    getfield(env, sim, log, g)?;
     Ok(sim.pop()?)
 }
 
@@ -114,7 +114,7 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut I
             let recv = pop_bound(sim)?;
             for g in &getters {
                 sim.push(recv.expr.clone(), recv.ty.clone());
-                getfield(env, sim, g)?;
+                getfield(env, sim, log, g)?;
             }
             let parts: Vec<String> = names.iter().map(|n| format!("{n}=\u{1}")).collect();
             let template = format!("{}[{}]", simple_name(env, &cls), parts.join(", "));
@@ -126,7 +126,7 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut I
             let h = sim.fresh("__om_hash")?;
             sim.emit(raw_stmt(format!("let mut {h}: i32 = 0;")))?;
             for g in &getters {
-                let e = read(env, sim, &recv, g)?;
+                let e = read(env, sim, log, &recv, g)?;
                 let term = match &e.ty {
                     RsType::Prim(_) => prim_hash(&text(env, &e.expr), &g.desc),
                     _ => ref_call(env, sim, log, "component_hash", vec![e])?.0,
@@ -159,8 +159,8 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut I
             let mut cmps = Vec::with_capacity(getters.len());
             for g in &getters {
                 let mark = sim.state.stmts.len();
-                let mine = read(env, sim, &recv, g)?;
-                let theirs = read(env, sim, &that_e, g)?;
+                let mine = read(env, sim, log, &recv, g)?;
+                let theirs = read(env, sim, log, &that_e, g)?;
                 let cmp = match &mine.ty {
                     RsType::Prim(_) => prim_eq(&text(env, &mine.expr), &text(env, &theirs.expr), &g.desc),
                     _ => match ref_call(env, sim, log, "component_equals", vec![mine, theirs])? {

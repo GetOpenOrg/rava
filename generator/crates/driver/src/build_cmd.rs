@@ -332,7 +332,7 @@ fn write_scratch(
     names: &ShortNames,
     perf: &mut Perf,
 ) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
-    prepare_scratch(j.out, j.rt, &ctx.macros_crate, &JdkDirs::of(ctx), false).map_err(|e| format!("overlay：{e}"))?;
+    prepare_scratch(j.out, j.rt, &JdkDirs::of(ctx), false).map_err(|e| format!("overlay：{e}"))?;
     perf.mark("overlay");
     ir::raw_audit::reset();
     if j.o.raw_sites.is_some() {
@@ -576,12 +576,14 @@ mod tests {
         remove_dir(&out).unwrap();
         assert!(!out.exists());
         put(&out.join(CLOSURE_INPUT_DIR).join("classes/A.class"), "cafebabe");
-        let macros = root.join("runtime/rava_macros");
-        prepare_scratch(&out, &rt, &macros, &JdkDirs::single("java_runtime"), false).unwrap();
+        put(&root.join("runtime/rava_macros/Cargo.toml"), "[package]\nname = \"rava_macros\"\nversion = \"0.1.0\"\n");
+        put(&root.join("runtime/rava_macros/src/lib.rs"), "// 宏\n");
+        prepare_scratch(&out, &rt, &JdkDirs::single("java_runtime"), false).unwrap();
         assert!(out.join(CLOSURE_INPUT_DIR).join("classes/A.class").is_file());
         assert!(!out.join("java_runtime/src/lib.rs").exists(), "lib.rs 由 mod 树阶段写出");
         let cargo = std::fs::read_to_string(out.join("java_runtime/Cargo.toml")).unwrap();
-        assert!(cargo.contains(&format!("path = \"{}\"", macros.display())));
+        assert!(cargo.contains("path = \"../vendor/rava_macros\""), "宏 crate 改指 scratch 内 vendor");
+        assert!(out.join("vendor/rava_macros/src/lib.rs").is_file());
         assert!(!cargo.contains("version = \"0.1.0\""));
         assert!(out.join("java_runtime/src/java/mod.rs").is_file());
         assert!(out.join("java_meta/Cargo.toml").is_file());

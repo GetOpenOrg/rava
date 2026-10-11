@@ -203,3 +203,17 @@ fn handle_access_parse() {
     assert_eq!(m.field_handle_access("a/F.set:(La/O;La/O;)V"), Some(true));
     assert_eq!(m.field_handle_access("a/F.getInt:(La/O;)I"), None);
 }
+
+#[test]
+fn indy_switch_kinds_and_strict_lists() {
+    let m = with_vm("[indy]\nnative = [\"a/S.t\", \"a/E.t\"]\ntype_switch = [\"a/S.t\"]\nenum_switch = [\"a/E.t\"]\n").unwrap();
+    assert_eq!(m.indy_kind("a/S.t"), Some(IndyKind::TypeSwitch));
+    assert_eq!(m.indy_kind("a/E.t"), Some(IndyKind::EnumSwitch));
+    // 列表条目须为字符串；空 kind / reason 视为缺项
+    assert!(with_vm("[indy]\nnative = [1]\n").is_err());
+    assert!(with_vm("[[intrinsic]]\nmember = \"a/B.f:()V\"\nkind = \"\"\nreason = \"r\"\n").is_err());
+    // 发射层专用节随同解析
+    let m = with_vm("[class_path]\nresource_readers = [\"a/R.r:()V\"]\n[vm_constants]\nnull_returns = [\"a/N.n:()La/O;\"]\n").unwrap();
+    assert_eq!(m.emit.class_path_readers, ["a/R.r:()V"]);
+    assert_eq!(m.emit.null_returns, ["a/N.n:()La/O;"]);
+}

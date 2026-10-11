@@ -8,7 +8,7 @@
 //!   删后空目录自底向上移除——覆盖 `.rs` 之外的资源文件与手写 `mod.rs`；有生成标记的文件从不删除。
 //!   mod 树阶段另有兜底清扫（[`super::mod_tree`] `sweep_stale`：无清单的旧 scratch 中 runtime/ 已无的
 //!   无标记 `.rs`）；
-//! - `build.rs` 原样复制进声明层；`Cargo.toml` 包名改为声明层 crate 名，兄弟 crate（`rava_macros` / `rava_coro`）依赖改绝对路径、包版本唯一化；
+//! - `build.rs` 原样复制进声明层；`Cargo.toml` 包名改为声明层 crate 名，兄弟 crate 依赖改指 scratch 内 `vendor/`（[`super::vendor`]）、包版本唯一化；
 //! - `java/ jdk/ sun/` 顶层目录兜底占位 mod.rs；
 //! - `runtime/java_meta/`（反射元数据表 crate，全部手写、无生成文件）整体镜像到
 //!   `<scratch>/java_meta/`：包版本唯一化、运行时依赖改指声明层，scratch 中真源已无的文件删除。
@@ -108,7 +108,7 @@ impl JdkDirs {
 }
 
 /// overlay 规则：`clean` 时先清空 scratch
-pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, dirs: &JdkDirs, clean: bool) -> Result<()> {
+pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, dirs: &JdkDirs, clean: bool) -> Result<()> {
     if clean && out_dir.is_dir() {
         std::fs::remove_dir_all(out_dir).map_err(|e| io_err(&out_dir.display().to_string(), e))?;
     }
@@ -134,11 +134,9 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
     copy_if_changed(&runtime_dir.join("build.rs"), &decl.join("build.rs"))?;
     let cargo_src = runtime_dir.join("Cargo.toml");
     let cargo = std::fs::read_to_string(&cargo_src).map_err(|e| io_err(&cargo_src.display().to_string(), e))?;
-    // runtime/ 下的兄弟 crate（rava_macros、rava_coro）不复制进 scratch，以绝对路径依赖（共享 target 缓存命中）
-    let siblings = macros_crate.parent().unwrap_or(Path::new(""));
-    let cargo = rename_package(&cargo, &dirs.decl)
-        .replace("path = \"../rava_macros\"", &format!("path = \"{}\"", macros_crate.display()))
-        .replace("path = \"../rava_coro\"", &format!("path = \"{}\"", siblings.join("rava_coro").display()))
+    // runtime/ 下的兄弟 crate 落入 scratch 的 vendor/，以相对路径依赖（见 [`super::vendor`]）
+    let vendored = super::vendor::vendor_siblings(out_dir, runtime_dir)?;
+    let cargo = super::vendor::redirect_siblings(&rename_package(&cargo, &dirs.decl), &vendored)
         .replace("version = \"0.1.0\"", &format!("version = \"{}\"", scratch_pkg_version(out_dir)));
     write_if_changed(&decl.join("Cargo.toml"), &cargo)?;
     for pkg in ["java", "jdk", "sun"] {

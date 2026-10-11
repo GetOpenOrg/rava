@@ -20,7 +20,7 @@ use crate::env::InstrEnv;
 use crate::error::{InstrError, InstrResult};
 use crate::invoke::special::{class_segs, gen_invokespecial};
 use crate::invoke::{sig, CallRef};
-use crate::log::InstrLog;
+use crate::log::{Audit, InstrLog};
 use crate::owner::field_generic_signature;
 
 use store::{coerce_stored_value, StoreCtx};
@@ -34,7 +34,7 @@ pub fn sim_fields(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &
             sim.push(Expr::NewPending { class: raw.to_string() }, RsType::class(raw, Vec::new()));
         }
         ("invokespecial", Operand::Method(m, _)) => gen_invokespecial(env, sim, log, &CallRef::new(m))?,
-        ("getfield", Operand::Field(f)) => getfield(env, sim, f)?,
+        ("getfield", Operand::Field(f)) => getfield(env, sim, log, f)?,
         ("putfield", Operand::Field(f)) => putfield(env, sim, log, f)?,
         ("getstatic", Operand::Field(f)) => getstatic(env, sim, f)?,
         ("putstatic", Operand::Field(f)) => putstatic(env, sim, log, f)?,
@@ -46,12 +46,14 @@ pub fn sim_fields(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &
     Ok(true)
 }
 
-/// getfield / putfield 接收者判空（JVMS §6.5）：`this` 恒非 null 保持原形，其余经 `__nn()?`
-fn null_checked(env: &InstrEnv, recv: Expr) -> InstrResult<Expr> {
+/// getfield / putfield 接收者判空（JVMS §6.5）：`this` 恒非 null 保持原形，其余经 `__nn()?`。
+/// 每个发射的判空点记一次 `field-npe` 审计（接收者可能为 null 的字段访问）
+fn null_checked(env: &InstrEnv, log: &mut InstrLog, recv: Expr) -> InstrResult<Expr> {
     let t = text(env, &recv);
     if t == "this" || t == "self" {
         return Ok(recv);
     }
+    log.audit(Audit::FieldNpe);
     Ok(try_(mcall(recv, "__nn", Vec::new())?))
 }
 
@@ -104,7 +106,7 @@ fn value_node(env: &InstrEnv, val: Expr, val_str: String) -> Expr {
     }
 }
 
-pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> InstrResult<()> {
+pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRef) -> InstrResult<()> {
     let ctx = &env.ctx;
     let obj = sim.pop()?;
     // 装箱类擦除特例：接收者已是基本类型时字段访问就是值本身
@@ -120,7 +122,7 @@ pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> Ins
     let (obj_e, obj_ty) = field_receiver_view(env, obj_e, obj_ty, owner, &f.name);
     let (ftype, erased) = field_view(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
     let slot = ctx.ty.instance_field_rust_name(owner, &fname);
-    let recv = hooked_receiver(env, sim, owner, f, null_checked(env, obj_e)?)?;
+    let recv = hooked_receiver(env, sim, owner, f, null_checked(env, log, obj_e)?)?;
     let mut get = mcall(recv, &format!("__get_{slot}"), Vec::new())?;
     if erased {
         // 类型变量槽位按接收者实例化读出 Object：经 From<Object> 取回描述符上界视图
@@ -133,7 +135,7 @@ pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> Ins
 /// getfield 折叠点的 receiver：值已由分析器折叠，读取本身不翻译，但 JVMS §6.5 的判空照留——
 /// null receiver 抛 NullPointerException（字段常量与 receiver 是否为 null 无关）。`this` 恒非 null 不发射；
 /// 基本类型 receiver（装箱类擦除特例）只保留副作用
-pub(crate) fn fold_getfield_receiver(env: &InstrEnv, sim: &mut StackSim, get: &Insn) -> InstrResult<()> {
+pub(crate) fn fold_getfield_receiver(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, get: &Insn) -> InstrResult<()> {
     let Operand::Field(f) = &get.operand else {
         return Err(InstrError::BadInsn(format!("getfield 折叠点 pc={} 不是 getfield", get.offset)));
     };
@@ -152,7 +154,7 @@ pub(crate) fn fold_getfield_receiver(env: &InstrEnv, sim: &mut StackSim, get: &I
     if t == "this" || t == "self" {
         return Ok(());
     }
-    sim.emit(expr_stmt(null_checked(env, obj_e)?))?;
+    sim.emit(expr_stmt(null_checked(env, log, obj_e)?))?;
     Ok(())
 }
 
@@ -172,7 +174,7 @@ fn putfield(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRe
     let sc = StoreCtx { obj_text: &obj_text, slot_is_type_var: slot_gsig.starts_with('T'), class_tps: &class_tps };
     let val_str = coerce_stored_value(env, log, &val.expr, &val.ty, &ftype, &sc)?;
     let slot = ctx.ty.instance_field_rust_name(owner, &fname);
-    let recv = hooked_receiver(env, sim, owner, f, null_checked(env, obj_e)?)?;
+    let recv = hooked_receiver(env, sim, owner, f, null_checked(env, log, obj_e)?)?;
     let set = mcall(recv, &format!("__set_{slot}"), vec![value_node(env, val.expr, val_str)])?;
     sim.emit(expr_stmt(set))?;
     Ok(())

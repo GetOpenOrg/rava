@@ -303,7 +303,7 @@ impl Closure<'_> {
             "missing": e.missing.iter().map(|(n, v)| json!({"name": n, "via": self.via_json(v)})).collect::<Vec<_>>(),
             "unresolved": e.unresolved,
             "refs": e.refs,
-            "indy_models": e.indy_models.iter().map(|(site, (bsm, k))| json!({"site": site, "bootstrap": bsm, "kind": indy_str(*k)})).collect::<Vec<_>>(),
+            "indy_models": e.indy_models.iter().map(|(site, (bsm, k))| json!({"site": site, "bootstrap": bsm, "kind": k.as_str()})).collect::<Vec<_>>(),
             "sigpoly_sites": e.sigpoly_sites,
             "dispatch": dispatch,
             "dispatched": e.dispatched(),
@@ -464,12 +464,3 @@ impl Closure<'_> {
     }
 }
 
-/// indy 运行模型类别名（closure.json `indy_models`）
-fn indy_str(k: manifest::IndyKind) -> &'static str {
-    match k {
-        manifest::IndyKind::Lambda => "lambda",
-        manifest::IndyKind::Concat => "concat",
-        manifest::IndyKind::Native => "native",
-        manifest::IndyKind::ObjectMethods => "object_methods",
-    }
-}

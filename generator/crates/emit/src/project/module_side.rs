@@ -85,7 +85,7 @@ pub fn write_module_crates(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, to
         w.write(&src.join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
         let mut deps = vec![root_decl_dep(crates, top)];
         deps.extend(c.deps.iter().filter(|d| d.as_str() != crates.root()).map(|d| path_dep(d, d)));
-        deps.push(format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display()));
+        deps.push(super::vendor::macros_dep());
         deps.push("libc            = \"0.2\"".into());
         w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, &c.name, &deps))?;
     }
