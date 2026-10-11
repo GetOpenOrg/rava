@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # a3-T6 虚拟线程规模剖析（服务器作业用，Linux）：参考 JDK 两次运行 TestVirtualThreadScale 取 expected，
 # 转译 tests/perf/VirtualThreadScale 后按各模式采样内存时间线与耗时。产物在 build/vt6/。
-# 用法：scripts/diag/vt6_probe.sh <dev|release> [n=100000] [模式...（缺省 sleep park unstarted split）]
+# 用法：scripts/diag/vt6_probe.sh <dev|dev-opt|release> [n=100000] [模式...（缺省 sleep park unstarted split）]
 # 环境：SKIP_JDK=1 跳过参考 JDK 运行；SAMPLE=1 每模式另跑一次进程内 CPU 采样（scripts/diag/sampler.c），报告写 build/vt6/<profile>_<mode>_prof.txt
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -19,14 +19,15 @@ if [ "$PROFILE" = dev ] && [ -z "${SKIP_JDK:-}" ]; then
   cmp $OUT/jdk1.txt $OUT/jdk2.txt && echo "== jdk outputs identical" && cat $OUT/jdk1.txt
 fi
 
-REL=(); [ "$PROFILE" = release ] && REL=(--release)
+REL=(); case "$PROFILE" in release) REL=(--release);; dev-opt) REL=(--dev-opt);; esac
 WS=$OUT/ws_$PROFILE
+cargo build --release -q -p driver --manifest-path generator/Cargo.toml --target-dir build/analyzer-target || exit 1
 /usr/bin/time -v build/analyzer-target/release/rava build tests/perf/VirtualThreadScale.java --stop-after compile \
   --out $WS --clean --java-home "$JH" "${REL[@]}" > $OUT/build_$PROFILE.log 2>&1
 rc=$?
 echo "== rava build ($PROFILE) rc=$rc $(grep -E 'Elapsed|Maximum resident' $OUT/build_$PROFILE.log | tr -s ' ' | tr '\n' ' ')"
 [ $rc -eq 0 ] || { tail -40 $OUT/build_$PROFILE.log; exit 1; }
-DIR=debug; [ "$PROFILE" = release ] && DIR=release
+DIR=debug; case "$PROFILE" in release) DIR=release;; dev-opt) DIR=dev-opt;; esac
 BIN=build/target/$DIR/virtual_thread_scale
 [ -x "$BIN" ] || BIN=$(find build -path "*/$DIR/virtual_thread_scale" -type f | head -1)
 echo "== bin $BIN $(stat -c %s "$BIN") B"
