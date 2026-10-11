@@ -27,7 +27,7 @@ $RAVA jdk --json                                                       # 选中�
 | 选项 | 用途 |
 |---|---|
 | `build <A.java>…` | javac（`-g`，JDK ≥ 14 加 `--enable-preview --release N`）→ 闭包分析（同 `rava closure`）→ 闭包事实进程内直传 → 发射 scratch →（缺省）`cargo build --bin <入口 snake 名>` 并直接执行产物（`CARGO_TARGET_DIR` 缺省 `<仓库>/build/target`、`CARGO_INCREMENTAL=0`）。用户类落 `<scratch>/closure_input/`；`closure.json` 只在 `--closure-json` 时写出 |
-| `compile <scratch>` | 编译 `build --stop-after emit` 已发射的 scratch（bin 名与重型判定输入读自 `build_status.json` 的 `emit` 段），更新 `build_status.json` / `build_artifacts.json`；接受 `--release` / `--dev-opt` / `--target-dir` / `--build-timeout` / `--keep-artifacts` / `--runtime`。`run_tests.py` 先并行发射、再逐例用它编译，发射进程不必常驻等待共享 target 的 cargo 文件锁 |
+| `compile <scratch>` | 编译 `build --stop-after emit` 已发射的 scratch（bin 名与重型判定输入读自 `build_status.json` 的 `emit` 段），更新 `build_status.json` / `build_artifacts.json`；接受 `--release` / `--release-max` / `--release-small` / `--dev-opt` / `--target-dir` / `--build-timeout` / `--build-timeout-scale` / `--build-mem-mb` / `--keep-artifacts` / `--runtime`。`run_tests.py` 先并行发射、再逐例用它编译，发射进程不必常驻等待共享 target 的 cargo 文件锁 |
 | `prune <scratch>…` | 删除 scratch 的 `build_artifacts.json` 登记的剩余编译产物（运行完成后调用，见 `--keep-artifacts`）；清单只含本 scratch 的包，共享依赖不动 |
 | `jdk` | 打印 JDK 选择结果与来源（`--home-only` 只打印 home，供 shell 取 `JAVA_HOME`；`--json` 打印 `{home, major, source}`；`--list` 列已安装版本） |
 | `emit <closure.json>` | 由既有 `closure.json` 与用户类目录重建输入后发射（不编译运行）。`--classes DIR` 缺省 `closure.json` 同目录的 `classes/`；`--java A.java`（可多次）给出源文件，决定用户类包布局与入口序 |
@@ -37,12 +37,14 @@ $RAVA jdk --json                                                       # 选中�
 | `--image D` | 镜像独有 / VM 支持类目录（可多次；缺省由 rava 自行派生，见 `resolve::image`） |
 | `--main 类` / `--locale L` / `--root 类.方法:描述符` | 仅 build：入口类（缺省首个源文件的同名类，否则首个带 static main 的用户类）/ locale 种子 / 外部种子方法（均可多次） |
 | `--clean` | 发射前清空 scratch（emit 的输入位于 scratch 内时拒绝） |
-| `--stop-after STAGE` | 仅 build：最后执行的阶段 `javac` / `closure` / `emit` / `compile` / `run`（缺省 `run`）。`emit` = 只生成（不编译运行）；`compile` = 生成并 `cargo build`，产物清单写 `<scratch>/build_artifacts.json`（`{bin, executable, paths}`，仅本 scratch 的产物），rustc 全文写 `<scratch>/logs/build.log`。每次 build 都写 `<scratch>/build_status.json`：`{stage, ok, exit, signal, timeout, first_error, log, jdk:{home,major,source}, heavy, emit:{bin,jdk_classes,precheck}, exe}`（stage = 停止或失败的阶段；`emit.precheck` = 预检全量明细 `{native_missing_count, boundary_stub_count, native_missing[], boundary_stub[]}`，不受 stdout 明细 40 条上限影响，`rava compile` 原样保留；`exe` = 编译成功的可执行文件）。编译环境见下文「重型闭包的自动处理」 |
+| `--stop-after STAGE` | 仅 build：最后执行的阶段 `javac` / `closure` / `emit` / `compile` / `run`（缺省 `run`）。`emit` = 只生成（不编译运行）；`compile` = 生成并 `cargo build`，产物清单写 `<scratch>/build_artifacts.json`（`{bin, executable, paths}`，仅本 scratch 的产物），rustc 全文写 `<scratch>/logs/build.log`。每次 build 都写 `<scratch>/build_status.json`：`{stage, ok, exit, signal, timeout, first_error, log, jdk:{home,major,source}, heavy, emit:{bin,jdk_classes,precheck}, exe}`（stage = 停止或失败的阶段；`emit.precheck` = 预检全量明细 `{native_missing_count, boundary_stub_count, native_missing[], boundary_stub[]}`，不受 stdout 明细 40 条上限影响，`rava compile` 原样保留；`exe` = 编译成功的可执行文件）。`mem` = 内存感知作业数的决定（见下文「编译内存与作业数的自动处理」）。编译环境见同节 |
 | `--build-timeout 秒` | cargo 编译超时（build / compile；缺省重型闭包 3000 秒，其余 600 秒），到时终止整个 cargo 进程组，`build_status.json` 记 `timeout: true`；build 下须配合 `--stop-after compile` 或 `run` |
 | `--build-timeout-scale K` | 仅 compile：编译超时取缺省值（按重型判定 3000 / 600 秒）的 K 倍（正整数），与 `--build-timeout` 互斥；全量跑批放宽超时用（`run_tests.py --build-timeout-scale` 透传） |
-| `--release` / `--target-dir D` | build / compile：release 配置编译 / 共享编译缓存目录（缺省 `<仓库>/build/target`）；build 下须配合 `--stop-after compile` 或 `run` |
-| `--release-small` | build / compile：体积档（cargo profile `release-small`，产物在 `<target>/release-small/`）：继承 release（fat LTO、codegen-units 1、strip），opt-level `"s"`；`run_tests.py --release-small` 同义。档位取舍与实测见 `docs/plans/2026-10-04-binary-size.md` B3 |
-| `--dev-opt` | build / compile：性能类测试档（cargo profile `dev-opt`，产物在 `<target>/dev-opt/`）：继承 dev 语义，档案侧 crate 与第三方依赖 opt-level 1、用户 crate 0；与 `--release` / `--release-small` 互斥。e2e 用例在源文件中以独占一行的 `// rava-build-profile: dev-opt` 声明，`run_tests.py` 缺省 dev 档时按声明改走该档（`--release` 时不变） |
+| `--release` / `--target-dir D` | build / compile：release 配置编译（缺省发布档，以构建内存为硬约束：opt 3 + thin LTO + codegen-units 1，16 GB 机器可构建全部用例）/ 共享编译缓存目录（缺省 `<仓库>/build/target`）；build 下须配合 `--stop-after compile` 或 `run` |
+| `--release-max` | build / compile：大机器打包档（cargo profile `release-max`，产物在 `<target>/release-max/`）：opt 3 + fat LTO + codegen-units 1。大闭包单个 rustc 峰值 14–16 GB，须 ≥ 24 GB 内存；`run_tests.py --release-max` 同义。见 `docs/plans/2026-10-11-build-memsafe.md` |
+| `--build-mem-mb MB` | build / compile：编译可用内存显式给定（代替探测），内存感知作业数按它计算；build 下须配合 `--stop-after compile` 或 `run` |
+| `--release-small` | build / compile：体积档（cargo profile `release-small`，产物在 `<target>/release-small/`）：继承 release-max（fat LTO、codegen-units 1、strip），opt-level `"s"`；`run_tests.py --release-small` 同义。档位取舍与实测见 `docs/plans/2026-10-04-binary-size.md` B3 |
+| `--dev-opt` | build / compile：性能类测试档（cargo profile `dev-opt`，产物在 `<target>/dev-opt/`）：继承 dev 语义，档案侧 crate 与第三方依赖 opt-level 1、用户 crate 0；与 `--release` / `--release-max` / `--release-small` 互斥。e2e 用例在源文件中以独占一行的 `// rava-build-profile: dev-opt` 声明，`run_tests.py` 缺省 dev 档时按声明改走该档（`--release` 时不变） |
 | `--keep-artifacts` | build / compile：保留本例编译产物。缺省 compile 链接成功后即删除本例专属中间产物（`deps/` 下同 `<crate>-<hash>` 单元的 rlib / rmeta / .d、`.fingerprint`、`build/<crate>-<hash>/`），只留可执行文件；build 的 run 段之后再删可执行文件（批量编排运行后调 `rava prune`）。归属读 `build_artifacts.json`，跨例共享依赖（`rava_macros` 等）不在清单内、永不删除。需要复用编译缓存（同一 scratch 反复编译）时打开 |
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
 | `--lib NAME=JAR[:seed=FQN,…]` | 仅 build：jar 输入模式（可多次，声明序即 crate 依赖序）。jar 上 javac `-cp` 与类路径；无 seed = 整包（jar 全部类进 lib crate，种子 = 全部类的 public 方法），有 seed = 子集（种子类须在 jar 内，只收闭包触达的 jar 类）。每个 lib 一个 `crate-type = ["lib"]` 的 crate：public / protected → `pub`，其余 → `pub(crate)`；user 依赖全部 lib。与 `--batch` 互斥 |
@@ -169,14 +171,17 @@ scratch；javac 产物落 `build/audit/` 下临时目录，用完即删。corpus
 `--closure-cache`（缺省 `build/closure_cache`）。口径是静态可达（过近似；终态按档案口径——构建单元全体入口并集、闭包规模以档案衡量，当前实现仍按单测试逐例计算），运行期是否执行用
 `rava closure <Test.java> --why <方法>` 核对。
 
-### 重型闭包的自动处理（无需配置）
+### 编译内存与作业数的自动处理（无需配置）
 
-rava 的编译阶段（`driver/src/cargo.rs`，build 与 compile 共用）以发射时统计的声明层 `java_runtime` 类数判定，
-≥ 1700 视为重型闭包（16G 机器上单 rustc 峰值约 14G，双作业会被 OOM 杀）：
+rava 的编译阶段（`driver/src/cargo.rs`、`mem_budget.rs`、`mem_probe.rs`，build 与 compile 共用）每次编译都按内存定 cargo 并行作业数
+（终态规则，非失败重试；方案与实测见 `docs/plans/2026-10-11-build-memsafe.md`）：
 
-- 生成的 workspace `Cargo.toml` 固定 `[profile.dev] debug = "line-tables-only"`（调试信息减量，rustc 内存明显下降）；
-- 编译环境 `CARGO_INCREMENTAL=0`；重型时自动 `CARGO_BUILD_JOBS=1`，打印 `[cargo-env]` 一行；显式设置 `CARGO_BUILD_JOBS` 时尊重显式值；
-- 构建超时缺省 600 秒，重型自动放宽到 3000 秒（`--build-timeout` 显式值优先）；判定结果写入 `build_status.json` 的 `heavy` 段。
+- 可用内存 A = `--build-mem-mb`，否则 min(`MemAvailable`、各级 cgroup v2 / v1 余量（不活跃文件页不计占用）、macOS `vm_stat`)；预算 B = 85% A；
+- 逐 crate 估 rustc 峰值 E = 基数 + 斜率 × 源码 MB（按档位取系数），LTO 档位的可执行文件 crate 另按全工作区源码估全程序链接；
+- 作业数 J = 「最大的 J 个 E 之和 ≤ B」的最大 J；上限为 `CARGO_BUILD_JOBS`（若设）、否则自 scratch 向上最近的 cargo 配置 `[build] jobs`、否则核数；
+  单个 crate 估计已超 B 时 J = 1 并告警（应换档位或机器）。决定打印为 `[cargo-env]` 一行，写入 `build_status.json` 的 `mem` 段；
+- 生成的 workspace `Cargo.toml` 固定 `[profile.dev] debug = "line-tables-only"`；编译环境 `CARGO_INCREMENTAL=0`；
+- 声明层 `java_runtime` 类数 ≥ 1700 为重型闭包，只决定缺省构建超时：600 秒，重型 3000 秒（`--build-timeout` 显式值优先），写入 `build_status.json` 的 `heavy` 段。
 
 ## 二、生成程序的运行期诊断
 
@@ -199,7 +204,7 @@ RUST_BACKTRACE=1 build/analyzer-target/release/rava build Foo.java
 | `JAVA_HOME` | rava（`resolve::jdk`）、各脚本 | JDK 位置。rava 直接调用时按 `resolve::jdk` 优先级参与选择；语料编排（`run_tests.py` / 语料 shell 脚本）不读环境值，选中参考构建（或显式覆盖）后写回，javac / java / jmods 均经它取得 |
 | `RAVA_REFJDK_ROOT` | `fetch_reference_jdk.sh`（经它：`run_tests.py`、`corpus_jdk.sh`） | 语料参考 JDK 根目录（缺省主检出的 `tools/refjdk/`）。服务器由分发脚本设为数据目录（如 `/data/rava-jdk`），抽查 / 作业的独立检出共用一份 |
 | `JDK` | 语料 shell 脚本（`corpus_jdk.sh`） | 设为主版本 N 时改用本机 JDK N（实验，非参考构建）；未设 = 参考构建 |
-| `CARGO_BUILD_JOBS` | 用户 / rava（`driver/src/cargo.rs`） | rustc 并行作业数，显式设置时优先于重型闭包自动判定 |
+| `CARGO_BUILD_JOBS` | 用户 / rava（`driver/src/mem_budget.rs`） | 作业数上限；rava 在其下按内存感知规则决定实际作业数并显式设置 |
 | `RUST_BACKTRACE` | 生成程序 | 见第二节 |
 | `CARGO_TARGET_DIR` | rava 自动设置 | 共享编译缓存（`--target-dir`：`run_tests.py` 传 `build/jdk<N>/target`，缺省 `build/target`），无需手动设置 |
 | `RAVA_FRAME_LINES` | rava compile 自动设置，链接器包装 `rava-link` 读取 | 旁路行表路径（`<scratch>/closure_input/frame_lines.json`），供链接期构建地址 → Java 帧表（二进制体积 B2）；内部通道，无需也不应手动设置 |
@@ -236,7 +241,7 @@ RUST_BACKTRACE=full build/analyzer-target/release/rava build Foo.java
 |---|---|
 | `RAVA_JDK` | `--jdk N`（或 `JAVA_HOME` / `.jdk-version`）；语料编排缺省参考构建 |
 | `RAVA_BUILD_TIMEOUT` | `--build-timeout SEC`（rava build / compile、`run_tests.py`）；重型闭包自动 3000 秒 |
-| `RAVA_HEAVY_CLASSES` | 阈值固定 1700；需要时显式设 `CARGO_BUILD_JOBS` |
+| `RAVA_HEAVY_CLASSES` | 阈值固定 1700（只决定缺省超时）；作业数由内存感知规则决定，`--build-mem-mb` 可显式给定可用内存 |
 | `RAVA_STRICT` | `--strict` |
 | `RAVA_DEBUG` / `RAVA_BFS_EDGE_AUDIT` / `RAVA_CFG_DEBUG` | `--debug` |
 | `RAVA_BFS_TRACE` | `--trace-class CLASS` |
