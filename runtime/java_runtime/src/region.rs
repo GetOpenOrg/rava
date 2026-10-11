@@ -6,51 +6,29 @@
 //! - **正常出口**（[`__Region::exit`]）：整组释放本区域的日志段——成环的临时对象（stream 管线等）也一并释放；
 //! - **异常出口**（`?` / 异常 / panic 穿出块，守卫析构）：只撤销日志的强引用，不整组释放（不会悬空）。
 //!
-//! 区域栈放在载体线程局部：区域内不会让出（`park` / `yield` / `Continuation.run` 都是 native，逃逸分析
+//! 区域栈放在载体槽（`exec_context::region_slot`）：区域内不会让出（`park` / `yield` / `Continuation.run` 都是 native，逃逸分析
 //! 命中即不插区域；并行后端没有抢占），一个区域总在同一载体、同一执行流上开始与结束。访问一律经不内联的
 //! 函数（同 `exec_context` 的 TLS 地址缓存约定）。
 //!
 //! 不登记的分配：native 方法体与 `<clinit>` 期间（执行流的 native pin 深度高于进入区域时；驻留表、类镜像、
 //! 静态初值等运行时缓存都在其中），以及 [`__Suspend`] 期间（字面量驻留）。
 
-use std::cell::{Cell, RefCell};
-
+use crate::exec_context::region_slot;
 use crate::obj_ref::group::{self, Ops};
 
 /// 一层活动区域
-struct Frame {
+pub(crate) struct Frame {
     /// 本区域日志段的起点
-    start: usize,
+    pub(crate) start: usize,
     /// 进入区域时执行流的 native 帧数：只登记同一深度上的分配
-    natives: u32,
-}
-
-struct RegionSlot {
-    /// 活动区域数（快速判定）
-    depth: Cell<u32>,
-    /// 挂起登记的嵌套数
-    suspended: Cell<u32>,
-    frames: RefCell<Vec<Frame>>,
-    /// 区域日志：(对象值地址, 类型操作)
-    log: RefCell<Vec<(*mut u8, &'static Ops)>>,
-}
-
-std::thread_local! {
-    static SLOT: RegionSlot = const {
-        RegionSlot {
-            depth: Cell::new(0),
-            suspended: Cell::new(0),
-            frames: RefCell::new(Vec::new()),
-            log: RefCell::new(Vec::new()),
-        }
-    };
+    pub(crate) natives: u32,
 }
 
 /// 分配路径的登记钩子：有活动区域、未挂起、且 native 深度与进入区域时相同 → 登记并返回 true
 /// （调用方随即为日志加一个强引用）。线程退出期（线程局部已销毁）不登记。
 #[inline(never)]
 pub(crate) fn __on_alloc(value: *mut u8, ops: &'static Ops) -> bool {
-    SLOT.try_with(|s| {
+    region_slot(|s| {
         if s.depth.get() == 0 || s.suspended.get() != 0 {
             return false;
         }
@@ -73,21 +51,23 @@ impl __Region {
     #[inline(never)]
     pub fn enter() -> __Region {
         let natives = crate::exec_context::native_depth();
-        SLOT.with(|s| {
+        region_slot(|s| {
             let start = s.log.borrow().len();
             s.frames.borrow_mut().push(Frame { start, natives });
             s.depth.set(s.depth.get() + 1);
-        });
+        })
+        .expect("线程退出期不进入区域");
         __Region { _not_send: std::marker::PhantomData }
     }
 
     /// 弹出本层区域，取走其日志段
     fn take() -> Vec<(*mut u8, &'static Ops)> {
-        SLOT.with(|s| {
+        region_slot(|s| {
             let f = s.frames.borrow_mut().pop().expect("区域栈失衡");
             s.depth.set(s.depth.get() - 1);
             s.log.borrow_mut().split_off(f.start)
         })
+        .expect("区域出口时载体槽存活")
     }
 
     /// 正常出口：整组释放本区域分配的对象
@@ -117,7 +97,7 @@ pub struct __Suspend(());
 impl __Suspend {
     #[inline(never)]
     pub fn new() -> __Suspend {
-        let _ = SLOT.try_with(|s| s.suspended.set(s.suspended.get() + 1));
+        let _ = region_slot(|s| s.suspended.set(s.suspended.get() + 1));
         __Suspend(())
     }
 }
@@ -125,7 +105,7 @@ impl __Suspend {
 impl Drop for __Suspend {
     #[inline(never)]
     fn drop(&mut self) {
-        let _ = SLOT.try_with(|s| s.suspended.set(s.suspended.get() - 1));
+        let _ = region_slot(|s| s.suspended.set(s.suspended.get() - 1));
     }
 }
 
