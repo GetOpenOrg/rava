@@ -57,6 +57,6 @@ impl FileDescriptor {
         if ok {
             return Ok(());
         }
-        Err(JvmError::from(super::SyncFailedException::new_str(String::from("sync failed"))?))
+        Err(JvmError::from(super::SyncFailedException::new(String::from("sync failed"))?))
     }
 }
