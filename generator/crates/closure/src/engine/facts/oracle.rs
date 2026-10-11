@@ -138,12 +138,24 @@ impl Oracle for Facts<'_, '_> {
     }
     fn getfield(&self, f: &MemberRef, recv: Option<&V>) -> Ret {
         let op = classfile::op::GETFIELD;
+        let dbg = std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w == f.to_string());
+        if dbg {
+            eprintln!("[getfield] {f} @ 方法#{:?} recv={recv:?}", self.m);
+        }
         if let Some(v) = self.ctx.mirror_hook_field(op, f, recv).or_else(|| self.ctx.object_field(self.m, op, f, recv)) {
+            if dbg {
+                eprintln!("[getfield] {f} 按对象答复 {v:?}");
+            }
             return Ret::Value(v);
         }
         // 按对象读（`obj_fields.rs`）：⊥ 按读取之后暂不可达，排空时重算
         match self.obj_field(f, recv) {
-            Some(ObjAns::Value(v)) => return Ret::Value(v),
+            Some(ObjAns::Value(v)) => {
+                if dbg {
+                    eprintln!("[getfield] {f} 按对象值 {v:?}");
+                }
+                return Ret::Value(v);
+            }
             Some(ObjAns::Never) => {
                 if let Some(me) = self.m {
                     self.ctx.dep(me, Dep::Never);
@@ -152,7 +164,14 @@ impl Oracle for Facts<'_, '_> {
             }
             None => {}
         }
-        self.ctx.field_value(self.reader(), f).map_or(Ret::Unknown, Ret::Value)
+        let r = self.ctx.field_value(self.reader(), f).map_or(Ret::Unknown, Ret::Value);
+        if dbg {
+            match &r {
+                Ret::Value(v) => eprintln!("[getfield] {f} 通配值 {v:?}"),
+                _ => eprintln!("[getfield] {f} 通配未知"),
+            }
+        }
+        r
     }
     fn construct(&self, init: &MemberRef, args: &[V]) -> Option<Rc<Obj>> {
         self.ctx.construct(self.m, init, args)
