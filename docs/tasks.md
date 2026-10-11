@@ -100,7 +100,7 @@
 - batch-1011k（叠 1011j，含 review-soundness）：未开测。
 
 **剩余工作**
-1. **种子无关性回归（阻塞放行）**：1011i 新引入，1011h 时通过。b1011i-seed 实测：`35_io/TestSerialLookupPairing.java` 种子 0 比种子 1 多 `java/security/ProtectionDomain$JavaSecurityAccessImpl` 与 `jdk/internal/access/JavaSecurityAccess`（前 5 例一致）。首要嫌疑 c1d-a54-reflect（构造器请求 `ctor_reqs` / `ctor_params`，其确定性单测当时超时未跑完）；诊断作业 b1011i-seedwhy（三种子 `--why`）在跑。候选来源是 1011i 新并入的 c1d-a54-reflect、review-runtime-perf、fix-iface-obj-overload、pilot-jackson-core、fix-invoke-box-cast，按 b1011i-seed 输出的差异类定位，修到 S 通过后再放行 1011i / 1011j / 1011k。
+1. **种子无关性回归（阻塞放行）**：1011i 新引入，1011h 时通过。b1011i-seed 实测：`35_io/TestSerialLookupPairing.java` 种子 0 比种子 1 多 `java/security/ProtectionDomain$JavaSecurityAccessImpl` 与 `jdk/internal/access/JavaSecurityAccess`（前 5 例一致）。首要嫌疑 c1d-a54-reflect（构造器请求 `ctor_reqs` / `ctor_params`，其确定性单测当时超时未跑完）；诊断作业 b1011i-seedwhy 在 1011i 复现（种子 0 为 2317 类，种子 1 / 2 为 2316 类）；但 **batch-1011j 的单测 S（含该例）通过**，疑为 1011j 并入的 fix-jdk25（ProtectionDomain 面）掩盖而非修复。b1011i-seedwhy2 / b1011j-seedwhy2 对照两批的 `--why` 路径。候选来源是 1011i 新并入的 c1d-a54-reflect、review-runtime-perf、fix-iface-obj-overload、pilot-jackson-core、fix-invoke-box-cast，按 b1011i-seed 输出的差异类定位，修到 S 通过后再放行 1011i / 1011j / 1011k。
 2. **G1 闭包不收敛**（S0 A 34.9 GB、sb3 30.6 GB 被杀，主因是方法上下文）：选择性按对象建上下文（上下文不敏感预分析，目标 S0 ≤20 万上下文、峰值 ≤16 GiB）；查清每约 240 s 一次的约 6 GB 尖峰；补跑扫描中缺的 28 例（11 例类路径问题，17 例需 ≥16 GiB 槽）。矩阵 #12 spring-beans sb1–sb3 与 S0 Boot 受此阻塞。见性能计划 §4.12。
 3. **S7 K3 方法 trait（s7-k3，未合入）**：声明底段峰值 +24–31%（上限 ±5%），先固定切段分离两个成因；DeepCopy 在 f3368359 后复测；全量单测（含 `no_jdk_literals`）与抽查；与 Rust 标准 trait 同名的方法和接口载体方法移入 trait（K6 前必须完成）。之后 K4–K8。见 S7 计划 §9.9。
 4. **运行时性能（三测点对照 JVM）**：
