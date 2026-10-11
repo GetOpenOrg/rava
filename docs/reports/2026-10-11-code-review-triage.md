@@ -79,7 +79,7 @@
 
 - 本机：generator `cargo check --release --tests` 无误；emit 单测 93 + 2、classfile 15、rava_rawmem 9（含偏移 0..8 × 长度 0..40 穷举）、rava_coro release 与 debug 均通过。
 - 全量单测作业 `rs-ut2`（sg1，a6c8fcac）：`ut-closure`（closure_cli 11 例，3654 s）与 `ut-rest` 两条都是 rc=0，无失败。
-- 抽查 `rs-spot2`（sg1，a6c8fcac）：DeepCopy、HelloWorld、StreamDemo、TestAtomics、TestByteArrayViewVarHandle、TestDirectBuffer、TestDirectBufferPaging 7 例 PASS；其余（TestUnsafePrimitiveArray、TestVarHandleBitwise、TestThreadNatives、TestThreadJoin）仍在 sg1 排队，结果待补。该 ref 上的 TestDirectMemoryAtomics 是旧 VarHandle 版且无期望文件，以 rs-spot3 为准。
+- 抽查 `rs-spot2`（sg1，a6c8fcac）：11/11 PASS（DeepCopy、HelloWorld、StreamDemo、TestAtomics、TestByteArrayViewVarHandle、TestDirectBuffer、TestDirectBufferPaging、TestThreadJoin、TestThreadNatives、TestUnsafePrimitiveArray、TestVarHandleBitwise）。另有 1 次 infra 失败，是该 ref 上的旧 VarHandle 版 TestDirectMemoryAtomics（无期望文件），以 rs-spot3 为准。
 - 抽查 `rs-spot3`（kr1，a3b7ca0a）：TestDirectMemoryAtomics（Unsafe 版）PASS，1/1。
 
 **计时**（作业 `rs-bench5`，kr1 同机，前 96fc1cf4 → 后 a3b7ca0a，各 5 次）
