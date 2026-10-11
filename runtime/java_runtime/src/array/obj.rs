@@ -170,8 +170,8 @@ impl<T: 'static> __ArrayObj<T> {
         matches!(Some(self.form()), Some(Form::Own(store, _)) if store.write_bytes(start, src))
     }
 
-    /// 基本元素数组字节视图上 `width` 字节值的原子读-改-写（见 `Store::update_bytes`）。
-    pub(crate) fn __update_bytes(&self, start: usize, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Option<u64> {
+    /// 基本元素数组字节视图上 `width` 字节值的原子读-改-写（见 `Store::update_bytes`；回调泛型内联）。
+    pub(crate) fn __update_bytes<F: FnMut(u64) -> Option<u64> + ?Sized>(&self, start: usize, width: usize, op: &mut F) -> Option<u64> {
         match Some(self.form()) {
             Some(Form::Own(store, _)) => store.update_bytes(start, width, op),
             _ => None,
