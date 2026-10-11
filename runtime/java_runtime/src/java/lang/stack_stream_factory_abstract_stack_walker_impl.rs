@@ -176,11 +176,24 @@ where
     /// native `callStackWalk(long mode, int skipframes, ContinuationScope, Continuation, int batchSize,
     /// int startIndex, T[] frames)`（JDK 21）。续体参数：本模型无虚拟线程续体帧（VirtualThread 为 VM 边界类），
     /// 帧流即当前载体线程栈。
+    ///
+    /// 两个版本的 native 体各自直接调 `__fill_in_frames`（帧数组实参不经中间 helper 转手）：闭包分析器按
+    /// native 形参建模手写体对实参数组的写入，多一跳转手后 JDK 21 仅类模式帧缓冲的 Class 元素被判恒 null
+    ///（failure_patterns `jdk21-stackwalk-cfg-scan-regression`）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn callStackWalk(&self, mode: i64, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
-        self.__call_stack_walk(mode, skipframes, batch_size, start_index, start_index + batch_size, frames)
+        let limit = start_index + batch_size;
+        if frames.is_jvm_null() {
+            return Err(_npe("frames_array is null"));
+        }
+        if frames.len()? < limit {
+            return Err(JvmError::illegal_argument("not enough space in buffers"));
+        }
+        let mut stream = Self::__anchor_stream(skipframes);
+        let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
+        self.__walk_batches(stream, skipframes, batch_size, start_index, end_index)
     }
 
     /// native `callStackWalk(int mode, int skipframes, ContinuationScope, Continuation, int bufferSize,
@@ -190,23 +203,29 @@ where
     #[jvm_native]
     pub fn callStackWalk(&self, mode: i32, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
-        self.__call_stack_walk(i64::from(mode), skipframes, batch_size, start_index, batch_size, frames)
-    }
-
-    /// `limit`：填帧的排他上界下标（缓冲区须至少这么长）
-    fn __call_stack_walk(&self, mode: i64, skipframes: i32, batch_size: i32, start_index: i32, limit: i32,
-                         frames: JArray<T>) -> Result<R> {
+        let mode = i64::from(mode);
+        let limit = batch_size;
         if frames.is_jvm_null() {
             return Err(_npe("frames_array is null"));
         }
         if frames.len()? < limit {
             return Err(JvmError::illegal_argument("not enough space in buffers"));
         }
+        let mut stream = Self::__anchor_stream(skipframes);
+        let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
+        self.__walk_batches(stream, skipframes, batch_size, start_index, end_index)
+    }
+
+    /// 本线程栈快照为帧流：跳过 StackWalker 实现帧，再跳 `skipframes` 帧
+    fn __anchor_stream(skipframes: i32) -> Anchored {
         let all = crate::vm_stack::capture_java_frames();
         let mut cursor = all.iter().position(|f| !_is_walker_impl(f.class)).unwrap_or(all.len());
         cursor = (cursor + skipframes.max(0) as usize).min(all.len());
-        let mut stream = Anchored { frames: all, cursor };
-        let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
+        Anchored { frames: all, cursor }
+    }
+
+    /// 首批已填：登记锚点、上调 `doStackWalk`，返回（含异常完成）后锚点失效
+    fn __walk_batches(&self, stream: Anchored, skipframes: i32, batch_size: i32, start_index: i32, end_index: i32) -> Result<R> {
         if end_index - start_index < 1 {
             return Err(_internal_error("stack walk: decode failed"));
         }
@@ -222,12 +241,32 @@ where
         Ok(R::from(result?))
     }
 
-    /// native `fetchStackFrames(long mode, long anchor, int batchSize, int startIndex, T[] frames)`（JDK 21）
+    /// native `fetchStackFrames(long mode, long anchor, int batchSize, int startIndex, T[] frames)`（JDK 21）：
+    /// 按锚点续取下一批，返回 endIndex（流已到底 → startIndex）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn fetchStackFrames_l_l_i_i_arr_obj(&self, mode: i64, anchor: i64, batch_size: i32, start_index: i32,
                                             frames: JArray<T>) -> Result<i32> {
-        Self::__fetch_stack_frames(mode, anchor, start_index, start_index + batch_size, frames)
+        let limit = start_index + batch_size;
+        let Some(mut stream) = crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor) else {
+            return Err(_internal_error("doStackWalk: corrupted buffers on stack"));
+        };
+        let result = (|| {
+            if frames.is_jvm_null() {
+                return Err(_npe("frames_array is null"));
+            }
+            if frames.len()? < limit {
+                return Err(JvmError::illegal_argument("not enough space in buffers"));
+            }
+            let had_more = stream.cursor < stream.frames.len();
+            let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
+            if had_more && end_index == start_index {
+                return Err(_internal_error("doStackWalk: decode frames failed"));
+            }
+            Ok(end_index)
+        })();
+        crate::exec_context::state().walk_anchors.borrow_mut().insert(anchor, stream);
+        result
     }
 
     /// native `fetchStackFrames(int mode, long anchor, int lastBatchFrameCount, int bufferSize, int startIndex,
@@ -237,11 +276,8 @@ where
     #[jvm_native]
     pub fn fetchStackFrames_i_l_i_i_i_arr_obj(&self, mode: i32, anchor: i64, _last_batch_frame_count: i32, batch_size: i32,
                                               start_index: i32, frames: JArray<T>) -> Result<i32> {
-        Self::__fetch_stack_frames(i64::from(mode), anchor, start_index, batch_size, frames)
-    }
-
-    /// 按锚点续取下一批，返回 endIndex（流已到底 → startIndex）
-    fn __fetch_stack_frames(mode: i64, anchor: i64, start_index: i32, limit: i32, frames: JArray<T>) -> Result<i32> {
+        let mode = i64::from(mode);
+        let limit = batch_size;
         let Some(mut stream) = crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor) else {
             return Err(_internal_error("doStackWalk: corrupted buffers on stack"));
         };
