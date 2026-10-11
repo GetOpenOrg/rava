@@ -66,19 +66,20 @@ pub struct Model {
 }
 
 impl Model {
-    /// 各档位系数（服务器单作业逐 crate 实测上包络，数据见计划文档 §三）
+    /// 各档位系数（服务器单作业逐 crate 实测上包络，数据见计划文档 §三；
+    /// 近 cgroup 上限时的实测会被换出压低，release 声明层按无内存压力的单作业复测标定）
     pub fn of(p: BuildProfile) -> Model {
         let dev = Model {
             small: (520.0, 300.0),
             large: (1350.0, 170.0),
             per_data_mb: 120.0,
-            per_long_kline: 0.0,
+            per_long_kline: 5.0,
             link_base_mb: 0.0,
             link_per_total_mb: 0.0,
         };
         let release = Model {
             small: (750.0, 460.0),
-            large: (2000.0, 190.0),
+            large: (2000.0, 260.0),
             per_data_mb: 130.0,
             per_long_kline: 55.0,
             link_base_mb: 2300.0,
