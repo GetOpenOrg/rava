@@ -75,6 +75,9 @@ def main():
     pid = int(lines[0].split()[1])
     groups = {"all": [collections.Counter(), collections.Counter(), 0, collections.Counter()],
               "main": [collections.Counter(), collections.Counter(), 0, collections.Counter()]}
+    # CALLERS="子串1,子串2"：主线程上首个命中该子串的帧之上 4 层调用链分布（查谁在调某热点）
+    callers = [c for c in os.environ.get("CALLERS", "").split(",") if c]
+    chains = {c: collections.Counter() for c in callers}
     for line in lines[1:]:
         parts = line.split()
         tid = int(parts[0])
@@ -86,6 +89,12 @@ def main():
             frames.pop(0)
         if not frames:
             continue
+        if tid == pid:
+            for c in callers:
+                for k, f in enumerate(frames):
+                    if c in f:
+                        chains[c][" <- ".join(x[:90] for x in frames[k + 1:k + 5])] += 1
+                        break
         for g in ("all", "main") if tid == pid else ("all",):
             selfc, incl, _, owner = groups[g]
             selfc[frames[0]] += 1
@@ -110,6 +119,11 @@ def main():
         print("--- inclusive")
         for f, c in incl.most_common(top * 2):
             print(f"{100 * c / n:6.2f}% {f[:200]}")
+    n = groups["main"][2]
+    for c, ch in chains.items():
+        print(f"===== callers of {c}（主线程）")
+        for f, k in ch.most_common(25):
+            print(f"{100 * k / max(n, 1):6.2f}% {f}")
 
 
 if __name__ == "__main__":
