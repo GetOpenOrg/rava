@@ -3,6 +3,14 @@
 //! 边界；原生二进制没有 VM 元数据层——resolve 族按「Rust 侧静态注册表」
 //! 承载（java_meta 方法/字段元数据表，与 Class.getDeclaredField 同源）。
 
+use crate::java::lang::invoke::MethodType__Methods as _;
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::InternalError__Methods as _;
+use crate::java::lang::NoSuchFieldError__Methods as _;
+use crate::java::lang::NoSuchMethodError__Methods as _;
+use crate::java::lang::invoke::MemberName__Methods as _;
+use crate::java::lang::invoke::MethodHandleNatives__Methods as _;
+use crate::jdk::internal::misc::Unsafe__Methods as _;
 use crate::prelude::*;
 use super::method_handle_natives::MethodHandleNatives;
 use super::member_name::MemberName;

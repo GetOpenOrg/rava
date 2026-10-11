@@ -1,6 +1,8 @@
 //! `sun/nio/ch/NativeThread` 的 ACC_NATIVE（类 1，libnio `NativeThread.c`）。
 //! 阻塞 I/O 的中断信号：安装空处理器，signal0 以 pthread_kill 打断目标线程的系统调用。
 
+use crate::java::io::IOException__Methods as _;
+use crate::sun::nio::ch::NativeThread__Methods as _;
 use crate::prelude::*;
 use super::native_thread::NativeThread;
 

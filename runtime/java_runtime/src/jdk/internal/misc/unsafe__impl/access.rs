@@ -1,5 +1,6 @@
 //! Unsafe 的 int / long / 引用槽访问：CAS、volatile / opaque / acquire / release、park、静态字段基址（宿主 unsafe__impl.rs 的私有辅助模块）
 
+use crate::java::lang::reflect::Field__Methods as _;
 use super::*;
 
 impl Unsafe {

@@ -6,6 +6,11 @@
 //! bindings / childs（别名子接口不建模，恒空）。典型消费方：SecureRandom 播种的
 //! SeedGenerator.addNetworkAdapterInfo（接口名与 MAC 入熵）。
 
+use crate::java::net::Inet4Address__Methods as _;
+use crate::java::net::Inet6Address__Methods as _;
+use crate::java::net::InetAddress__Methods as _;
+use crate::java::net::InterfaceAddress__Methods as _;
+use crate::java::net::NetworkInterface__Methods as _;
 use crate::prelude::*;
 use super::network_interface::NetworkInterface;
 use super::{Inet4Address, Inet6Address, InetAddress, InterfaceAddress};

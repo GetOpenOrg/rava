@@ -1,6 +1,8 @@
 //! `jdk/internal/reflect/Reflection` 手写伴生：内部边界类，按调用链按需实现
 //! （K-2 规则），其余保持 panic 存根。
 
+use crate::java::lang::Class__Methods as _;
+use crate::jdk::internal::reflect::Reflection__Methods as _;
 use crate::prelude::*;
 use super::reflection::Reflection;
 use crate::java::lang::Class;

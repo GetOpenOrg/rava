@@ -8,6 +8,7 @@
 //!   - pending 链表恒空：`getAndClearReferencePendingList` 取 null，`waitForReferencePendingList`
 //!     永不返回（Reference Handler 线程在引导期由 `Reference.<clinit>` 启动，常驻等待，守护线程不阻止退出）。
 
+use crate::java::lang::r#ref::Reference__Methods as _;
 use crate::prelude::*;
 use super::reference::Reference;
 

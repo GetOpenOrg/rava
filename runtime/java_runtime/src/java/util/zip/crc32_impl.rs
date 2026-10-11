@@ -1,6 +1,7 @@
 //! `java/util/zip/CRC32` 的 native 方法（与生成的 crc32.rs 共置）。
 //! 对标 zlib `crc32()`：反射多项式 0xEDB88320，入参 / 返回为已取反后的 CRC 值。
 
+use crate::java::util::zip::CRC32__Methods as _;
 use crate::prelude::*;
 use super::crc32::CRC32;
 

@@ -6,6 +6,7 @@
 //! 此处登记 key → SpeciesData 并返回该类；随后 ClassSpecializer 按 key 形态查找的
 //! `make` / `arg<T><i>` 由 `crate::species_dyn` 应答。vm_intrinsics.toml「运行期类定义点」登记。
 
+use crate::java::lang::invoke::ClassSpecializer_SpeciesData__Methods as _;
 use crate::prelude::*;
 use super::class_specializer_factory::ClassSpecializer_Factory;
 use super::ClassSpecializer_SpeciesData;

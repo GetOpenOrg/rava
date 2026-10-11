@@ -5,6 +5,7 @@
 //! 由 Java 侧回落 `getSystemGMTOffsetID()`。ID 的有效性由 Java 侧
 //! （ZoneInfoFile 查 tzdb.dat）判定，无效 ID 回落 GMT，与 JVM 行为一致。
 
+use crate::java::util::TimeZone__Methods as _;
 use crate::prelude::*;
 use super::time_zone::TimeZone;
 use crate::java::lang::String;

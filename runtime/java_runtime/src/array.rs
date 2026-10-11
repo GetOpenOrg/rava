@@ -1,6 +1,7 @@
 // Java 数组类型封装：可读层包装
 // 调用方只需 array.get(i)、array.set(i, v)、array.len()；元素存储无锁（见 array/store.rs）
 
+use crate::java::lang::Class__Methods as _;
 use crate::sync_model::__Shared as Rc;
 
 use crate::java::lang::Object;

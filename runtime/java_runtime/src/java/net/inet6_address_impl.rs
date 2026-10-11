@@ -1,5 +1,6 @@
 //! `java/net/Inet6Address` 的 native 方法（与生成的同名文件共置）。
 
+use crate::java::net::Inet6Address__Methods as _;
 use crate::prelude::*;
 use super::inet6_address::Inet6Address;
 

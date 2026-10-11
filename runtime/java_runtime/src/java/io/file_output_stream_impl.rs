@@ -1,3 +1,7 @@
+use crate::java::io::FileDescriptor__Methods as _;
+use crate::java::io::FileNotFoundException__Methods as _;
+use crate::java::io::FileOutputStream__Methods as _;
+use crate::java::io::IOException__Methods as _;
 use crate::prelude::*;
 use super::file_output_stream::FileOutputStream;
 

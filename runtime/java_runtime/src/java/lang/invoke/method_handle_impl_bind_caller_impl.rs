@@ -7,6 +7,8 @@
 //! VM 支持类 `InjectedInvokerDyn`（字节码翻译）；模板字节唯一消费方是本类定义点，
 //! 不再生成。vm_intrinsics.toml 登记。
 
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::invoke::MethodHandleImpl_BindCaller__Methods as _;
 use crate::prelude::*;
 use super::method_handle_impl_bind_caller::MethodHandleImpl_BindCaller;
 use crate::java::lang::Class;

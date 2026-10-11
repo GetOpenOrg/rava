@@ -171,8 +171,10 @@ mod tests {
     #[test]
     fn trait_mirrors_wrapper_generics() {
         let out = expanded();
-        assert!(out.contains("pub trait L__Methods < E > : :: core :: marker :: Sized"), "{out}");
-        assert!(out.contains("impl < E > L__Methods < E > for L < E >"), "{out}");
+        // 形参带宏补的界（`E : Clone + Default + …`），trait 与实现头同界
+        let bounds = out.split("pub struct L < ").nth(1).unwrap().split(" > {").next().unwrap();
+        assert!(out.contains(&format!("pub trait L__Methods < {bounds} > : :: core :: marker :: Sized")), "{out}");
+        assert!(out.contains(&format!("impl < {bounds} > L__Methods < E > for L < E >")), "{out}");
         assert!(out.contains("fn new () -> Result < Self > ;"), "{out}");
         assert!(out.contains("fn make (k : i32) -> Result < L < Object > > ;"), "{out}");
         for m in ["fn _init_not_null (& mut self) ;", "fn __get_n (& self) -> i32 ;", "fn COUNT () -> Result < i32 > ;",
@@ -186,6 +188,7 @@ mod tests {
     fn std_named_method_stays_inherent() {
         let out = expanded();
         let tr = out.split("pub trait L__Methods").nth(1).unwrap().split("impl <").next().unwrap();
+        assert!(tr.contains("fn new ()"), "{tr}");
         assert!(!tr.contains("fn clone"), "{tr}");
         assert!(out.contains("pub fn clone (& self) -> Result < Object >"), "{out}");
     }

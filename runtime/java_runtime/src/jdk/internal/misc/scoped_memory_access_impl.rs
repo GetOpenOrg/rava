@@ -1,5 +1,6 @@
 //! `jdk/internal/misc/ScopedMemoryAccess` 的 ACC_NATIVE（类 1）。其余方法按字节码翻译。
 
+use crate::jdk::internal::misc::ScopedMemoryAccess__Methods as _;
 use crate::prelude::*;
 use super::scoped_memory_access::ScopedMemoryAccess;
 

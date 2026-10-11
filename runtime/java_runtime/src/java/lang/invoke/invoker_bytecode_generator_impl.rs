@@ -13,6 +13,8 @@
 //! `lookupPregenerated` / `isStaticallyInvocable` 按字节码翻译（唯一调用面是上述生成链与
 //! 引导类 assert，后者经 `$assertionsDisabled` 折叠不入闭包，a3-X1）。
 
+use crate::java::lang::invoke::InvokerBytecodeGenerator__Methods as _;
+use crate::java::lang::invoke::MemberName__Methods as _;
 use crate::prelude::*;
 use super::invoker_bytecode_generator::InvokerBytecodeGenerator;
 use super::{LambdaForm, MemberName, MethodType};

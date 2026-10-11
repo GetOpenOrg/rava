@@ -5,6 +5,10 @@
 //! `System.loadLibrary("net")` 等经 findBuiltinLib 认定为内建，load 只登记句柄与 JNI 版本。
 //! 非 JDK 库需要 dlopen + JNI 调用约定，本运行时不提供 JNI，按加载失败处理。
 
+use crate::java::lang::InternalError__Methods as _;
+use crate::java::lang::UnsatisfiedLinkError__Methods as _;
+use crate::jdk::internal::loader::NativeLibraries_NativeLibraryImpl__Methods as _;
+use crate::jdk::internal::loader::NativeLibraries__Methods as _;
 use crate::prelude::*;
 use super::native_libraries::NativeLibraries;
 use super::native_libraries_native_library_impl::NativeLibraries_NativeLibraryImpl;

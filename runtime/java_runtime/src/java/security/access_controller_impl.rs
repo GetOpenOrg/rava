@@ -5,6 +5,7 @@
 //! 栈上 / 继承的访问控制上下文恒为 null，保护域不建模（启动类同 HotSpot 返回 null），
 //! 栈遍历物化是 JIT 协作点——均为 HotSpot 在未安装 SM 时的等价应答。
 
+use crate::java::security::AccessController__Methods as _;
 use crate::prelude::*;
 use super::AccessController;
 use super::AccessControlContext;

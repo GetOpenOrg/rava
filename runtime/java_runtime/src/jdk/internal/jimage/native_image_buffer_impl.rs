@@ -1,3 +1,5 @@
+use crate::java::nio::DirectByteBuffer__Methods as _;
+use crate::jdk::internal::jimage::NativeImageBuffer__Methods as _;
 use crate::prelude::*;
 use super::native_image_buffer::NativeImageBuffer;
 use crate::java::lang::String;

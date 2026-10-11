@@ -103,6 +103,8 @@ fn member_name(env: &InstrEnv, cls: &str, call: &CallRef) -> InstrResult<String>
 
 /// invokevirtual / invokeinterface 的发射（`_gen_invokevirtual`）
 pub fn gen_invokevirtual(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &CallRef) -> InstrResult<()> {
+    // 合成调用（indy 降级 / 清单入口）同样登记方法 trait（§9.9 K3）
+    crate::method_traits::record_member(&env.ctx, &call.owner, &call.name, Some(&call.desc));
     // @CallerSensitive 虚调用：调用处类经 __caller_sensitive 显式传入（与 invokestatic 同一机制）
     let cs = CsCtx::new(call, env.ctx.class_name);
     // [equiv-audit] 按常量池方法名匹配的近似等价形态，只计数不改发射

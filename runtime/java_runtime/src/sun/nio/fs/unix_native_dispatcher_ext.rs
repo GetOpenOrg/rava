@@ -6,6 +6,8 @@
 //! （`struct timespec`），均按 C 整除 / 取余拆分（向零截断）。
 //! 用户 / 组查询与扩展属性（xattr）族在本文件末段；macOS 的 xattr 调用多 position / options 实参，取 0。
 
+use crate::sun::nio::fs::UnixFileStoreAttributes__Methods as _;
+use crate::sun::nio::fs::UnixNativeDispatcher__Methods as _;
 use crate::prelude::*;
 use super::unix_file_attributes::UnixFileAttributes;
 use super::unix_file_store_attributes::UnixFileStoreAttributes;

@@ -1,5 +1,8 @@
 //! Class 的成员查询：元数据表构造 Field / Method / Constructor（宿主 class_impl.rs 的私有辅助模块）
 
+use crate::java::lang::reflect::Constructor__Methods as _;
+use crate::java::lang::reflect::Field__Methods as _;
+use crate::java::lang::reflect::Method__Methods as _;
 use super::*;
 
 impl Class {

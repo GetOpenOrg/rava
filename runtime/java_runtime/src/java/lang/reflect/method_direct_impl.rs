@@ -4,6 +4,8 @@
 //! 的对应物）：按 Method 的声明键走 L3 分派闭包，目标抛出的异常包装为 InvocationTargetException。
 //! 两处各自持有包装函数：两个类不一定同在闭包内。
 
+use crate::java::lang::reflect::InvocationTargetException__Methods as _;
+use crate::java::lang::reflect::Method_Direct__Methods as _;
 use crate::prelude::*;
 use super::Method_Direct;
 use crate::java::lang::reflect::Method;

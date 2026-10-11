@@ -224,6 +224,8 @@ fn call_target(env: &InstrEnv, sim: &StackSim, call: &CallRef, cls_path: &[Strin
 
 /// invokestatic 翻译：实参弹栈强转、调用发射、返回值落 `let _tN`
 pub fn gen_invokestatic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &CallRef) -> InstrResult<()> {
+    // 合成调用（indy 降级 / 清单入口）同样登记方法 trait（§9.9 K3）
+    crate::method_traits::record_member(&env.ctx, &call.owner, &call.name, Some(&call.desc));
     let ctx = &env.ctx;
     // [equiv-audit] identity-hash：按方法名匹配（该名只由根系统类声明），只计数不改发射
     if call.name == "identityHashCode" {

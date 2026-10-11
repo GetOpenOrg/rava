@@ -6,6 +6,9 @@
 //! 虚拟句柄（`${java.home}` 虚拟树，`crate::jdk_resources`，NIO `open0` 所得）的 read / pread / seek / size
 //! 读嵌入数据；其余调用对负 fd 由系统调用自然得 EBADF（与只读打开的写入同为 IOException）。
 
+use crate::java::io::FileDescriptor__Methods as _;
+use crate::java::io::IOException__Methods as _;
+use crate::sun::nio::ch::UnixFileDispatcherImpl__Methods as _;
 use crate::prelude::*;
 use super::unix_file_dispatcher_impl::UnixFileDispatcherImpl;
 use crate::java::io::FileDescriptor;

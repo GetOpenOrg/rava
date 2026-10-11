@@ -20,6 +20,10 @@
 //! StackFrameInfo / MemberName 字段经按名协议写入：两类只在 StackFrameTraverser 路径存在，本文件不以
 //! 类型名引用，免得 CallerClassFinder 一路（getCallerClass）把它们拉进生成范围。
 
+use crate::java::lang::InternalError__Methods as _;
+use crate::java::lang::NullPointerException__Methods as _;
+use crate::java::lang::StackStreamFactory_AbstractStackWalker__Methods as _;
+use crate::java::lang::UnsupportedOperationException__Methods as _;
 use crate::prelude::*;
 use super::stack_stream_factory_abstract_stack_walker::StackStreamFactory_AbstractStackWalker;
 use super::Class;

@@ -1,3 +1,4 @@
+use crate::jdk::internal::loader::BootLoader__Methods as _;
 use crate::prelude::*;
 use super::boot_loader::BootLoader;
 

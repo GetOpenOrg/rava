@@ -5,6 +5,8 @@
 //! 挂载键 (clazz, name, 描述符) 从成员对象元数据字段还原（描述符的参数段由
 //! parameterTypes 还原，返回类型由 returnType 还原）。
 
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::reflect::Method__Methods as _;
 use crate::prelude::*;
 use super::Method;
 use crate::java::lang::Class;

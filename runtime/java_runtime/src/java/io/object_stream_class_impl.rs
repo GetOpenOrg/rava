@@ -1,6 +1,8 @@
 //! `java/io/ObjectStreamClass` 手写伴生补充：JUnit Runner 路径的 Result
 //! 类初始化触达（`serialPersistentFields` 计算链的 `lookup` → clinit）。
 
+use crate::java::io::ObjectStreamClass__Methods as _;
+use crate::java::lang::Class__Methods as _;
 use crate::prelude::*;
 use super::object_stream_class::ObjectStreamClass;
 

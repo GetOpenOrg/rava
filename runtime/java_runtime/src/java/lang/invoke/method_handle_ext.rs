@@ -24,6 +24,15 @@
 //! 实参与返回值一律以 `Object` 流动（基本类型为装箱值）；成员调用经反射分派注册表
 //! （`reflect_dispatch::reflect_invoke`，与 `Method.invoke` 同一协议）按描述符拆装箱。
 
+use crate::java::lang::invoke::LambdaForm_Name__Methods as _;
+use crate::java::lang::invoke::LambdaForm__Methods as _;
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::invoke::LambdaForm_NamedFunction__Methods as _;
+use crate::java::lang::invoke::MemberName__Methods as _;
+use crate::java::lang::invoke::MethodHandle__Methods as _;
+use crate::java::lang::invoke::MethodType__Methods as _;
+use crate::java::lang::invoke::WrongMethodTypeException__Methods as _;
+use crate::jdk::internal::misc::Unsafe__Methods as _;
 use crate::prelude::*;
 use super::method_handle::MethodHandle;
 use super::{LambdaForm_Name, LambdaForm_NamedFunction, MemberName, MethodType};

@@ -1,6 +1,8 @@
 //! `java/net/Inet6AddressImpl` 的 ACC_NATIVE（类 1，libnet `Inet6AddressImpl.c`）：双栈名字服务。
 //! 生成类落在 `inet6_address_impl_t.rs`（与 Inet6Address 的共置文件同名主干）。
 
+use crate::java::net::Inet4Address__Methods as _;
+use crate::java::net::Inet6Address__Methods as _;
 use crate::prelude::*;
 use super::inet4_address_impl_impl::{host_arg, to_jbytes, unknown_host};
 use super::{Inet4Address, Inet6Address, Inet6AddressImpl, InetAddress};

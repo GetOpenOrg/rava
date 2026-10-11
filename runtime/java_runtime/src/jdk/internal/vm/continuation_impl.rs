@@ -11,6 +11,9 @@
 //! （`isEmpty`，`finish` 与 `run` 断言「空 ⇔ 执行完毕」）。首次进入时挂一个空 `StackChunk`；挂起期间 `sp = 1`
 //! （非空），运行与执行完毕时 `sp = bottom`。帧本身留在协程栈上，不拷入 chunk（§21.8.2「否决的方向」②）。
 
+use crate::java::lang::IllegalStateException__Methods as _;
+use crate::jdk::internal::vm::Continuation__Methods as _;
+use crate::jdk::internal::vm::StackChunk__Methods as _;
 use crate::prelude::*;
 use super::continuation::Continuation;
 use super::{ContinuationScope, StackChunk};
