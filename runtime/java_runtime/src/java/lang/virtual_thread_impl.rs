@@ -37,8 +37,35 @@ impl VirtualThread {
         Ok(())
     }
 
+    /// JDK 21：隐藏帧通知（JDK 25 已删）
+    #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn notifyJvmtiHideFrames(&self, _hide: bool) -> Result<()> {
         Ok(())
+    }
+
+    /// JDK 25：挂起禁用通知（JVMTI）——no-op
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn notifyJvmtiDisableSuspend(_enter: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// JDK 25：pin 住时的 JFR `VirtualThreadPinned` 事件；无 JFR 记录器——no-op
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn postPinnedEvent(_op: String) -> Result<()> {
+        Ok(())
+    }
+
+    /// JDK 25：取 VM 维护的「监视器释放后待解阻」虚拟线程链表（`unblocker` 守护线程循环调用，链表空时
+    /// HotSpot 在此阻塞）。本模型虚拟线程在 synchronized 上被 pin 于载体线程阻塞、不经 VM 挂到等待链，
+    /// 链表恒空——按 HotSpot 空表语义永久阻塞调用线程（守护线程，不影响进程退出）
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn takeVirtualThreadListToUnblock() -> Result<VirtualThread> {
+        loop {
+            std::thread::park();
+        }
     }
 }

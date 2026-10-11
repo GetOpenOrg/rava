@@ -1582,3 +1582,18 @@ owner = "fix-jdk25"
 diagnose = "对照调用点实参与被调 new 的发射形参；查 generator/crates/instr/src/invoke/sig/params.rs 对 <init> 的签名来源"
 doc = ""
 since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-virtualthread-new-natives"
+stage = "run"
+symptom = "运行期 panic：native: java/lang/VirtualThread.takeVirtualThreadListToUnblock:()Ljava/lang/VirtualThread;"
+match = [["takeVirtualThreadListToUnblock"]]
+tests = ["TestVirtualThreadScale", "TestLongChainRelease"]
+cause = "JDK 25 VirtualThread 新增 native（takeVirtualThreadListToUnblock / postPinnedEvent / notifyJvmtiDisableSuspend），删去 notifyJvmtiHideFrames。本模型虚拟线程在 synchronized 上 pin 于载体阻塞、不入 VM 等待链，链表恒空：takeVirtualThreadListToUnblock 按 HotSpot 空表语义永久阻塞 unblocker 守护线程；其余两个为 JFR / JVMTI 通知 no-op；按 jdk_ge_25 分版本"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = []
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap -p java.lang.VirtualThread | grep native 对照 runtime/java_runtime/src/java/lang/virtual_thread_impl.rs"
+doc = ""
+since = "2026-10-11"
