@@ -89,9 +89,53 @@
 - 本地 cargo check（`--release --tests`，heavy_lock）通过；诊断打印均环境变量门控、
   缺省零生效。
 
-## 五、遗留
+## 五、修复（2026-10-12，seedfix-diag1 插桩观测后落地）
+
+### 根因观测（作业 seedfix-diag1，commit f70bb38c，种子 0/1 对照）
+
+补齐 RAVA_DBG_FIELD 的通配未知原因打印（fvals / fopen / fopen_names / fopen_all / deser / hw）、
+field_put 值打印、fopen / 全局开关翻转打印与 [proc] 节点号后，两子对照（cluster_results/job/seedfix-diag1/）：
+
+- `ObjAns::Never`（⊥）分支两种子都**从未触发**（按对象答复 0 次——ObjectStreamClass 非容器形态类，
+  `obj_field` 直接 None）；交接文档 §三.1 的「按对象读 ⊥ 读者登记」方向排除。
+- 唯一的 `[open-all]` 是 `deserializer` 的 deser 翻转（两种子相同）；`domains` 因 ObjectStreamClass
+  声明空的 `serialPersistentFields`（<clinit> 无字符串常量 → serial_declared = ∅）**不受 deser 放开**。
+- 种子 0 独有：`[field-put] domains <- Top` 三个写点——`ObjectStreamClass$2.run@336`（首个）、
+  `initProxy@147`、`initNonProxy@548`；此后 fvals[domains] = Top，newInstance 等读点全部转通配未知。
+  种子 1 全程只有 `Const(Null)` 写入。**交接文档「domains 只被无人调用的私有方法写入」有误**：
+  `getProtectionDomains` 的调用方在内部类 `ObjectStreamClass$2.run@333`（javap 证实）。
+
+### 真正的根因链（修订）
+
+`$2.run@336` 的 `putfield domains` 写入 `@333 invokevirtual getProtectionDomains(cons, cl)` 的返回值。
+`getProtectionDomains` 的字节码（JDK 21）在 `@13 invokestatic System.getSecurityManager` / `@16 ifnull 148`
+处本应折「恒 null → 直接 return null」，但 `System.getSecurityManager` 是普通字节码方法（读 static
+`System.security`），**无任何返回事实**——它是否折 null 取决于当时 `System.security` / `cons` 等全局格子的
+中间态，于是 `rvals[getProtectionDomains]` 在两种子下于 Const(Null) 与 Top 之间分叉；种子 0 某轮 Unknown
+答复经 `write_pv → PV::Top` 并入全局 fvals[domains]（格只升不降、不可撤回），`newInstance@15 ifnull` 随之
+展开，@38/@65 牵出两类。种子 1 的 Const(Null) 是「运气好」的一侧：同样依赖处理次序，不是稳定不动点。
+
+### 修法（commit 64ddf8d0）
+
+清单 `[facts.returns]` 新增 `"java/lang/System.getSecurityManager:()Ljava/lang/SecurityManager;" = null`：
+原生二进制没有启动器、无人调 `setSecurityManager`（HotSpot 由启动器按 -D 装配，JDK 21 缺省不装），
+`System.security` 恒 null。调用点事实在 `invoke_result` 里先于汇合格 / 派发求值返回（`call_info.fact`），
+两种子、任何轮次都得到同一个 Null——`@16 ifnull` 恒跳、数组构造分支静态不可达、`rvals` 恒 Const(Null)、
+`$2.run@336` 恒写 Null，`domains` 的折叠不再依赖任何格子的中间态。这是文档既定的建模口径
+（docs/plans/2026-09-29-rust-closure-analyzer.md §3.2「清单即边界」；vm_intrinsics.toml 175-176 行注释
+本就写明「getSecurityManager 恒 null」而未落地条目），不是类名特判、不依赖固定种子、不依赖 nogc 掩盖。
+
+### 验收（作业 seedfix-unit / seedfix-accept）
+
+（待作业完成后回填数字：单测 closure_independent_of_hash_seed / closure_independent_of_order；
+TestSerialLookupPairing 种子 0/1/2 一致且等于 0b91182b 种子 1；HelloWorld / DeepCopy / CollectorsDemo
+三例种子 0/1/2 与基线一致。）
+
+## 六、遗留
 
 - 临时诊断打印（RAVA_DBG_*）以独立提交落在分支历史里，合批前可 revert 或保留
-  （环境变量缺省不生效、编译干净）。
-- diag8 未覆盖 `ObjAns::Never`（⊥）分支的打印；若后续仍需追 `domains` 折叠的
-  具体轮次，先补该打印。
+  （环境变量缺省不生效、编译干净）。RAVA_DBG_FIELD 支持逗号多键；RAVA_DBG_RET 打印被调成员
+  的汇合格 / per / site 答复来源（纯读；曾有一版在打印里调 eval() 拖慢作业，已去掉）。
+- 引擎层面的普遍现象（本修复不展开）：全局字段格 `fvals` 只升不降，某轮「暂时 Unknown」的调用
+  答复经 putfield 以 Top 并入后不可撤回，是否到达 Top 依赖分析次序。本次以调用点事实消除
+  getSecurityManager 的不确定性；其它无返回事实的取值法若再现同类摆动，按同一口径补清单事实。

@@ -245,7 +245,7 @@ value_equals = [
 # .getProtectionDomains 的安全管理器检查）守卫不折，返回答复随分析轮次在 Null/Unknown 间摆动，
 # `domains` 的写入值被某轮的 Unknown 污染为 Top，newInstance 的 ifnull 随哈希种子展开 / 折叠
 # （fix-seed-reg 种子无关性回归，2026-10-12）
-"java/lang/System.getSecurityManager:()Ljava/lang/SecurityManager;" = null
+"java/lang/System.getSecurityManager:()Ljava/lang/SecurityManager;" = "null"
 # 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`
 # 本身走字节码：引导类镜像的 classLoader 为 null（分析器常量求值按定义加载器表给出）→ 落到本条 → 引导类
 # `$assertionsDisabled = !X.class.desiredAssertionStatus()` 折叠为常量，assert 体不入闭包；应用 / 平台类按
