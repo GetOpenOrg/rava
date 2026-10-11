@@ -609,13 +609,13 @@ P5 `flows` 1.21 → ≤ 0.4 s、P7 `sites` 1.54 → ≤ 0.5 s 与 `analyze` + `a
 
 | 用例 | 类 / 方法 | 4a52243b（T=4096） | 515b656e（T=32768） |
 |---|---|---|---|
-| HelloWorld | 580 / 1897 | 三种子相同；grow_max 141，未升级 | 见下 |
-| DeepCopy | 3033 / 16605 | 相同；升级 1 个枢纽（grow_max 4097） | 见下 |
-| CollectorsDemo | 619 / 2022 | 相同；未升级 | 见下 |
-| TestSerialLookupPairing | 3035 / 16590 | 相同；升级 1 个枢纽；`MemorySessionImpl` 档位落在 main 自身两种种子状态之一（同 §4.11） | 见下 |
+| HelloWorld | 580 / 1897 | 三种子相同；grow_max 141，未升级 | 三种子相同；未升级 |
+| DeepCopy | 3033 / 16605 | 相同；升级 1 个枢纽（grow_max 4097） | 相同（3001 / 16425，main 已含 a5-4）；grow_max 4966，未升级 |
+| CollectorsDemo | 619 / 2022 | 相同；未升级 | 相同；未升级 |
+| TestSerialLookupPairing | 3035 / 16590 | 相同；升级 1 个枢纽；`MemorySessionImpl` 档位落在 main 自身两种种子状态之一（同 §4.11） | 相同（3003 / 16410）；grow_max 5703，未升级；仅既有档位差 |
 
 - 只有统计项不同。去重使 TSLP 的 `method_contexts` 降 6.7%（123834 → 115548），HelloWorld 降 3.7%（5883 → 5665）。
-- 515b656e 的复测作业是 `g1s-cmp-515b656e`。阈值高于语料最大值后，四例都不升级，与 4a52243b 的差别只剩那两个升级的枢纽。
+- 515b656e 复测（`g1s-cmp-515b656e`，基线为当日 main）：四例零升级，三种子集合一致；剩下的只有 TSLP 的 `MemorySessionImpl` 档位与 DeepCopy 的 `rcall.channels`，两者都是 main 既有的随种子变化。
 - **确定性**（4a52243b，release，串行）：`closure_independent_of_order` 与 `closure_independent_of_hash_seed` 两项均通过（5900 s）。
 
 **S0 A 实测**（RSS MiB / 方法上下文；`--lambda-prof 60`；**用 T=4096，故意让 S0 触发共享**，以检验共享对内存的作用）：
@@ -660,8 +660,7 @@ P5 `flows` 1.21 → ≤ 0.4 s、P7 `sites` 1.54 → ≤ 0.5 s 与 `analyze` + `a
 
 **未完成**：
 1. sb3 曲线：作业 `g1s-sb3-515b656e`，产物在 `cluster_results/job/g1s-sb3-515b656e/`。
-2. 四例在 515b656e 的复测：作业 `g1s-cmp-515b656e`。
-3. 阈值扫描缺 28 例（明细见上）：
+2. 阈值扫描缺 28 例（明细见上）：
    - 11 例 rc=1 需修作业类路径；
    - 17 例需单例串行、槽上限不低于 16 GiB 补测；
    - 补测后若最大值越过 32768，按同一口径上调阈值。
