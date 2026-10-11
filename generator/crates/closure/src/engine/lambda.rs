@@ -35,8 +35,9 @@ impl<'a> Engine<'a> {
     /// 的增长与 open 展开的 G 增长驱动增量重跑；调用点重跑、同一调用重入均不再进入
     pub(super) fn invoke_lambda(&mut self, m: usize, off: u32, lid: u32, a: &Args, ret: Option<u32>, res: Option<Node>) {
         if self.methods[m].kind == Kind::Bytecode {
+            let host = self.reader_hub();
             let at = self.lambda_done.entry(m).or_default().entry(off).or_default();
-            if let Some(&id) = at.get(&(lid, ret, res)) {
+            if let Some(&id) = at.get(&(lid, ret, res, host)) {
                 // 同一调用点同一 lambda 再登记：沿用原读者单元。实参已含于读者的实参即同一调用（调用方重分析后），
                 // 否则实参并入读者（各实参的接边效果按来源累加，并后完整重接与分别接边之并相同）
                 let Some(merged) = merge_args(&self.lcalls[id as usize].call.1, a) else {
@@ -54,7 +55,7 @@ impl<'a> Engine<'a> {
             }
             let call: LambdaCall = (lid, a.clone(), ret, res);
             let id = self.lcalls.len() as u32;
-            at.insert((lid, ret, res), id);
+            at.insert((lid, ret, res, host), id);
             self.reader_register(id);
             self.lprof_kind(false, None);
             self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, fixed: false, live: true, suspended: false });
@@ -140,14 +141,14 @@ impl<'a> Engine<'a> {
     /// 读者的已接记录清空（下次接边完整重接）：接收值、集合枢纽、静态接边标记与逐接收者派发的去重记录
     fn lcall_clear(&mut self, id: u32) {
         let c = &mut self.lcalls[id as usize];
-        let (m, off, lid) = (c.m, c.off, c.call.0);
+        let (m, off) = (c.m, c.off);
         let done = std::mem::take(&mut c.done);
         c.hub = None;
         c.fixed = false;
         c.suspended = false;
         if let Some(d) = self.dispatched.get_mut(&m) {
             for r in done.classes.iter() {
-                d.remove(&(off, r, lid));
+                d.remove(&(off, r, id));
             }
         }
     }
@@ -280,7 +281,8 @@ impl<'a> Engine<'a> {
                 let fresh = self.receivers(m, &fresh, owner);
                 self.lprof_recv(lid, &fresh, 1);
                 for r in fresh {
-                    self.dispatch_one(m, off, r, site, rest, ret, res, lid);
+                    // 去重按读者单元：同一调用点同一 lambda 的不同读者（各属一个枢纽）各自接边
+                    self.dispatch_one(m, off, r, site, rest, ret, res, at as u32);
                 }
             } else {
                 // 首次达 `HUB_MIN`：接入增长枢纽，已有接收者全部并入（共用枢纽上已并入的即跳过）

@@ -128,6 +128,10 @@ impl<'a> Engine<'a> {
         // 同一分析结果下重跑调用点：实参来源与常量不变，已接入即完成（与 `dispatched` 同口径，分析重算时清空）。
         // 字节码调用点上的 lambda 调用由自身读者单元增量驱动；非字节码调用方按当前值重新接边
         if !self.hub_linked.entry(m).or_default().insert((off, h)) {
+            // 锚定在同一调用点的另一枢纽读者再接入：接入关系同样记到该读者的枢纽
+            if let Some(g) = self.reader_hub() {
+                self.hubs[g as usize].lhubs.insert(h);
+            }
             if self.methods[m].kind != Kind::Bytecode {
                 let hub = &self.hubs[h as usize];
                 let (site, lambdas, ret) = (hub.site.clone(), hub.lambdas.clone(), hub.ret);
@@ -205,11 +209,11 @@ impl<'a> Engine<'a> {
         let lambdas = lambdas.to_vec();
         self.with_reader(owner, |e| {
             for r in lambdas {
-                if replay && !e.hub_lsent.entry(m).or_default().insert((off, r)) {
+                if replay && !e.hub_lsent.entry(m).or_default().insert((off, r, h)) {
                     continue;
                 }
                 if replay {
-                    let id = e.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(&(r, ret, lres))).copied();
+                    let id = e.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(&(r, ret, lres, Some(h)))).copied();
                     if let Some(id) = id.filter(|&id| e.lcalls[id as usize].suspended) {
                         e.lcall_revive(id);
                         continue;
@@ -420,7 +424,7 @@ impl<'a> Engine<'a> {
             for ((m, off), l) in links(self) {
                 if self.methods[m].kind == Kind::Bytecode {
                     // 字节码接入点只在锚点以枢纽节点建一个读者
-                    if anchor != Some((m, off)) || !self.hub_lsent.entry(m).or_default().insert((off, r)) {
+                    if anchor != Some((m, off)) || !self.hub_lsent.entry(m).or_default().insert((off, r, h)) {
                         continue;
                     }
                     let (la, lres) = self.hub_lambda_call(h);
