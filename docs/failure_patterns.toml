@@ -1505,3 +1505,65 @@ owner = "并发小步 B（conc-step-b）"
 diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
 doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
 since = "2026-10-10"
+
+# ── JDK 25 全量（c7cfb932，2026-10-11）──────────────────────────────────────────
+
+[[pattern]]
+id = "jdk25-stackwalk-native-signature"
+stage = "compile"
+symptom = "JDK 25：java_base_decl 编译 stack_stream_factory_* 的 callStackWalk 实参类型不符（mode 期望 i64 得 i32）/ fetchStackFrames_i_l_i_i_i_arr_obj 缺失"
+match = [["callStackWalk", "expected `i64`, found `i32`"], ["callStackWalk", "mismatched types", "jdk25"]]
+tests = ["AbstractClassTest", "HelloWorld", "StreamDemo", "DeepCopy", "CompactNumberFormatExample"]
+cause = "手写 native 按 JDK 21 描述符写死：JDK 25 的 callStackWalk mode 改为 int、fetchStackFrames 改为 (IJIII[Object)I，帧由 StackFrameInfo.memberName 改为 ClassFrameInfo.classOrMemberName（ResolvedMethodName）+ flags。修法：手写层以 cfg(jdk_ge_25) 按参考 JDK 主版本分版本（build.rs 由 jdk_feature.txt 注入），填帧与 initStackTraceElement 同步分版本"
+introduced = ""
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap 对照两版 StackStreamFactory$AbstractStackWalker 的 native 描述符；生成侧 #[impl_methods] 与调用点的 Rust 名即参考 JDK 的重载后缀名"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "iface-default-this-superiface-param-erased"
+stage = "compile"
+symptom = "node_of_{double,int,long}.rs：this.forEach_obj(Object::from(..)) 实参 Object，形参期望 DoubleConsumer / IntConsumer / LongConsumer（E0308）"
+match = [["forEach_obj", "node_of_double.rs"], ["forEach_obj", "node_of_int.rs"], ["forEach_obj", "node_of_long.rs"]]
+tests = ["StreamDemo", "CollectorsDemo"]
+cause = "潜伏缺陷（JDK 25 档案把 Node$OfDouble.forEach(Consumer) default 体纳入调用链而暴露）：接口 default 体里 this 调用声明于超接口（Node$OfPrimitive<T_CONS>）的方法时，sig/params.rs 对 this 经接口声明者一律不代入载体实参，形参回落描述符 Object；而接口块里的继承成员声明按本接口视角已代入 DoubleConsumer。修法：仅声明者是当前接口自身时不代入，声明者为当前接口的超接口时按本接口视角代入"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "对照调用点与被调继承成员声明（inherited_from）的形参类型；查 generator/crates/instr/src/invoke/sig/params.rs 的 keep_carrier 判定"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "vm-support-module-compile-failed"
+stage = "compile"
+symptom = "class_loaders_{app,boot,platform}_class_loader.rs：BuiltinClassLoader 上无 findClassOnClassPathOrNull / findResourceOnClassPath 等（E0599，每文件 12 处）；或运行期 panic「stub: Method_Direct.invoke」"
+match = [["no method named `findClassOnClassPathOrNull`"], ["no method named `findResourceOnClassPath`"], ["stub: Method_Direct.invoke"], ["VM 支持类编译失败"]]
+tests = ["AbstractClassTest", "Kosaraju", "DoubleLinkedListTraversing", "MethodRefDemo", "ListMethods", "CollectorsDemo", "ChronologicalOrder"]
+cause = "runtime/java_support 的 VM 支持类按模块整批 javac，JDK 22 起删除 SerializationConstructorAccessorImpl → SerializationConstructorAccessorDyn 不可编译 → 整个 java.base 支持类（EmbeddedClassPath、Method$Direct、Proxy$Dyn 等）缺席；BuiltinClassLoader 伴生 impl 因 super::EmbeddedClassPath 缺席不声明（mod_tree 伴生依赖判定），宿主 #[impl_methods] 仍声称已实现。修法：resolve/image.rs 按 javac 报错剔除出错的源后重编（参考 JDK 无对应类定义点的支持类同时无消费方），其余支持类照常入类路径"
+introduced = "c7cfb932（JDK 25 首次全量暴露）"
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "rava build 输出首行附近查「VM 支持类编译失败 / 已剔除」；--trace-class jdk/internal/loader/EmbeddedClassPath 看是否在闭包；scratch 包 mod.rs 是否声明 <x>_impl"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-new-native-missing"
+stage = "run"
+symptom = "JDK 25 运行期 panic「native: java/lang/ref/PhantomReference.clear0:()V」（及 CDS.needsClassInitBarrier0 / logLambdaFormInvoker 重载）"
+match = [["native: java/lang/ref/PhantomReference.clear0"], ["native: jdk/internal/misc/CDS."]]
+tests = ["CsvToTsv", "GZIPTest", "FileIOTest"]
+cause = "JDK 25 新增 native（PhantomReference.clear0、CDS.needsClassInitBarrier0）与 CDS.logLambdaFormInvoker 新增 Java 重载致 native 的 Rust 名带后缀 _str；手写层无对应实现。修法：cfg(jdk_ge_25) 分版本补齐（emit 输出的 [precheck] native-missing 即清单）"
+introduced = ""
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "rava build --jdk 25 --stop-after emit 的 [precheck] native-missing 行"
+doc = ""
+since = "2026-10-11"
