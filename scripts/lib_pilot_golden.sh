@@ -19,6 +19,7 @@
 #   scripts/lib_pilot_golden.sh jc3    # jackson-core 切片：数字边角与编码（含数字吞吐基准）
 #   scripts/lib_pilot_golden.sh jc4    # jackson-core 切片：JsonFactory 配置与特性开关
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
+#   PILOT_PROFILE=release scripts/lib_pilot_golden.sh jc1   # 编译档（dev 缺省 / dev-opt / release / release-small）；性能测点用 release
 #
 # 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
 #（scripts/fetch_pilot_deps.sh --no-scan 导出，同时生成依赖锁 deps.lock.toml；可经 PILOT_LIBS 覆盖）。
@@ -156,7 +157,9 @@ if [[ "$EMIT_ONLY" == 1 ]]; then
     exit 0
 fi
 _t0=$EPOCHREALTIME
-"$RAVA" compile "$SCRATCH" > "/tmp/${MODE}_cargo.err" 2>&1 \
+PROFILE_ARGS=()
+[[ -n "${PILOT_PROFILE:-}" && "$PILOT_PROFILE" != dev ]] && PROFILE_ARGS=(--"$PILOT_PROFILE")
+"$RAVA" compile "$SCRATCH" "${PROFILE_ARGS[@]}" > "/tmp/${MODE}_cargo.err" 2>&1 \
     || { echo "编译失败，见 /tmp/${MODE}_cargo.err 与 $SCRATCH/build_status.json" >&2; exit 1; }
 COMPILE_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.1f}')")
 EXE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["exe"])' "$SCRATCH/build_status.json")"
@@ -166,7 +169,7 @@ _t0=$EPOCHREALTIME
 RUN_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.3f}')")
 # 程序自报的吞吐基准行（stderr 的 JC_BENCH；JVM 侧直接打在本日志）
 grep -h "^JC_BENCH" "/tmp/${MODE}_cargo.err" | sed "s/^/rs /" || true
-echo "METRICS ${MODE} run_s=${RUN_S} jvm_run_s=${JVM_S} transpile_s=${TRANSPILE_S} compile_s=${COMPILE_S} bin_bytes=$(stat -c %s "$EXE")"
+echo "METRICS ${MODE} profile=${PILOT_PROFILE:-dev} run_s=${RUN_S} jvm_run_s=${JVM_S} transpile_s=${TRANSPILE_S} compile_s=${COMPILE_S} bin_bytes=$(stat -c %s "$EXE")"
 
 echo "== [3/3] 逐字对账 =="
 if diff -u "tests/lib_pilot/golden/${MODE}_jvm.txt" "tests/lib_pilot/golden/${MODE}_rs.txt"; then
