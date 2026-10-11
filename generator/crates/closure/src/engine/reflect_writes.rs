@@ -165,7 +165,7 @@ impl<'a> Engine<'a> {
             self.mark_enumeration(m, off, &mref.desc, &scopes);
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
-            self.open_fields_all(self.ctx.fopen_all.get(), false);
+            self.open_fields_all(self.ctx.fopen_all.get(), false, "deserializer（反序列化入口可达）");
         }
     }
 

@@ -157,6 +157,9 @@ impl Oracle for Facts<'_, '_> {
                 return Ret::Value(v);
             }
             Some(ObjAns::Never) => {
+                if dbg {
+                    eprintln!("[getfield] {f} 按对象 ⊥（Never）@ 方法#{:?}", self.m);
+                }
                 if let Some(me) = self.m {
                     self.ctx.dep(me, Dep::Never);
                 }
@@ -168,7 +171,22 @@ impl Oracle for Facts<'_, '_> {
         if dbg {
             match &r {
                 Ret::Value(v) => eprintln!("[getfield] {f} 通配值 {v:?}"),
-                _ => eprintln!("[getfield] {f} 通配未知"),
+                _ => {
+                    // 临时诊断（RAVA_DBG_FIELD）：通配未知的原因（值集 Top 或开放判定）
+                    let c = &self.ctx;
+                    eprintln!(
+                        "[getfield] {f} 通配未知 fvals={:?} open={} fopen={} fopen_names={} all={} deser={} hw={} hw_names={} @ 方法#{:?}",
+                        c.fvals.borrow().get(f),
+                        c.field_info(f).map(|fi| fi.open).unwrap_or(false),
+                        c.fopen.borrow().contains(f),
+                        c.fopen_names.borrow().contains(&f.name),
+                        c.fopen_all.get(),
+                        c.deser.get(),
+                        c.fhw.borrow().contains(f),
+                        c.fhw_names.borrow().contains(&f.name),
+                        self.m
+                    );
+                }
             }
         }
         r

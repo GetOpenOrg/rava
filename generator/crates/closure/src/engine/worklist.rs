@@ -214,6 +214,12 @@ impl<'a> Engine<'a> {
     /// 字段的写入来源超出字节码：不折叠，读者失效
     pub(super) fn open_field(&mut self, key: MemberRef) {
         if self.ctx.fopen.borrow_mut().insert(key.clone()) {
+            // 临时诊断（RAVA_DBG_FIELD）：字段键匹配时打印放开
+            if let Ok(want) = std::env::var("RAVA_DBG_FIELD") {
+                if key.to_string() == want {
+                    eprintln!("[open-field] {want} 放开（fopen 精确键）");
+                }
+            }
             let mut deps = self.ctx.ceval_drop_field(&key);
             deps.extend(self.ctx.fdeps.borrow().get(&key).into_iter().flatten().copied());
             self.invalidate_all(Some(deps), Why::FieldOpen);
@@ -235,6 +241,12 @@ impl<'a> Engine<'a> {
 
     pub(super) fn open_field_name(&mut self, name: &str) {
         if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
+            // 临时诊断（RAVA_DBG_FIELD）：字段名匹配时打印放开
+            if let Ok(want) = std::env::var("RAVA_DBG_FIELD") {
+                if want.rsplit('.').next().is_some_and(|n| n.starts_with(name)) || want.contains(name) {
+                    eprintln!("[open-field-name] 名字 {name} 放开");
+                }
+            }
             self.fopen_name_via.insert(name.to_string(), self.cur_site);
             let mut deps = self.ctx.ceval_drop_name(name);
             deps.extend(self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()));
@@ -249,8 +261,12 @@ impl<'a> Engine<'a> {
     }
 
     /// 全局开关（反射枚举 / 反序列化）打开（was_all / was_deser = 打开前的开关）：读过因此转为不折叠的
-    /// 字段的方法失效（此前已不折叠的字段读答复不变）
-    pub(super) fn open_fields_all(&mut self, was_all: bool, was_deser: bool) {
+    /// 字段的方法失效（此前已不折叠的字段读答复不变）。via = 打开来源（临时诊断用）
+    pub(super) fn open_fields_all(&mut self, was_all: bool, was_deser: bool, via: &str) {
+        // 临时诊断（RAVA_DBG_FIELD 设置时打印一次翻转：fopen_all / deser 影响全部字段键）
+        if std::env::var("RAVA_DBG_FIELD").is_ok() {
+            eprintln!("[open-all] via={via} fopen_all {}→{} deser {}→{}", was_all, self.ctx.fopen_all.get(), was_deser, self.ctx.deser.get());
+        }
         let ctx = &self.ctx;
         let mut changed: HashMap<MemberRef, bool> = HashMap::default();
         let mut newly = |k: &MemberRef| match changed.get(k) {
@@ -274,7 +290,7 @@ impl<'a> Engine<'a> {
         // 临时诊断（RAVA_DBG_METH）：方法键匹配时打印处理
         if let Ok(want) = std::env::var("RAVA_DBG_METH") {
             if self.methods[m].key.to_string().contains(&want) {
-                eprintln!("[proc] {}（第 {} 次，kind {:?}）", self.methods[m].key, self.methods[m].aseq, self.methods[m].kind);
+                eprintln!("[proc] #{m} {}（第 {} 次，kind {:?}）", self.methods[m].key, self.methods[m].aseq, self.methods[m].kind);
             }
         }
         if self.cuts.active() && self.cuts.method(&self.methods[m].key.to_string()) {
