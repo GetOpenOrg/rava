@@ -38,6 +38,21 @@ def main():
             names.append(parts[2])
     starts = [m[0] for m in maps]
     cache = {}
+    dyn = {}  # 共享库路径 → (地址表, 名字表)：nm -D 动态符号（libc 的 malloc / free / futex 等）
+
+    def dyn_sym(path, foff):
+        if path not in dyn:
+            a, n = [], []
+            out = subprocess.run(["nm", "-D", "-n", "--defined-only", path], capture_output=True, text=True).stdout
+            for ln in out.splitlines():
+                ps = ln.split(" ", 2)
+                if len(ps) == 3 and ps[1] in "tTwWiI":
+                    a.append(int(ps[0], 16))
+                    n.append(ps[2])
+            dyn[path] = (a, n)
+        a, n = dyn[path]
+        j = bisect.bisect_right(a, foff - 1) - 1
+        return n[j] if j >= 0 else "?"
 
     def sym(pc):
         if pc in cache:
@@ -51,13 +66,15 @@ def main():
                 name = names[j] if j >= 0 else "?"
             else:
                 name = "[" + os.path.basename(path) + "]"
+                if path.startswith("/") and "libc" in name:
+                    name += " " + dyn_sym(path, pc - lo + off)
         cache[pc] = name
         return name
 
     lines = open(samples).read().splitlines()
     pid = int(lines[0].split()[1])
-    groups = {"all": [collections.Counter(), collections.Counter(), 0],
-              "main": [collections.Counter(), collections.Counter(), 0]}
+    groups = {"all": [collections.Counter(), collections.Counter(), 0, collections.Counter()],
+              "main": [collections.Counter(), collections.Counter(), 0, collections.Counter()]}
     for line in lines[1:]:
         parts = line.split()
         tid = int(parts[0])
@@ -65,22 +82,30 @@ def main():
         # 去掉采样器自身与信号返回帧
         while frames and frames[0] in ("[sampler.so]",):
             frames.pop(0)
-        if frames and frames[0].startswith("[libc"):
+        if frames and frames[0].startswith("[libc"):  # 信号返回帧
             frames.pop(0)
         if not frames:
             continue
         for g in ("all", "main") if tid == pid else ("all",):
-            selfc, incl, _ = groups[g]
+            selfc, incl, _, owner = groups[g]
             selfc[frames[0]] += 1
+            # libc 叶子归到最近的非 libc 调用者（看谁在调 malloc / free / 锁）
+            k = 0
+            while k < len(frames) - 1 and frames[k].startswith("[libc"):
+                k += 1
+            owner[frames[k]] += 1
             for f in set(frames):
                 incl[f] += 1
             groups[g][2] += 1
-    for g, (selfc, incl, n) in groups.items():
+    for g, (selfc, incl, n, owner) in groups.items():
         if not n:
             continue
         print(f"===== {g}: {n} samples")
         print("--- self")
         for f, c in selfc.most_common(top):
+            print(f"{100 * c / n:6.2f}% {f[:200]}")
+        print("--- self（libc 归调用者）")
+        for f, c in owner.most_common(top):
             print(f"{100 * c / n:6.2f}% {f[:200]}")
         print("--- inclusive")
         for f, c in incl.most_common(top * 2):

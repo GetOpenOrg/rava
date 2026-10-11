@@ -51,7 +51,7 @@ for mode in $MODES; do
     SAMPLER_OUT=$OUT/${PROFILE}_${mode}_prof LD_PRELOAD=$PWD/$OUT/sampler.so "$BIN" $N $ms $mode > /dev/null 2> $OUT/${PROFILE}_${mode}_prof.err
     echo "== sample $mode rc=$?"
     S=$(ls $OUT/${PROFILE}_${mode}_prof.*.samples 2>/dev/null | head -1)
-    [ -n "$S" ] && python3 scripts/diag/sampler_report.py "$BIN" "$S" 50 > $OUT/${PROFILE}_${mode}_prof.txt && head -60 $OUT/${PROFILE}_${mode}_prof.txt
+    [ -n "$S" ] && python3 scripts/diag/sampler_report.py "$BIN" "$S" ${TOP:-50} > $OUT/${PROFILE}_${mode}_prof.txt && grep -n "=====" $OUT/${PROFILE}_${mode}_prof.txt
     rm -f $OUT/${PROFILE}_${mode}_prof.*.samples
   fi
 done
