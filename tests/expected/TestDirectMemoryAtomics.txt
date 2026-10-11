@@ -2,7 +2,9 @@ cas int ok=true now=41
 cas int stale=false now=41
 getAndAdd old=41 now=42
 cas long ok=true now=-5
-exchange long old=-5 now=7
-misaligned cas: IllegalStateException
+getAndSet long old=-5 now=7
+neighbours intact: 0 0
+setMemory negative: IllegalArgumentException
+copyMemory negative: IllegalArgumentException
 counter=200000 expected=200000
 unaligned plain long=102030405060708
