@@ -1505,3 +1505,18 @@ owner = "并发小步 B（conc-step-b）"
 diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
 doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
 since = "2026-10-10"
+
+[[pattern]]
+id = "long-return-fact-as-int"
+stage = "transpile"
+symptom = "[facts.returns] 中 J 返回方法的事实不生效：lcmp 不折叠，事实所守护的分支仍入闭包（如 jimage 解压分支 → XML 解析器）"
+match = []
+tests = ["DeepCopy", "StockTrans", "TestSerialDefaultSuid"]
+cause = "manifest 的整数事实统一转为 V::Int；absint 的 lcmp 只折叠 (V::Long, V::Long)。具体求值侧的 `const:0` 也固定返回 CV::I(0)，不看描述符。修法：fact_value 按返回描述符取值（`)J` 取 V::Long），`const:0` 走按描述符的通用分支"
+introduced = "清单返回值事实引入时（此前没有 J 返回的事实，问题潜伏）"
+fixed = ["dea3057d"]
+status = "fixed"
+owner = "C1d a5-4（c1d-a54）"
+diagnose = "--flows 看 lcmp 处的操作数格是否为 Int / Long 混合；检查事实方法的返回描述符"
+doc = "docs/plans/2026-10-01-c1d-closure-bloat.md §38"
+since = "2026-10-11"

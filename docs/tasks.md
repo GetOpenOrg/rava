@@ -259,7 +259,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 日志链缺口 ③ | ✅ d1df66a6 | HelloWorld 575 / 1875（切除上界兑现）；余项路径 A 见 §5.9.7 |
 | 转译耗时回归 | ✅ 第四轮达标（perf-regress4，c3ec480d，待合入） | 四例比 batch-1012 快约 40%（DeepCopy 306 s / 4.1 GB、JNDI 348 s、序列化两例约 310 s），类集合对 batch-1010c 无新增 |
 | 引导映像零拷贝 | 🔄 boot-zerocopy（基于 batch-1009，U4 / U11 §5.5.6） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
-| C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
+| C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；10-11 c1d-a54 dea3057d jimage 资源恒未压缩，DeepCopy 3033→3001、StockTrans 3031→2999、TSDS 3038→3006、HelloWorld 580（计划 §38）；余：来源 3 描述符精确构造器模型（−295）、a5-4f 日志后端（−44）、§29 能力③（−30，随引导映像）、a5-4e ICU、格式串常量求值 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |

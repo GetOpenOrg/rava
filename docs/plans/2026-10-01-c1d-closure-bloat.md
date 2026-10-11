@@ -5055,3 +5055,76 @@ ext 是否从 281 下降，还取决于来源 2（XML 声明编码，c1d-fmt2）
 - `ExtendedProviderHolder.<clinit>` 在闭包期抛异常的根因（ServiceLoader 链上哪一步）待查。它影响 ISO-2022-JP 这类经扩展提供者查找的常量名。
 - 其余 `SharedSecrets` 访问器（`javaLangRefAccess` / `javaLangInvokeAccess` / `javaIOFileDescriptorAccess` 等）按需逐项登记 `registry_statics`。
   前提是登记者 `<clinit>` 在闭包期可求值，且实测有求值点受益，不预先铺开。
+
+## 38. a5-4 余项归因与第一项：模块镜像资源恒未压缩（2026-10-11，分支 `c1d-a54`，基于 main c7cfb932）
+
+### 38.1 归因（dev，`rava closure`，种子 0；切除只作反事实归因，不健全）
+
+基线：HelloWorld 580（4 s / 0.46 GB），DeepCopy 3033（131 s / 3.0 GB），StockTrans 3031，TSDS 3038。
+DeepCopy 大包：`sun/nio/cs/ext` 281、`java/util` 277、`sun/nio/cs` 177、`sun/security/x509` 68、`java/security` 68、
+`sun/security/ec` 46。HelloWorld 无 ext 字符集、无 XML。
+
+| 余项 / 切除点（DeepCopy） | 类数 | 可收窄 | 去向 |
+| --- | --- | --- | --- |
+| 来源 2 + 3（`csall_nojnu.txt`，§37） | 2738 | −295（ext 279） | 见 38.3 第 1 条 |
+| 日志后端（`logging.txt`，a5-4f） | 2989 | −50 / +6 | 待做 |
+| `ResourceBundle.getServiceLoader`（§29 能力③） | 3003 | −30 | 待做（随引导映像） |
+| `Decompressor.decompressResource`（jimage 解压分支） | 3002 | −31 | **本节落地，实测 −32** |
+| 序列化过滤器 | 3038 | +5 | 不做 |
+| ICU `sun/text/Normalizer.getCombiningClass`（a5-4e） | 3032 | −1 | 收益小，排后 |
+
+来源 3 的定位（`DBG` 临时打印，已撤）：`String` 的 19 个构造器全部按反射暴露，其中 `([BIILjava/lang/String;)V`
+经 `Charset.forName(未知名)` 拉进 ext 字符集。
+- 构造器查找点：`ObjectStreamClass.getExternalizableConstructor@5`、`ObjectStreamClass.lambda$canonicalRecordCtr$2@33`、
+  `ReflectionFactory.newConstructorForSerialization@46`，都经 `Class.getDeclaredConstructor`（实参描述符未知）。
+- 枚举点：`getDeclaredConstructors0` / `getDeclaredMethods0` / `getRecordComponents0`。
+- 按名点（`named_class`）：`ClassWriter.getCommonSuperClass@15/@46`、`PKCS9Attribute.<clinit>@752`。
+
+`expose()` 中，类型被按名得到并被枚举，就暴露其全部构造器。
+
+### 38.2 落地：`ImageLocation.getCompressedSize` 恒 0（dea3057d）
+
+- **依据。** 原生二进制唯一打开的 jimage 是 emitter 写出的 `${java.home}/lib/modules`。`project/jimage.rs` 对每个条目
+  恒写 `ATTRIBUTE_COMPRESSED = 0`。`jdk.internal.jimage` 不导出，用户既不能构造指向别的镜像的 `ImageLocation`，也不能子类化。
+  因此 `BasicImageReader.getResource(Buffer)` 只走 `compressedSize == 0` 的直读分支，解压分支
+  （`Decompressor` → `Properties.loadFromXML` → XML 解析器）不可达。
+- **清单。** `[facts.returns]` 加 `"jdk/internal/jimage/ImageLocation.getCompressedSize:()J" = 0`。
+- **生成器（无类名特判）。**
+  - `engine/facts/calls.rs` 的 `fact_value` 按返回描述符取值，`J` 返回取 `V::Long`。之前取 `V::Int`，`lcmp` 只折叠
+    `(Long, Long)`，事实不生效。
+  - `engine/concrete/natives.rs` 的 `const:0` 不再固定返回 `CV::I(0)`，改走通用分支，`J` 返回得 `CV::J(0)`。
+  - 加单测 `long_return_fact_is_long_constant`。
+
+实测（dev），各例的类集合与基线逐类比较，只减不增：
+
+| 用例 | 基线 c7cfb932 | dea3057d | 差 |
+| --- | --- | --- | --- |
+| HelloWorld | 580 | 580 | 0 |
+| DeepCopy，种子 0 / 1 / 2 | 3033 | 3001 / 3001 / 3001（三种子逐类相同） | −32 |
+| StockTrans | 3031 | 2999 | −32 |
+| TestSerialDefaultSuid | 3038 | 3006 | −32 |
+
+出闭包的 32 类：
+- `jdk/internal/jimage/decompressor` 10 类
+- `jdk/internal/org/xml/sax` 10 类，`sax/helpers` 1 类
+- `jdk/internal/util/xml/impl` 8 类，`jdk/internal/util/xml` 2 类
+- `java/util` 1 类
+
+单测：closure 244 / 244 通过；cargo check 无警告。
+
+抽查（dea3057d）11 / 11 通过：
+- `a54-dea3057`（kr1）：HelloWorld、DeepCopy、StockTrans、TestBootLayer。
+- `a54-dea3057-dev`（dev，补跑 sg2 排队未出的 7 例）：TestSerialDefaultSuid、TestClassResourceStream、
+  TestResourceBundleFaces、TestResourceBundleGetKeys、TestNormalizerResourceForms、TestEmbeddedUrlRebuild、
+  TestSystemStableProps。
+
+### 38.3 下一步（按可收窄类数排序）
+
+1. **来源 3：描述符精确的构造器模型（−295 量级，可达终态目标）。**
+   - `getDeclaredConstructor(Class...)` 的参数类型数组若在闭包期可求（序列化路径上来自 `ObjectStreamClass` 字段 / 记录组件），
+     只暴露匹配描述符的构造器。
+   - 按名、按枚举得到的类型不再连带暴露全部构造器，须有构造器查找点且描述符匹配。
+   - 改动落在 `engine/reflect.rs`（反射模型），不涉及枢纽 / 方法上下文。
+2. **a5-4f 日志后端（−44 净）。**
+3. **§29 能力③ `ResourceBundle.getServiceLoader`（−30）。** 随引导映像做未知 `Class` 的消解。
+4. **a5-4e ICU（−1）。** 解压分支出闭包后，ICU 链只剩 `ICUBinary` 直读。
