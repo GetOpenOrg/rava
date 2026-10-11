@@ -71,14 +71,18 @@ impl Class {
         Ok(crate::meta::is_hidden_class(&self.__slash_name()))
     }
 
-    /// native `getNestHost0()`：javac 的 NestHost 恒为最外层封闭类（binary name 首个 `$` 前）。
+    /// native `getNestHost0()`：HotSpot `InstanceKlass::nest_host` 同解——
+    /// - 有 NestHost 属性：宿主的 NestMembers 列出本类且两者同包 → 宿主，否则本类自为宿主；
+    /// - 无该属性（顶层类，类名含 `$` 亦然）→ 本类；数组 / 基本类型 → 本类；
+    /// - 隐藏巢成员（lambda 调用点类、注入调用器）：定义点由 VM 直接写入查找类的巢宿主，不经校验。
     #[jvm_native]
     pub fn getNestHost0(&self) -> Result<Class> {
         let key = self.__slash_name();
-        if key.starts_with('[') || !key.contains('/') && !key.contains('$') {
+        if key.starts_with('[') || self.isPrimitive()? {
             return Ok(Clone::clone(self));
         }
-        Ok(Class::for_class(String::from(key.split('$').next().unwrap_or(&key))))
+        let host = __nest_host_name(&key);
+        Ok(if host == key { Clone::clone(self) } else { Class::for_class(String::from(host.as_str())) })
     }
 
     /// native `initClassName()`：镜像名在 for_class 建镜像时写入，直接返回。
@@ -119,7 +123,10 @@ impl Class {
         let host_name = host.__slash_name();
         let mut out = vec![Clone::clone(&host)];
         if let Some((_, list)) = crate::meta::nest_members().iter().find(|(n, _)| *n == host_name) {
-            out.extend(list.iter().map(|n| Class::for_class(String::from(*n))));
+            // HotSpot `JVM_GetNestMembers`：只列巢宿主确为本宿主的成员（未入映像的成员无元数据，按属性收录）
+            out.extend(list.iter()
+                .filter(|n| !Class::__is_known_class(n) || __nest_host_name(n) == host_name)
+                .map(|n| Class::for_class(String::from(*n))));
         }
         Ok(JArray::from(out))
     }
@@ -148,6 +155,29 @@ impl Class {
         }
         Ok(())
     }
+}
+
+/// 实例类（斜线名）的巢宿主（斜线名），HotSpot `InstanceKlass::nest_host` 的判定：
+/// NestHost 属性所指宿主须在 NestMembers 中列出本类且同包（宿主未入映像时无从加载校验，按属性取）；
+/// 隐藏类取查找类的巢宿主（VM 定义点注入）。
+fn __nest_host_name(key: &str) -> std::string::String {
+    if crate::meta::is_hidden_class(key) {
+        let lookup = crate::injected_invoker::host_of(key)
+            .or_else(|| crate::meta::nest_host(key).map(std::string::String::from));
+        return match lookup {
+            Some(l) if l != key => __nest_host_name(&l),
+            _ => key.to_string(),
+        };
+    }
+    let Some(host) = crate::meta::nest_host(key) else {
+        return key.to_string();
+    };
+    let package = |n: &str| n.rsplit_once('/').map_or("", |(p, _)| p).to_string();
+    let listed = match crate::meta::nest_members().iter().find(|(n, _)| *n == host) {
+        Some((_, list)) => list.iter().any(|m| *m == key),
+        None => !Class::__is_known_class(host),
+    };
+    if listed && package(host) == package(key) { host.to_string() } else { key.to_string() }
 }
 
 /// 类镜像注入字段 `signers` 的承载表（类名 → 签名者数组）。
