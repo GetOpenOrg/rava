@@ -5001,3 +5001,57 @@ JDK 21 的链：
 
 三项落地后，`Charset.forName("UTF_32BE")` 预期在构建期得到 `sun/nio/cs/UTF_32BE` 实例，来源 4 出闭包。
 ext 是否从 281 下降，还取决于来源 2（XML 声明编码，c1d-fmt2）和来源 3（`String` 按名字符集构造器的反射面）。
+
+## 37. §36.5 落地：登记表静态、映像值静态与反射工厂链（2026-10-11，分支 `c1d-registry`，基于 batch-1011c 30bd666f）
+
+### 37.1 机制
+
+三项能力都由清单声明（`vm_intrinsics.toml [concrete]`），生成器不写类名；实现集中在 `engine/concrete/registry.rs`。
+
+- **一次写入的登记表静态字段（`[concrete.registry_statics]`，字段 → 登记者类）**
+  - 首项：`SharedSecrets.javaLangReflectAccess` → `AccessibleObject`。
+  - 写入：只放行登记者 `<clinit>` 运行期间（映像纪元）的跨类写入，写前须为 null，否则失败。
+  - 读取：不受「可变静态不可读」限制。读到 null 且登记者未初始化时，先初始化登记者再读；仍为 null，或登记者初始化不可建模 / 失败，即失败回退。
+  - 写入的映像对象按该静态登记为映像根，快照以静态字段的抽象值代表。
+  - 求值 VM 创建时，按类名序先初始化全部登记者。这与运行期「登记者在构建期已初始化」一致，消除了次序依赖。
+    例如 `ReflectionFactory.<clinit>` 若先于 `AccessibleObject.<clinit>`，后者嵌套读 `soleInstance` 会得 null。
+- **取引导映像值的静态字段（`[concrete] image_statics`）**
+  - 准入条件：声明类在构建期初始化，字段只在为 null 时惰性写入，或单调置位一次，映像中已是终值。
+  - 求值 VM 创建时，从引导映像按值导入（对象图逐个复制，类镜像取本 VM 的镜像）。宿主相关、占位或启动重算值不导入，读取即失败。
+  - 求值中只读不写，走运行期同一条已初始化快路径。
+  - 首两项：
+    - `ReflectionFactory.config`：映像值 `useNativeAccessorOnly = true`，来自 `jdk.reflect.useNativeAccessorOnly` 的构建期钉值。
+    - `VM.javaLangInvokeInited`：引导序列中已置位。
+  - 由此 `MethodHandleAccessorFactory.useNativeAccessor` 取本地访问器，`newInstance0` 落到 `reflect_new`。
+- **`Class.reflectionFactory` 登记为 `memo_fields`**：它是惰性缓存，冷 / 热两次求值取并。
+- **`Reflection.getClassAccessFlags` 的 `class_access_flags` 操作**：由 `[concrete.boot.natives]` 移入 `[concrete.natives]`，引导求值共用。
+  这是第一轮实测（i1）定位到的下一个阻断点：`Reflection.verifyMemberAccess@37`。
+
+### 37.2 实测（dev，`rava closure`）
+
+| 用例 | 基线 30bd666f（= c1dph-i2f） | 5e8b43bd（三项） | 4cc7ee55（+ 访问标志） |
+| --- | --- | --- | --- |
+| HelloWorld，种子 0 / 1 / 2 | 580 / 0 | 580 / 0 | 580 / 0 |
+| DeepCopy，种子 0 / 1 / 2 | 3033 / 281 | 3033 / 281 | 3033 / 281 |
+| DeepCopy，切除来源 2、3（`csall_nojnu.txt`） | 3033 / 281 | 3033 / 281 | **2738 / 2** |
+
+- 各列的类集合与基线逐类比较：HelloWorld、DeepCopy 三个种子都与基线逐类相同。切除来源 2、3 的一列只减不增，
+  少了 295 类：`sun/nio/cs` 289 类（其中 ext 279 类），`java/nio/charset` 5 类，`jdk/internal/util` 1 类。
+  剩下的 ext 两类是 `AbstractCharsetProvider` 和 `ExtendedCharsets`。
+- `--flows @concrete` 下具体求值 / 回退，基线 73 / 17，4cc7ee55 为 75 / 15：
+  - `DerValue.string2bytes@118 [Str("UTF_32BE")]`：由回退（`Class.reflectionFactory`）转为具体求值成功。**来源 4 出闭包。**
+  - `JISAutoDetect$Decoder.decodeLoop@122 [Str("EUC_JP")]`：同样转为成功。
+  - `JISAutoDetect$Decoder.decodeLoop@69 [Str("ISO-2022-JP")]`：仍然回退，原因变了。
+    - 基线：`extendedProviders` 占位对象参与身份运算。
+    - 现在：`Charset$ExtendedProviderHolder.<clinit>` 在求值 VM 中抛异常，初始化记为失败。回退健全。
+- 完整 DeepCopy 仍为 3033 / 281，由来源 2（XML 声明编码，c1d-fmt2）与来源 3（`String` 按名字符集构造器）承担。
+- 单测（4cc7ee55，c1dreg-ut2）：closure_cli 13 通过 / 1 忽略；workspace（除 driver）全部通过，rc = 0。
+- 抽查（4cc7ee55，c1dreg-sp，与 c1dph-sp 同 16 例：HelloWorld、DeepCopy、CollectorsDemo、TestSerialLookupPairing 与字符集各例）：16 / 16 通过。
+- 作业：c1dreg-i1（5e8b43bd）、c1dreg-i2（4cc7ee55）、c1dreg-ut2（单测）、c1dreg-sp（抽查）。
+
+### 37.3 下一步
+
+- 来源 2、3 落地后，完整 DeepCopy 的 ext 预期随之降到切除列的水平（2）。
+- `ExtendedProviderHolder.<clinit>` 在闭包期抛异常的根因（ServiceLoader 链上哪一步）待查。它影响 ISO-2022-JP 这类经扩展提供者查找的常量名。
+- 其余 `SharedSecrets` 访问器（`javaLangRefAccess` / `javaLangInvokeAccess` / `javaIOFileDescriptorAccess` 等）按需逐项登记 `registry_statics`。
+  前提是登记者 `<clinit>` 在闭包期可求值，且实测有求值点受益，不预先铺开。
