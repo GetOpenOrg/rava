@@ -49,7 +49,7 @@ pub struct MethodRequest<'a> {
     /// 方法体发射在 vtable trait 的默认实现内
     pub in_vtable_body: bool,
     /// 逃逸分析给出的整组释放区域（字节码偏移区间，含两端；见 [`crate::regions`]）
-    pub regions: &'a [(u32, u32)],
+    pub regions: &'a crate::regions::RegionPlan,
 }
 
 /// 生成过程的外部登记（调用方持有：生成失败时已发生的登记同样保留，与 Python 全局登记一致）
@@ -167,7 +167,7 @@ fn structured_entries<'e>(
     mut ledger: JumpLedger,
     code: &NormCode,
     local_vars: &[LocalVar],
-    regions: &[(u32, u32)],
+    regions: &crate::regions::RegionPlan,
 ) -> MethodResult<Vec<Entry>> {
     if code.insns.is_empty() {
         return Ok(Vec::new());

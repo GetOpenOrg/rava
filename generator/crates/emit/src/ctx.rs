@@ -30,6 +30,8 @@ pub struct EmitOptions {
     pub debug: bool,
     /// 逐类发射的并行度（0 = 可用核数；1 = 串行）。输出与并行度无关
     pub jobs: usize,
+    /// 逃逸分析与区域改写的逐区域判定输出到 stderr（`--escape-trace`）
+    pub escape_trace: bool,
     /// 档案发射（`--profile`）：档案 crate 的包版本取其源码树摘要（同内容共享编译产物），否则取 scratch 路径
     pub archive: bool,
 }

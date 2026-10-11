@@ -97,11 +97,20 @@ fn wrap_one(graph: &mut Graph, region: (u32, u32)) -> bool {
     true
 }
 
-/// 按区域列表改写块图（不可改写的区域静默放弃）
-pub fn wrap_regions(graph: &mut Graph, regions: &[(u32, u32)]) {
-    for &r in regions {
+/// 一个方法的整组释放区域规划
+#[derive(Debug, Default)]
+pub struct RegionPlan {
+    /// 字节码偏移区间（含两端）
+    pub spans: Vec<(u32, u32)>,
+    /// 逐区域打印改写结果（`rava build --escape-trace`）
+    pub trace: bool,
+}
+
+/// 按区域列表改写块图（不可改写的区域放弃，不释放）
+pub fn wrap_regions(graph: &mut Graph, plan: &RegionPlan) {
+    for &r in &plan.spans {
         let ok = wrap_one(graph, r);
-        if std::env::var_os("RAVA_ESCAPE_TRACE").is_some_and(|v| !v.is_empty() && v != "0") {
+        if plan.trace {
             eprintln!("[escape] 区域 @{}..={}：{}", r.0, r.1, if ok { "已包装" } else { "语句段不可包装，放弃" });
         }
     }

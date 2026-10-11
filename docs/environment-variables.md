@@ -49,6 +49,7 @@ $RAVA jdk --json                                                       # 选中�
 | `--batch` | 仅 build：入口写 `user/src/bin/<bin>.rs`（`#[path]` 引用同级类文件），向 `user/Cargo.toml` 追加 `[[bin]]`（已有同名 bin 跳过） |
 | `--trace-class 类` | 仅 build：打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链（`      [why] …`，同 `rava closure --why`），回答“为什么被拉进闭包” |
 | `--debug` | 闭包未解析调用（`[closure] unresolved: …`）与存根兜底逐条（`[cfg-audit] stub fallback (位点): 方法: 原因`） |
+| `--escape-trace` | 无 GC 区域整组释放的逐区域判定（stderr）：`[escape] 类.方法描述符 @起..=止：插入区域 / 无成环对象 / 拒绝：原因；调用链：…（N 节点，M 步）` 与改写结果 `[escape] 区域 @起..=止：已包装 / 语句段不可包装，放弃`（`docs/plans/2026-10-07-no-gc-memory-model.md` §4.5） |
 | `--full-precheck` | 发射后只输出完整预检明细（`[precheck]` 不截断），不出审计行；build 下须配合 `--stop-after emit`。缺省时预检每类明细封顶 40 行 |
 | `--api-package P` / `--api-recursive` | 仅 build：以公开 API 包为调用链入口（包内 public 类的 public / protected 方法，边界域包跳过；可多次）。`--api-recursive` 含子包，须配合 `--api-package`。输出 `[api] …` 行（`rava audit api` 同一入口枚举） |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码。行格式 `{次数}\t{种类}\t{位点}`，次数降序；位点为构造调用处 `文件:行:列`（`#[track_caller]`），种类 `raw_expr` / `raw_stmt` / `raw_item` |

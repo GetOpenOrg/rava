@@ -18,10 +18,6 @@ use crate::step::step;
 use crate::val::{Frame, Val};
 use crate::world::{method_kinds, Kind, World};
 
-fn trace_on() -> bool {
-    std::env::var_os("RAVA_ESCAPE_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
-}
-
 /// 区间内不允许的指令（局部变量写、控制流、监视器）
 fn barrier(insn: &NInsn) -> bool {
     let NInsn::Op(i) = insn else { return insn.is_abrupt() };
@@ -104,7 +100,8 @@ fn candidates(code: &NormCode, frames: &[Option<Frame>]) -> Vec<(usize, usize)> 
 }
 
 /// 用户方法的区域：`[(起始偏移, 结束偏移)]`（含两端指令）
-pub fn plan_regions(w: &World, ci: &ClassInfo, m: &Method) -> Vec<(u32, u32)> {
+/// `trace`：逐候选打印判定（`rava build --escape-trace`）
+pub fn plan_regions(w: &World, ci: &ClassInfo, m: &Method, trace: bool) -> Vec<(u32, u32)> {
     if m.name == "<clinit>" {
         return Vec::new();
     }
@@ -114,7 +111,7 @@ pub fn plan_regions(w: &World, ci: &ClassInfo, m: &Method) -> Vec<(u32, u32)> {
     let frames = match entry_frames(&mut shallow, ci, &code, live.clone()) {
         Ok(f) => f,
         Err(r) => {
-            if trace_on() {
+            if trace {
                 eprintln!("[escape] {}.{}{}：入口帧推导失败：{}", ci.name(), m.name, m.desc, r.0);
             }
             return Vec::new();
@@ -142,7 +139,7 @@ pub fn plan_regions(w: &World, ci: &ClassInfo, m: &Method) -> Vec<(u32, u32)> {
             }
             Ok(()) => "无成环对象，不插入".to_string(),
         };
-        if trace_on() {
+        if trace {
             eprintln!("[escape] {}.{}{} @{so}..={eo}：{verdict}（{} 节点，{} 步）", ci.name(), m.name, m.desc, an.nodes.len(), an.steps);
         }
     }
