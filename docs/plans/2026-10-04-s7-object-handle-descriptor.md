@@ -892,3 +892,16 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
 - K1 不是过渡形态。wrapper 只持句柄就是终态 wrapper 的数据形态，K6 只把它整体挪进标记 crate。
 - K3 同理：方法 trait 在单 crate 内先成形，K6 只改它所在的 crate。
 - 任务说明里举的首步例子是「先建标记 crate、搬入句柄与上转」。它做不成独立首步：固有 impl 必须与 struct 同 crate（§9.2），struct 一旦搬走，声明 crate 的固有方法立即失效。所以先在单 crate 内去掉 wrapper 的签名依赖（K1、K2）、把方法面改为 trait（K3），再一次挪 crate（K6）。
+
+**现状（2026-10-11）**：
+- K1 已完成，提交 7cef9081（s7-marker）。
+  - wrapper 只持 `__Handle`，`__Ref` 已删。
+  - `__erased_vtable` 按深度 `match`。
+  - 宏单测新增 `wrapper_holds_handle_only`，守护 wrapper 展开只含 `__Handle`、按深度取视图。
+- 验证结果（dev）：
+  - 宏单测 20/20 通过。
+  - 生成器全量单测通过：rc=0，emit 93 例，耗时约 5570 s（JOBS=1）。
+  - 抽查 12/12 通过：七例加 InheritanceChain、InterfaceDispatch、TestCollections、TestGenerics、Polymorphism。
+  - TestXmlTransform 在缺省转译时限 600 s 下超时。超时发生在闭包期，K1 不改闭包。放宽时限（`--transpile-timeout 1800`）后通过。
+- §4.3 热循环报数尚未测量，留待 K2 一并报。
+- 下一步：K2（接口载体去视图指针）。
