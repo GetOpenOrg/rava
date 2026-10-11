@@ -1792,6 +1792,8 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
   - 根因不变（上文：载体 park 许可由 ForkJoinPool 唤醒协议与 pin 停泊共用，JDK 21 设计，HotSpot 同样出现）。消解来自两处：
     测试第 1d 段按规范循环 parkNanos 至截止（48f173c4，用户批准）；R1-next / S7 等运行期提速把两个竞态窗口压短，PinnedRace 残余
     频率与 HotSpot 同量级（≤0.1%）。1c（pin 中 sleep 中途 RUNNABLE）在本轮 5400 轮中 0 次。
+  - 抽查（vtrest-051b9773，jp2）：VirtualThread 系列、并发与 HelloWorld / DeepCopy 共 14 例，13 / 14 通过，唯一失败为已知
+    TestVirtualThreadScale。
   - 后续：无。残余提前返回是规范允许的虚假唤醒，运行时不得吞许可。失败原因登记 `docs/failure_patterns.toml`
     `vt-pinned-carrier-permit`（status fixed）。
 - ② T6 规模（TestVirtualThreadScale）：仍失败，唯一差异 `all sleeping at once: false`。
