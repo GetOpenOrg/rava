@@ -28,9 +28,25 @@ impl CDS {
 
     /// native `logLambdaFormInvoker(String)`：CDS 归档转储时记录 LambdaForm 调用器（-Xshare:dump
     /// 专用）；原生二进制无 CDS 归档——no-op。
+    #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn logLambdaFormInvoker(_line: String) -> Result<()> {
         Ok(())
+    }
+
+    /// 同上（JDK 25 起与 4 参 Java 重载并存，Rust 名带重载后缀）
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn logLambdaFormInvoker_str(_line: String) -> Result<()> {
+        Ok(())
+    }
+
+    /// native `needsClassInitBarrier0(Class)`（JDK 25）：AOT 归档里预初始化的类是否需要类初始化屏障；
+    /// 原生二进制无归档 → false
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn needsClassInitBarrier0(_cls: Class) -> Result<bool> {
+        Ok(false)
     }
 
     /// native `isDumpingClassList0()`：-XX:DumpLoadedClassList 模式；原生二进制无 CDS → false。
