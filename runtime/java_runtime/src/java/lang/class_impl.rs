@@ -321,22 +321,22 @@ impl Class {
                 _ => tgt_elem == src_elem, // 基本组件：描述符字符相同
             };
         }
-        if crate::meta::class_hierarchy().iter()
-            .find(|(n, _)| *n == source)
-            .map(|(_, supers)| supers.iter().any(|s| *s == target))
-            .unwrap_or(false)
+        // 层次表按名有序（`meta::merged` 排序）：二分定位与线性 find 同取首个同名行（`meta::row`
+        // 的口径）——checkcast / 反射实参校验热路径不再 O(表长) 扫描
+        if crate::meta::row(crate::meta::class_hierarchy(), source)
+            .is_some_and(|supers| supers.contains(&target))
         {
             return true;
         }
         // 接口块不携带 all_supertypes（层次表无行）：沿直接超接口表（class 文件 interfaces
-        // 项）传递查找——接口 → 超接口（注解类型 → Annotation 等）
+        // 项）传递查找——接口 → 超接口（注解类型 → Annotation 等）；同样二分
         let mut stack: Vec<&str> = vec![source];
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         while let Some(cur) = stack.pop() {
             if !seen.insert(cur) {
                 continue;
             }
-            if let Some((_, ifaces)) = crate::meta::class_interfaces().iter().find(|(n, _)| *n == cur) {
+            if let Some(ifaces) = crate::meta::row(crate::meta::class_interfaces(), cur) {
                 for i in ifaces.iter() {
                     if *i == target {
                         return true;

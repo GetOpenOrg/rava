@@ -292,6 +292,9 @@ C4 收官之后实施。入队路径进闭包后，`ReferenceQueue.poll` 当前�
 
 1. **运行时间**：stream 管线执行开销归运行时性能线。perf 剖析作业 `nogc-perf3` 的结果见
    `cluster_results/job/nogc-perf3/`。release 档默认 strip，需要带 `CARGO_PROFILE_RELEASE_STRIP=none` 才有符号。
+   深剖已完成（2026-10-11，分支 rt-perf-prof）：kr1 同机 48 s vs JVM 0.65 s（72 倍），大头为
+   每叶子管线构建 25–30% + 每元素约 5 重接口分派，装箱 <3%、self 弥散无单点可修，结论与
+   下一步见 `docs/reports/2026-10-11-rt-perf-profiling.md` §四。
 2. **所有权推断 `Weak`**（第一节第 2 条第二项）：处理逃逸到旧对象、但仍然成环的结构。
 3. **引用类语义**：随 `Rc` 释放触发。
 4. **JDK 方法体内的区域**：需要开放世界分析。档案共享方法体，事实只能取自 JDK 侧。

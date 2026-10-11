@@ -295,6 +295,17 @@ pub fn take_bad_arg() -> bool {
     crate::exec_context::state().bad_arg.replace(false)
 }
 
+// ── 包装类实例的结构化取值（P-B 可回退原型）────────────────────────────────────
+//
+// 翻译出的包装类实例（`Integer.valueOf` 等工厂产出）此前经 `__obj_str().parse()` 取回基本值：
+// 一次翻译体 toString（构建 Java String）+ UTF-16→UTF-8 转换 + 文本解析，是反射热路径的
+// 已量化项（docs/reports/2026-10-11-rt-perf-profiling.md §三）。P-B 原型经 hashCode 虚分派
+// 一次取回值位，无分配、无文本往返。**收窄到实测通过的类型**（Integer / Short / Byte，恒等
+// hashCode，rtpp-verify3/dbg2 见证）：Character / Boolean 无实参级见证、Float 实测不通过
+// （翻译 Float 的 hashCode 路径对 3.0f 应答 0，TestReflectBoxCast `narrow` 行 1.5 → 0.0，
+// 疑 floatToIntBits 链；见报告 §三.4），三者维持文本路径。Long / Double 的 hashCode 折叠到
+// int 不可逆，本就文本。结构化承载的完整方案 P-A「ObjectVTable 原生值视图臂」见上述报告。
+
 /// 装箱 Object → i32（两形态：站点装箱原生盒 Rc<i32> / 翻译 Integer 包装——
 /// 与 field_impl 的 __unbox_int 同一双路径策略，此处作为协议公共面）。
 ///
@@ -318,7 +329,8 @@ pub fn unbox_i32(v: &Object) -> Option<i32> {
         return Some(*b as i32);
     }
     match v.0.__class_name() {
-        "java/lang/Integer" | "java/lang/Short" | "java/lang/Byte" => v.0.__obj_str().parse::<i32>().ok(),
+        // P-B：Integer / Short / Byte 的 hashCode 即值（final 类，恒等契约，实测通过）
+        "java/lang/Integer" | "java/lang/Short" | "java/lang/Byte" => Some(v.0.hashCode()),
         "java/lang/Character" => unbox_char(v).map(|c| c as i32),
         _ => None,
     }
@@ -392,7 +404,9 @@ pub fn unbox_f64(v: &Object) -> Option<f64> {
     unbox_f32(v).map(|x| x as f64)
 }
 
-/// 装箱 Object → float：原生盒 / 翻译 Float 包装；拓宽接受 byte / short / char / int / long。
+/// 装箱 Object → float：原生盒 / 翻译 Float 包装（toString 文本——Rust 浮点解析
+/// 接受 Java 的 `NaN` / `Infinity` / `1.0E10` 形态）；拓宽接受 byte / short / char / int / long。
+///（Float 的 hashCode 位形取值实测不通过，维持文本路径，见文件头 P-B 注记。）
 pub fn unbox_f32(v: &Object) -> Option<f32> {
     if v.0.is_jvm_null() {
         return None;

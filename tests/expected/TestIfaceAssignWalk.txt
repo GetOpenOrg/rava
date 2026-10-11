@@ -1,0 +1,6 @@
+assign YYYYYYYY
+anno true
+annoRev false
+invokeSub base:Derived
+invokeIface a:Derived
+invokeMismatch IAE
