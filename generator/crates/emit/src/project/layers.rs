@@ -253,7 +253,7 @@ impl BodyPlan {
             }
             let decl = ctx.crates().decl();
             w.write(&src.join("lib.rs"), &body_lib(&decl))?;
-            let deps = [path_dep(&decl, top), format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display())];
+            let deps = [path_dep(&decl, top), super::vendor::macros_dep()];
             w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, &c.name, &deps))?;
         }
         Ok(())

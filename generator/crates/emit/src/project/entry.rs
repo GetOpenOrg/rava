@@ -230,7 +230,7 @@ pub const META_CRATE: &str = "java_meta";
 /// user/Cargo.toml 的依赖行：全部模块 crate、java_meta、宏 crate、全部 lib crate（声明序）
 fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str]) -> Vec<String> {
     let mut d: Vec<String> = linked_crates(ctx).iter().map(|c| path_dep(c, c)).collect();
-    d.push(format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display()));
+    d.push(super::vendor::macros_dep());
     d.extend(libs.iter().map(|l| path_dep(l, l)));
     d
 }

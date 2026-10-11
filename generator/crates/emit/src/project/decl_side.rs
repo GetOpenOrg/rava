@@ -206,7 +206,7 @@ fn view_of(src: &Path) -> BTreeSet<PathBuf> {
 impl DeclSegs {
     /// 上层段落盘：各包 mod.rs、lib.rs、Cargo.toml；清除段内本轮未写的文件与多余的旧段目录。
     /// 须在类文件与底段 mod 树写出之后调用
-    pub fn write_crates(&self, ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, decl_src: &Path) -> Result<()> {
+    pub fn write_crates(&self, w: &mut Writer, out_dir: &Path, decl_src: &Path) -> Result<()> {
         remove_extra_segments(out_dir, &self.names[0], self.names.len() - 1)?;
         let mut view = view_of(decl_src);
         for (j, files) in self.files.iter().enumerate() {
@@ -252,7 +252,7 @@ impl DeclSegs {
                 w.write(&src.join(pkg).join("mod.rs"), &(lines.join("\n") + "\n"))?;
             }
             w.write(&src.join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
-            let deps = [path_dep(prev, prev), format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display())];
+            let deps = [path_dep(prev, prev), super::vendor::macros_dep()];
             w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, name, &deps))?;
             sweep_unwritten(&src, w)?;
             view.extend(pkgs.into_keys().filter(|p| !p.as_os_str().is_empty()));

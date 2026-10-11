@@ -45,8 +45,6 @@ pub struct EmitShared<'a> {
     pub boundary: Boundary<'a>,
     /// `runtime/java_runtime`（手写真源）
     pub runtime_dir: PathBuf,
-    /// `runtime/rava_macros`（宏 crate 绝对路径）
-    pub macros_crate: PathBuf,
     pub seeds: SeedCfg,
     pub opts: EmitOptions,
     /// 静默兜底审计（`[fallback-audit]`）
@@ -130,7 +128,6 @@ impl<'a> EmitShared<'a> {
             .parse()
             .map_err(|e| EmitError::Input(format!("{}：{e}", seeds_path.display())))?;
         let runtime_dir = std::path::absolute(runtime_dir).unwrap_or_else(|_| runtime_dir.to_path_buf());
-        let macros_crate = runtime_dir.parent().map_or_else(|| PathBuf::from("rava_macros"), |p| p.join("rava_macros"));
         Ok(EmitShared {
             input,
             ty: TyCtx::new(&input.registry, names, &manifest.ty),
@@ -139,7 +136,6 @@ impl<'a> EmitShared<'a> {
             planner: Planner::new(input, names, manifest, cp),
             boundary: Boundary::new(manifest),
             runtime_dir,
-            macros_crate,
             seeds: SeedCfg::from_toml(&table),
             fallback: crate::fallback::FallbackAudit::new(opts.debug),
             module_audit: crate::module_audit::ModuleAudit::default(),

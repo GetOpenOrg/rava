@@ -88,7 +88,7 @@ pub(super) fn stamp_versions(
     crates: &[&str],
     included: &[&str],
 ) -> crate::error::Result<()> {
-    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    let mut h = Fnv::new();
     let mut files: Vec<std::path::PathBuf> = crates
         .iter()
         .flat_map(|d| super::fs::walk(&out_dir.join(d)))
@@ -118,19 +118,23 @@ pub(super) fn stamp_versions(
     Ok(())
 }
 
-fn is_version_line(l: &str) -> bool {
+pub(super) fn is_version_line(l: &str) -> bool {
     l.starts_with("version = \"")
 }
 
-fn without_version(text: &str) -> String {
+pub(super) fn without_version(text: &str) -> String {
     text.lines().filter(|l| !is_version_line(l)).collect::<Vec<_>>().join("\n")
 }
 
 /// FNV-1a 64（逐字节；与平台、进程无关）
-struct Fnv(u64);
+pub(super) struct Fnv(pub(super) u64);
 
 impl Fnv {
-    fn add(&mut self, bytes: &[u8]) {
+    pub(super) fn new() -> Self {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+
+    pub(super) fn add(&mut self, bytes: &[u8]) {
         for b in bytes {
             self.0 ^= u64::from(*b);
             self.0 = self.0.wrapping_mul(0x0100_0000_01b3);

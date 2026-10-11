@@ -20,6 +20,7 @@ pub mod mod_tree;
 pub mod module_side;
 pub mod overlay;
 pub mod root_bodies;
+pub mod vendor;
 #[cfg(test)]
 mod tests;
 
@@ -344,7 +345,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     }
-    segs.write_crates(ctx, &mut w, out_dir, &decl_src)?;
+    segs.write_crates(&mut w, out_dir, &decl_src)?;
     perf.mark("mod_tree");
     module_side::write_module_crates(ctx, &mut w, out_dir, segs.top())?;
     libs.write_crates(ctx, &mut w, out_dir, segs.top())?;
