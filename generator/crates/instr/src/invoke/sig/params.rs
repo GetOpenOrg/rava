@@ -101,7 +101,13 @@ pub(super) fn lookup(env: &InstrEnv, call: &CallRef, caller_tparams: &[String], 
     };
     let callee_tparams = ctx.ty.effective_class_type_params(ci);
     let hw = handwritten_boundary_method(ctx, &cls_bin, &call.name, &call.desc)?;
-    let mut types = ctx.ty.method_sig_types(ci, m, &callee_tparams).params;
+    // 构造器取发射签名（被调 `new` 的真实 Rust 形参）：接口形参在发射侧擦为描述符形态，
+    // 调用点须按同一口径强转（JDK 25 接口 default 体内匿名类的 ACC_MANDATED 外部实例形参）
+    let mut types = if call.name == "<init>" {
+        ctx.ty.emitted_method_sig_types(ci, m, &callee_tparams).params
+    } else {
+        ctx.ty.method_sig_types(ci, m, &callee_tparams).params
+    };
     if types.is_empty() && !hw {
         types = ctx.ty.emitted_method_sig_types(ci, m, &callee_tparams).params;
     }

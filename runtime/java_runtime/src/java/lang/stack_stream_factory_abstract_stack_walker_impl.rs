@@ -109,7 +109,10 @@ fn _or_flags(info: &Object, frame: &JavaFrame) {
 /// JDK 25 仅类模式（HotSpot `java_lang_ClassFrameInfo::init_class`）：帧缓冲元素为 ClassFrameInfo，
 /// classOrMemberName 写声明类，flags 并入方法的成员位
 #[cfg(jdk_ge_25)]
-fn _fill_class_only<T: Into<Object>>(frames: &JArray<T>, index: i32, frame: &JavaFrame) -> Result<()> {
+fn _fill_class_only<T>(frames: &JArray<T>, index: i32, frame: &JavaFrame) -> Result<()>
+where
+    T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
+{
     let info: Object = frames.get(index)?.into();
     let clazz = Object::from(Class::for_class(String::from(frame.class)));
     _ensure(info.0.__unsafe_ref_set("classOrMemberName", clazz), "classOrMemberName");
