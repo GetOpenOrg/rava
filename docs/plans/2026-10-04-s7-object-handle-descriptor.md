@@ -903,5 +903,40 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   - 生成器全量单测通过：rc=0，emit 93 例，耗时约 5570 s（JOBS=1）。
   - 抽查 12/12 通过：七例加 InheritanceChain、InterfaceDispatch、TestCollections、TestGenerics、Polymorphism。
   - TestXmlTransform 在缺省转译时限 600 s 下超时。超时发生在闭包期，K1 不改闭包。放宽时限（`--transpile-timeout 1800`）后通过。
-- §4.3 热循环报数尚未测量，留待 K2 一并报。
-- 下一步：K2（接口载体去视图指针）。
+- §4.3 热循环报数随 K2 一并测得（见下方 K2 节）。
+- K2 已完成，提交 847493cb（s7-k2，基于 main c7cfb932）。
+  - 接口载体只持 `__IfaceRef`，`__IfaceRef` 只持 `Object`，删去视图指针 `vt` 与接口类型形参，载体类型与接口签名无关。
+  - invokeinterface 入口 `__IfaceRef::enter::<dyn I__VTable>()` 每次经 `ObjectVTable::__interface` 现取视图。查询协议（`Option<NonNull<dyn I__VTable>>` 槽）不变，所以 sam_objects 生成的 lambda 应答不用改。
+  - `__IfaceRef::{new, image, null}` 合为一个 `const fn new(Object)`：载体缺省 null、`From<Object>`、引导映像常量都经它建立。
+  - 引导映像的接口槽一律发射 `I::__from_image(__IfaceRef::new(<对象引用>))`，不再判定「对象的类是否有 `impl I for X` 块」。为此只服务引导映像的 `ClassEmission::iface_views` 与 `ImplTexts::views` 一并删去。
+  - 宏单测新增 `carrier_holds_object_only`，守护以下两点：
+    - 载体字段是 `__ref : __IfaceRef ,`，不含 `__IfaceRef <`；
+    - `__VTable` 只出现在 vtable trait 定义、`enter :: < dyn I__VTable >` 与 `< dyn I__VTable > :: m` 中。
+- K2 验证：
+  - 宏单测 17/17（缺省特性）、21/21（`plan` 特性）。
+  - 生成器 `cargo check --tests` 通过。
+  - dev 抽查 5/5：InterfaceDispatch、LambdaBasic、StreamDemo、HelloWorld、DeepCopy，tag `s7k2-847493cb`。
+  - 全量单测与七例抽查集由协调会话合批跑。
+- §4.3 计时：
+  - 测法：jp1（8 核 15 GB，云服务器），`scripts/graalvm_bench.sh`，`MODES=rava-release REPEAT=5`，运行取 5 次中位数，每例先测 K2 前再测 K2 后。
+  - 作业 tag 为 `s7k2-{base,k2}-<用例>`，K2 前即 main c7cfb932。
+  - 构建 = 转译 + 编译（秒），二进制为字节数，输出与 JVM 逐字一致（SAME）。
+
+  | 用例 | 构建 前 / 后 | 运行 前 / 后 | 二进制 前 / 后 |
+  |---|---|---|---|
+  | InterfaceDispatch | 169.39 / 165.02 | 0.008 / 0.007 | 11 120 568 / 11 028 120（−92 448，−0.83%） |
+  | InheritanceChain | 165.00 / 166.60 | 0.008 / 0.008 | 11 087 888 / 10 995 248（−92 640，−0.84%） |
+  | TestCollections | 165.91 / 165.48 | 0.008 / 0.008 | 11 105 816 / 11 013 176（−92 640，−0.83%） |
+  | HelloWorld | 165.53 / 165.82 | 0.008 / 0.008 | 11 093 840 / 11 001 264（−92 576，−0.83%） |
+  | StockTrans | 未测 | 未测 | 未测 |
+
+  - **结论**：
+    - 运行耗时在计时分辨率内无变化：§4.3 列的用例在 release 下只跑约 8 ms，以进程启动为主。
+    - 构建耗时差在 ±1% 噪声内。
+    - 二进制每例稳定小约 92 KB（−0.83%）。来源是载体与 `__IfaceRef` 不再按接口单态化，引导映像也不再有接口视图常量。
+    - K1 在 c7cfb932 之前已合入，K2 前测点已含 K1，所以这组数字只反映 K2 的增量。K1 相对 S7-3 的开销没有单独测量。
+    - 语料里没有真正的热循环用例：`tests/perf` 只有 VirtualThreadScale，也没有 HelloWorld 循环版。分派开销要定量，须补一个百万次级接口 / 虚分派循环用例，留到 K8 档案验收时一并做。
+  - 旁证：dev 上 K2 前 StockTrans 测得构建 882.70 s、运行 0.039 s、二进制 79 085 128 B。该次之后 dev 转跑 JDK25 全量，计时改到 jp1 重做，dev 这一点不作对照。jp1 上这一对被其他作业占机阻塞 26 分钟以上，单次构建约 15 分钟，前后两次加起来超过一小时，所以中止、未测，留到 K8 档案验收时连同热循环用例一起补测。
+- 下一步：
+  - K4（运行时基础设施分层）；
+  - K3（方法 trait）与 K5（类初始化骨架）同 K1、K2 互不依赖，可并行派发。

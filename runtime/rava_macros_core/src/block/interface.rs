@@ -32,10 +32,10 @@ fn is_instance_decl(f: &FnItem) -> bool {
 /// - `Iface__VTable`：接口实例方法的**擦除签名** trait（无类型参数，对象安全）——
 ///   等价 JVM 的 itable：运行时只认擦除后的接口，不认类型实参。实现类的 `java_class!`
 ///   块按 `impl Iface for Class` 为其 `__inner` 生成实现。
-/// - 载体 `Iface<E>`：持有一个接口引用 `__IfaceRef<dyn Iface__VTable>`（句柄 `Object` + 接口
-///   视图指针，与 `Object` 双向互转 + `Deref<Target = Object>`，S7-2c）。实例方法保持 Java 的
-///   泛型签名（`next() -> Result<E>`），经建立引用时由 `ObjectVTable::__interface` 求出的
-///   `Iface__VTable` 视图分派，
+/// - 载体 `Iface<E>`：持有一个接口引用 `__IfaceRef`（只持句柄 `Object`，不持视图指针，与
+///   `Object` 双向互转 + `Deref<Target = Object>`，S7-2c / §9.9 K2）。实例方法保持 Java 的
+///   泛型签名（`next() -> Result<E>`），入口经 `__IfaceRef::enter` 由 `ObjectVTable::__interface`
+///   现取 `Iface__VTable` 视图分派，
 ///   类型变量位置的实参 / 返回值在 `Object` 与 `E` 之间转换（等价 javac 插入的 checkcast）。
 ///   函数式接口的 lambda 实例是 A-5 合成对象（`Iface__Lambda`，sam_objects 生成），
 ///   实现 `Iface__VTable` 并经 `__interface` 应答——SAM 与 default 方法都走 vtable 分派。
@@ -164,8 +164,8 @@ pub(crate) fn expand_interface(
             #default_method
             #(#keep_attrs)*
             pub #sig {
-                // null 接收者 NPE、建帧栈界检查与取接口视图在 runtime 的 `__IfaceRef::enter`
-                if let Some(__vt) = self.__ref.enter()? {
+                // null 接收者 NPE、建帧栈界检查与现取接口视图在 runtime 的 `__IfaceRef::enter`
+                if let Some(__vt) = self.__ref.enter::<dyn #vtable_ident>()? {
                     return Ok(::std::convert::From::from(
                         <dyn #vtable_ident>::#mname(__vt #(, ::std::convert::Into::into(#args))*)?));
                 }
@@ -215,7 +215,7 @@ pub(crate) fn expand_interface(
 
         #[derive(::core::clone::Clone)]
         pub struct #struct_ident #impl_g #where_c {
-            __ref: __IfaceRef<dyn #vtable_ident>,
+            __ref: __IfaceRef,
             __phantom: ( #( ::std::marker::PhantomData<fn() -> #type_params>, )* ),
         }
 
@@ -223,7 +223,7 @@ pub(crate) fn expand_interface(
         // 数组类、存储检查与 checkcast 目标元素类由此取得，值语义仍是 Java null
         impl #impl_g ::core::default::Default for #struct_ident #ty_g #where_c {
             fn default() -> Self {
-                Self { __ref: __IfaceRef::null(#null_ref), __phantom: ::std::default::Default::default() }
+                Self { __ref: __IfaceRef::new(#null_ref), __phantom: ::std::default::Default::default() }
             }
         }
 
@@ -236,13 +236,13 @@ pub(crate) fn expand_interface(
         // 构建期引导映像的对象引用（常量求值，映像模块的静态初值）
         impl #impl_g #struct_ident #ty_g #where_c {
             #[doc(hidden)]
-            pub const fn __from_image(__ref: __IfaceRef<dyn #vtable_ident>) -> Self {
+            pub const fn __from_image(__ref: __IfaceRef) -> Self {
                 Self { __ref, __phantom: ( #( ::std::marker::PhantomData::<fn() -> #type_params>, )* ) }
             }
 
             /// 映像中引用数组的 null 元素（与 `Default` 同为本接口的类型化 null）
             #[doc(hidden)]
-            pub const __IMAGE_NULL: Self = Self::__from_image(__IfaceRef::null(#null_const));
+            pub const __IMAGE_NULL: Self = Self::__from_image(__IfaceRef::new(#null_const));
         }
 
         impl #impl_g From<#struct_ident #ty_g> for Object #where_c {
@@ -433,5 +433,35 @@ pub(crate) fn erased_wrapper_call(
             #phantom_init
         };
         #call
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proc_macro2::TokenStream as TokenStream2;
+    use std::str::FromStr;
+
+    const IFACE: &str = r#"
+    #[binary_name = "a/I"]
+    #[is_interface = true]
+    pub struct I {}
+    impl I {
+        pub fn m(&self, a: i32) -> Result<i32>;
+    }
+"#;
+
+    /// S7 计划 §9.9 K2：接口载体只持句柄（`__IfaceRef` 无视图指针、无接口类型形参）；`__VTable`
+    /// 只出现在 vtable trait 定义与 invokeinterface 入口现取视图处，载体 struct / 身份 / 转换 impl 不含
+    #[test]
+    fn carrier_holds_object_only() {
+        let out = super::super::expand(TokenStream2::from_str(IFACE).unwrap()).to_string();
+        assert!(out.contains("__ref : __IfaceRef ,"), "{out}");
+        assert!(!out.contains("__IfaceRef <"), "{out}");
+        assert!(out.contains("self . __ref . enter :: < dyn I__VTable > ()"), "{out}");
+        let rest = out
+            .replace("pub trait I__VTable", "")
+            .replace("enter :: < dyn I__VTable >", "")
+            .replace("< dyn I__VTable > :: m", "");
+        assert!(!rest.contains("__VTable"), "{rest}");
     }
 }

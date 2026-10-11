@@ -154,61 +154,43 @@ fn __null_view(null: bool) -> ! {
     panic!("句柄所持对象不是 wrapper 静态类型的实例（构造点违反不变式）")
 }
 
-/// 接口引用（接口载体的唯一字段，S7-2c）：句柄是 `Object`（载体 `Deref<Target = Object>`，
-/// null 带接口静态类型），另持接口视图指针 `vt`（不持有，指向 `obj` 所持对象）——在
-/// `From<Object>` 时经 `ObjectVTable::__interface` 求出一次，invokeinterface 直接经它分派，
-/// 不再每次克隆引用、查询。`vt` 为 None 而 `obj` 非 null：运行时类不实现该接口
-/// （动态代理、只走 default 体的对象），分派落到代理 / default / AbstractMethodError 回退。
-pub struct __IfaceRef<V: ?Sized> {
+/// 接口引用（接口载体的唯一字段，S7-2c；§9.9 K2）：只持句柄 `Object`（载体 `Deref<Target = Object>`，
+/// null 带接口静态类型），不持接口视图指针——类型与接口签名无关，是类型标记 crate 的前提（§9.9）。
+/// invokeinterface 入口 [`__IfaceRef::enter`] 每次经 `ObjectVTable::__interface` 现取视图：一次间接
+/// 调用加按运行时类所实现接口数有界的槽类型比较，常数级。运行时类不实现该接口（动态代理、只走
+/// default 体的对象）时无视图，分派落到代理 / default / AbstractMethodError 回退。
+#[derive(Clone)]
+pub struct __IfaceRef {
     obj: crate::java::lang::Object,
-    vt: Option<NonNull<V>>,
 }
 
-// `vt` 指向 `obj` 所持（Send + Sync）对象，借用期不超过 `obj`
-unsafe impl<V: ?Sized + Send + Sync> Send for __IfaceRef<V> {}
-unsafe impl<V: ?Sized + Send + Sync> Sync for __IfaceRef<V> {}
-
-impl<V: ?Sized> Clone for __IfaceRef<V> {
-    #[inline]
-    fn clone(&self) -> Self { __IfaceRef { obj: self.obj.clone(), vt: self.vt } }
-}
-
-impl<V: ?Sized> std::ops::Deref for __IfaceRef<V> {
+impl std::ops::Deref for __IfaceRef {
     type Target = crate::java::lang::Object;
     #[inline]
     fn deref(&self) -> &crate::java::lang::Object { &self.obj }
 }
 
-impl<V: ?Sized + 'static> __IfaceRef<V> {
-    /// 以 Object 建立接口引用：运行时类实现该接口时取得接口视图指针（`V = dyn I__VTable`）。
-    pub fn new(obj: crate::java::lang::Object) -> Self {
-        let mut slot: Option<NonNull<V>> = None;
-        obj.0.__interface(&mut slot);
-        __IfaceRef { obj, vt: slot }
-    }
-
-    /// 映像对象的接口引用（常量求值可用）：`vt` 是 `obj` 所持映像对象的接口视图
-    pub const fn image(obj: crate::java::lang::Object, vt: &'static V) -> Self {
-        // SAFETY: 引用非空
-        __IfaceRef { obj, vt: Some(unsafe { NonNull::new_unchecked(vt as *const V as *mut V) }) }
-    }
-
-    /// 带接口静态类型的 null（不查询）。
+impl __IfaceRef {
+    /// 以 Object 建立接口引用（不查询；视图在分派入口现取）。常量求值可用：引导映像的接口引用常量、
+    /// 带接口静态类型的 null 同经此建立。
     #[inline]
-    pub const fn null(obj: crate::java::lang::Object) -> Self { __IfaceRef { obj, vt: None } }
+    pub const fn new(obj: crate::java::lang::Object) -> Self { __IfaceRef { obj } }
 
     /// 交出句柄（`From<Iface> for Object`）。
     #[inline]
     pub fn into_object(self) -> crate::java::lang::Object { self.obj }
 
     /// invokeinterface 载体分派的入口部分：接收者为 null 时抛 NullPointerException（先于方法
-    /// 选择），建帧做栈界检查，再交出接口视图；接收者不实现该接口时为 `None`。
+    /// 选择），建帧做栈界检查，再按调用点的接口（`V = dyn I__VTable`）向运行时类存储现取视图；
+    /// 接收者不实现该接口时为 `None`。
     #[inline]
-    pub fn enter(&self) -> crate::error::Result<Option<&V>> {
-        match self.vt {
+    pub fn enter<V: ?Sized + 'static>(&self) -> crate::error::Result<Option<&V>> {
+        let mut slot: Option<NonNull<V>> = None;
+        self.obj.0.__interface(&mut slot);
+        match slot {
             Some(p) => {
                 crate::__stack_check()?;
-                // SAFETY: 不变式——vt 指向 obj 所持对象，obj 与 self 同寿
+                // SAFETY: 指针由句柄所持对象自身上的引用转换得到（同一分配），借用期不超过 self
                 Ok(Some(unsafe { p.as_ref() }))
             }
             None => {
