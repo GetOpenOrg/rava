@@ -104,6 +104,9 @@ crate::__process_static! {
         crate::sync_model::__RefSlot::new(None);
 }
 
+/// 派生 OS 线程失败的 OutOfMemoryError 消息（HotSpot `JVM_StartThread` / `os::create_thread` 失败）
+const NATIVE_THREAD_OOM: &str = "unable to create native thread: possibly out of memory or process/resource limits reached";
+
 fn thread_identity(t: &Thread) -> usize {
     Object::from(Clone::clone(t)).0.__identity() as usize
 }
@@ -133,7 +136,7 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
         });
     if spawned.is_err() {
         crate::gil::note_terminated(daemon);
-        return Err(JvmError::out_of_memory("unable to create native thread"));
+        return Err(JvmError::out_of_memory(NATIVE_THREAD_OOM));
     }
     Ok(())
 }
@@ -145,7 +148,7 @@ fn run_java_thread(t: &Thread) {
     // 档案内无覆盖者时 run 的槽位被裁剪（plain），trait 上不存在该方法，方法调用形态两种情况都成立。
     let result = t.run();
     if let Err(e) = result {
-        e.report_uncaught_in(&format!("{}", t.__get_name()));
+        e.dispatch_uncaught(t);
     }
     t.__set_eetop(0);
     let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
@@ -156,6 +159,7 @@ fn run_java_thread(t: &Thread) {
         let _ = crate::monitor::notify_all(obj.0.__identity() as usize);
         drop(guard);
     }
+    crate::monitor::forget_parker(id);
 }
 
 impl Thread {
@@ -206,7 +210,15 @@ impl Thread {
         let _ = holder.__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
         let daemon = holder.__get_daemon();
         LIVE_THREADS.with(|v| v.borrow_mut().push(Clone::clone(self)));
-        spawn_java_thread(Clone::clone(self), daemon)
+        let spawned = spawn_java_thread(Clone::clone(self), daemon);
+        if spawned.is_err() {
+            // 创建失败回滚（HotSpot JVM_StartThread：native 线程未建成则线程对象保持 NEW、不入线程表）
+            self.__set_eetop(0);
+            let _ = holder.__set_threadStatus(0);
+            let id = thread_identity(self);
+            LIVE_THREADS.with(|v| v.remove_where(|x| thread_identity(x) == id));
+        }
+        spawned
     }
 
     /// native `sleep0(J nanos)`：按挂钟驻留 `nanos` 纳秒。
@@ -437,6 +449,7 @@ fn spawn_vm_system_thread(name: &'static str, body: impl FnOnce() + Send + 'stat
             let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
             let id = thread_identity(&t);
             LIVE_THREADS.with(|v| v.remove_where(|x| thread_identity(x) == id));
+            crate::monitor::forget_parker(id);
             set_current_slot(None);
             set_carrier_slot(None);
             drop(t);
@@ -446,7 +459,7 @@ fn spawn_vm_system_thread(name: &'static str, body: impl FnOnce() + Send + 'stat
         let id = thread_identity(&t);
         LIVE_THREADS.with(|v| v.remove_where(|x| thread_identity(x) == id));
         crate::gil::note_terminated(true);
-        return Err(JvmError::out_of_memory("unable to create native thread"));
+        return Err(JvmError::out_of_memory(NATIVE_THREAD_OOM));
     }
     Ok(())
 }

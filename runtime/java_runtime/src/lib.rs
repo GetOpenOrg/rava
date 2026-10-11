@@ -218,21 +218,24 @@ pub fn create_java_vm() {
     }));
 }
 
-/// 主线程 `main` 返回后的 VM 收尾（JVM `DestroyJavaVM` 同序）：报告主线程未捕获异常 → 等待
-/// 全部非守护平台线程终结 → 运行 shutdown hook（`Shutdown.shutdown`）→ 退出（异常时码 1）。
+/// 主线程 `main` 返回后的 VM 收尾（java 启动器 `LEAVE` 同序）：DetachCurrentThread（主线程未捕获异常经
+/// `Thread.dispatchUncaughtException` 交处理器）→ DestroyJavaVM（等待全部非守护平台线程终结 → 运行
+/// shutdown hook `Shutdown.shutdown`）→ 退出（main 异常时码 1）。
 pub fn destroy_java_vm(result: crate::error::Result<()>) {
     let failed = match result {
         Err(e) => {
-            e.report_uncaught_in("main");
+            match crate::java::lang::Thread::currentThread() {
+                Ok(main) => e.dispatch_uncaught(&main),
+                Err(_) => e.report_uncaught(),
+            }
             true
         }
         Ok(()) => false,
     };
     gil::await_non_daemon_threads();
-    // JVM DestroyJavaVM：非守护线程全部结束后运行 shutdown hook（Shutdown.shutdown 翻译体）
-    if let Err(e) = crate::java::lang::Shutdown::shutdown() {
-        e.report_uncaught_in("DestroyJavaVM");
-    }
+    // JVM DestroyJavaVM：非守护线程全部结束后运行 shutdown hook（Shutdown.shutdown 翻译体）；
+    // 其异常与 HotSpot `JavaThread::invoke_shutdown_hooks` 同样静默清除
+    let _ = crate::java::lang::Shutdown::shutdown();
     if failed {
         std::process::exit(1);
     }

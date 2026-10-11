@@ -411,3 +411,9 @@ pub(crate) fn render_class_meta_table(g: &mut Group, clinit: &BTreeSet<String>, 
 pub(crate) fn render_class_signature_table(g: &mut Group, signatures: &BTreeMap<String, String>) {
     push_pairs(g, "CLASS_SIGNATURE", signatures);
 }
+
+/// NEST_HOST：嵌套成员的 NestHost 属性（声明的宿主）——Class.getNestHost0 的数据源（HotSpot
+/// `InstanceKlass::nest_host` 读同一属性，再以宿主的 NestMembers 校验）。无该属性的类不在表中。
+pub(crate) fn render_nest_host_table(g: &mut Group, hosts: &BTreeMap<String, String>) {
+    push_pairs(g, "NEST_HOST", hosts);
+}

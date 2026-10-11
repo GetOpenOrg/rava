@@ -33,10 +33,13 @@
 //!
 //!   - `wait` 的 `InterruptedException`（中断唤醒）：语料无中断等待，未实现
 //!     （见 thread_impl.rs 模块注释的取舍说明）。
-//!   - 侧表条目不回收（对象回收后指针身份可能复用）：监视器按身份惰性创建且
-//!     数量以「曾被同步块锁定的对象」为界。新建条目时已在对象头置 `MONITOR_MARK`
-//!     （`obj_ref::__mark_monitor`），释放时据此先删条目再归还内存随无 GC 文档
-//!     第三节第 5 条实施。
+//!
+//! ## 侧表回收
+//!
+//! 监视器与 parker 侧表按身份（值地址）惰性建条目，建条目时在对象头置 `MONITOR_MARK`
+//! （`obj_ref::__mark_monitor`，映像对象跳过）；对象最后一个引用释放时 `drop_slow` 据标记
+//! 先调 [`forget`] 摘除条目再归还内存（无 GC 文档第三节第 5 条），地址复用不继承旧状态。
+//! 线程结束时另以 [`forget_parker`] 摘除其 parker。
 //!
 //! ## null
 //!
@@ -300,13 +303,18 @@ struct Parker {
     cv: Condvar,
 }
 
+/// 线程身份 → parker（惰性创建）。新建条目时同监视器在线程对象头置 `MONITOR_MARK`：线程对象释放时
+/// 由 [`forget`] 一并摘除（线程结束时 [`forget_parker`] 先行摘除，其后的 unpark 可能重建）。
 fn parker_for(thread_identity: usize) -> Arc<Parker> {
-    static PARKERS: IdentityTable<Arc<Parker>> = IdentityTable::new();
     let mut table = PARKERS.shard(thread_identity);
-    Clone::clone(table.entry(thread_identity).or_insert_with(|| Arc::new(Parker {
-        state: Mutex::new(ParkState { permit: false, interrupted: false, waiting_on: None }),
-        cv: Condvar::new(),
-    })))
+    Clone::clone(table.entry(thread_identity).or_insert_with(|| {
+        // SAFETY: thread_identity 是调用方持有引用的存活线程对象的身份（值地址），非 null
+        unsafe { crate::obj_ref::__mark_monitor(thread_identity as *const ()) };
+        Arc::new(Parker {
+            state: Mutex::new(ParkState { permit: false, interrupted: false, waiting_on: None }),
+            cv: Condvar::new(),
+        })
+    }))
 }
 
 /// `Unsafe.park(isAbsolute, time)`：消费许可；无许可且未中断时阻塞至 unpark /
@@ -458,6 +466,22 @@ impl<V> IdentityTable<V> {
 }
 
 static MONITORS: IdentityTable<Arc<Monitor>> = IdentityTable::new();
+static PARKERS: IdentityTable<Arc<Parker>> = IdentityTable::new();
+
+/// 对象释放（`obj_ref` 的 `drop_slow`，对象头带 `MONITOR_MARK`）：先摘除该身份的监视器与 parker
+/// 条目再归还内存——地址复用后的新对象不会继承旧监视器 / 许可。条目在分片锁外释放。
+/// 最后一个引用已释放，不再有线程持有或等待该对象的监视器（进入者 / 等待者都持有对象引用）。
+pub(crate) fn forget(identity: usize) {
+    let monitor = MONITORS.shard(identity).remove(&identity);
+    let parker = PARKERS.shard(identity).remove(&identity);
+    drop((monitor, parker));
+}
+
+/// 线程结束（JVM thread exit）：摘除其 parker（许可与中断镜像随线程终结失效）。
+pub fn forget_parker(thread_identity: usize) {
+    let parker = PARKERS.shard(thread_identity).remove(&thread_identity);
+    drop(parker);
+}
 
 /// null 的身份（全部 null 共用 `JVM_NULL` 哨兵的地址）
 #[inline(always)]

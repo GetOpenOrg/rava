@@ -81,4 +81,28 @@ impl Throwable {
         self.__set_backtrace(Object::from_any(frames));
         Ok(Clone::clone(self))
     }
+
+    /// VM 原生栈帧打印（HotSpot `java_lang_Throwable::print_stack_trace` 的帧行，不经 Java 层）：
+    /// 按 `backtrace` 载体逐帧给出 `cls.method(File.java:N)`（`Native Method` / `Unknown Source` /
+    /// 无行号三种退化同 StackTraceElement）。载体缺失（未填栈）时为空。引导失败出口专用。
+    #[doc(hidden)]
+    pub fn __vm_frame_lines(t: &Throwable) -> Vec<std::string::String> {
+        let backtrace = t.__get_backtrace();
+        let Some(frames) = backtrace.0.as_any().downcast_ref::<Rc<StackTraceFrames>>() else {
+            return Vec::new();
+        };
+        frames
+            .entries
+            .iter()
+            .map(|e| {
+                let at = match (&e.file_name, e.line_number) {
+                    (_, -2) => "Native Method".to_owned(),
+                    (Some(f), n) if n >= 0 => format!("{f}:{n}"),
+                    (Some(f), _) => f.clone(),
+                    (None, _) => "Unknown Source".to_owned(),
+                };
+                format!("{}.{}({})", e.declaring_class, e.method_name, at)
+            })
+            .collect()
+    }
 }

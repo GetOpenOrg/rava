@@ -203,33 +203,55 @@ impl JvmError {
         }
     }
 
-    /// main 线程未捕获异常出口：按 Java 格式输出到 stderr，进程退出码 1。
-    /// `RUST_BACKTRACE` 设为非 `0` 时附打印 Rust backtrace（定位抛出点）。
+    /// 引导序列（`image_rt::run`）失败出口：与 HotSpot `vm_exit_during_initialization` 同构——
+    /// 引导期 Java 层（System.err、printStackTrace）未必就绪，由 VM 原生打印：tty（标准输出）先打
+    /// `Error occurred during initialization of VM`，再按 `java_lang_Throwable::print_stack_trace`
+    /// 打异常描述、`\tat` 帧（取自 `backtrace` 载体）与 `Caused by:` 链，进程退出码 1。
     pub fn report_uncaught(&self) -> ! {
-        self.report_uncaught_in("main");
+        use std::io::Write;
+        let mut out = std::string::String::from("Error occurred during initialization of VM\n");
+        let mut cur = Clone::clone(self);
+        for depth in 0..16 {
+            if depth > 0 {
+                out.push_str("Caused by: ");
+            }
+            out.push_str(&cur.describe());
+            out.push('\n');
+            if !cur.is_instance_of("java/lang/Throwable") {
+                break;
+            }
+            let t: Throwable = cur.catch_as::<Throwable>();
+            for frame in crate::java::lang::Throwable::__vm_frame_lines(&t) {
+                out.push_str("\tat ");
+                out.push_str(&frame);
+                out.push('\n');
+            }
+            let Ok(next) = t.getCause() else { break };
+            let next_obj = Object::from(Clone::clone(&next));
+            if next_obj.0.is_jvm_null() || next_obj == Object::from(Clone::clone(&t)) {
+                break;
+            }
+            cur = JvmError::from(next);
+        }
+        out.push('\n');
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.flush();
         std::process::exit(1)
     }
 
-    /// 线程 `thread` 的未捕获异常报告（不退出进程：JVM 中只终结该线程）。
-    pub fn report_uncaught_in(&self, thread: &str) {
-        eprintln!("Exception in thread \"{}\" {}", thread, self.describe());
-        // JVM printStackTrace 的 `Caused by:` 链（无栈帧行）：cause 经虚调用 `getCause()` 取得——子类覆盖
-        // （如 javax.xml.transform.TransformerException 的 getCause 返回 containedException）与 JDK 同样生效；
-        // Throwable.getCause 自身把 cause == this（未设置哨兵）答为 null。getCause 抛异常时停止
-        if self.is_instance_of("java/lang/Throwable") {
-            let mut cur: Throwable = self.catch_as::<Throwable>();
-            for _ in 0..16 {
-                let Ok(next) = cur.getCause() else { break };
-                let next_obj = Object::from(Clone::clone(&next));
-                if next_obj.0.is_jvm_null() || next_obj == Object::from(Clone::clone(&cur)) {
-                    break;
-                }
-                eprintln!("Caused by: {}", JvmError::from(Clone::clone(&next)).describe());
-                cur = next;
-            }
-        }
-        if std::env::var("RUST_BACKTRACE").map(|v| v != "0").unwrap_or(false) {
-            eprintln!("{}", std::backtrace::Backtrace::force_capture());
+    /// 线程未捕获异常（HotSpot `JavaThread::exit`）：虚调用 Java `Thread.dispatchUncaughtException(e)`——
+    /// 经线程的 UncaughtExceptionHandler（缺省为线程组 → 默认处理器 → `System.err` 上
+    /// `Exception in thread "名" ` + `printStackTrace`，带 `at` 帧与 `Caused by:` 链）。处理器自身抛出时
+    /// 与 HotSpot 同样由 VM 打印一行后清除。不退出进程：JVM 中只终结该线程。
+    pub fn dispatch_uncaught(&self, thread: &crate::java::lang::Thread) {
+        let throwable: Throwable = self.catch_as::<Throwable>();
+        if let Err(e) = thread.dispatchUncaughtException(throwable) {
+            eprint!(
+                "\nException: {} thrown from the UncaughtExceptionHandler in thread \"{}\"\n",
+                e.class_name().replace('/', "."),
+                thread.__get_name()
+            );
         }
     }
 }

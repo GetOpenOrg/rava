@@ -125,7 +125,7 @@ impl Class {
 
     /// native `Class.forName0(name, initialize, loader, caller)`：按 binary name 取 Class 对象。
     /// 原生镜像的「可加载类」= 生成闭包内的类（java_meta 修饰符表，含用户类）；数组名
-    /// （`[I` / `[Ljava.lang.String;`）直接构造。未知类名 → `ClassNotFoundException(name)`
+    /// （`[I` / `[Ljava.lang.String;`）直接构造。name 为 null → NPE（Class.c 同）；未知类名 → `ClassNotFoundException(name)`
     /// （JDK 同消息）。initialize=true（`Class.forName(String)` 的缺省）立即执行类初始化
     /// （JLS §12.4.1 / FS-C5）：经 main 启动时登记的类初始化钩子（有 `<clinit>` 的用户类）
     /// 按名代调 `__class_init`，初始化异常按状态机语义传播（ExceptionInInitializerError /
@@ -133,6 +133,10 @@ impl Class {
     #[jvm_native]
     pub fn forName0(name: String, initialize: bool, _loader: crate::java::lang::ClassLoader,
                     _caller: Class) -> Result<Class> {
+        // Class.c：classname == NULL → NullPointerException（无消息）
+        if name.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
         let dotted = format!("{}", name);
         let slash = dotted.replace('.', "/");
         let known = Class::__is_known_class(&slash);

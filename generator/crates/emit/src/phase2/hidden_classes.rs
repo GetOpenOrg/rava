@@ -54,6 +54,8 @@ fn declaration(ctx: &EmitCtx<'_>, site: &SamSite) -> String {
     if let Some(loader) = ctx.defining_loader(host_of(&site.hidden)) {
         l.push(format!("    #[defining_loader   = \"{loader}\"]"));
     }
+    // 隐藏巢成员（LambdaMetafactory 以 NESTMATE 定义）：VM 在定义点写入查找类的巢宿主
+    l.push(format!("    #[nest_host         = \"{}\"]", q(host_of(&site.hidden))));
     l.push(format!("    #[all_supertypes    = \"{}\"]", q(&supers.join(";"))));
     l.push("    #[is_hidden         = true]".to_string());
     l.push("}".to_string());

@@ -347,9 +347,6 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
         if !is_static {
             pp::normalize_this_clone(&mut lines, false);
         }
-        if ret == "bool" {
-            pp::fix_bool_returns(&mut lines);
-        }
         pp::remove_trailing_return_ok(&mut lines);
         pp::add_ok_return(&mut lines, &ret, function_always_returns(&req.code.map(|c| cfg_view(&c.insns)).unwrap_or_default()));
     }

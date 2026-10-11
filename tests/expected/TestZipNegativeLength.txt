@@ -1,0 +1,11 @@
+setInput neg len: java.lang.ArrayIndexOutOfBoundsException: Range [0, 0 + -1) out of bounds for length 23
+setInput neg off: java.lang.ArrayIndexOutOfBoundsException: Range [-1, -1 + 2) out of bounds for length 23
+setInput over: java.lang.ArrayIndexOutOfBoundsException: Range [20, 20 + 10) out of bounds for length 23
+deflate neg len: java.lang.ArrayIndexOutOfBoundsException: Range [0, 0 + -5) out of bounds for length 16
+deflate over: java.lang.ArrayIndexOutOfBoundsException: Range [10, 10 + 10) out of bounds for length 16
+setDictionary neg: java.lang.ArrayIndexOutOfBoundsException: Range [0, 0 + -3) out of bounds for length 23
+deflated ok: true
+inflater setInput neg: java.lang.ArrayIndexOutOfBoundsException: Range [0, 0 + -1) out of bounds for length 128
+inflate neg len: java.lang.ArrayIndexOutOfBoundsException: Range [0, 0 + -1) out of bounds for length 16
+inflate neg off: java.lang.ArrayIndexOutOfBoundsException: Range [-2, -2 + 4) out of bounds for length 16
+inflated: hello hello hello hello
