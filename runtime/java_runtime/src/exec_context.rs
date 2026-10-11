@@ -190,6 +190,11 @@ pub fn native_exit() {
     pins().native_exited();
 }
 
+/// 当前执行流栈上的 native 帧数（区域登记的深度判定，见 `region.rs`）
+pub fn native_depth() -> u32 {
+    pins().natives()
+}
+
 /// `doYield` 的判定（当前执行流为最内层）；不在 Continuation 内返回 None
 pub fn yield_pinned_reason() -> Option<i32> {
     pins().yield_reason()

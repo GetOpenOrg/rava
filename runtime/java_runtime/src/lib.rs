@@ -8,6 +8,7 @@ pub mod handle;
 #[doc(hidden)]
 pub mod image_rt;
 pub mod obj_ref;
+pub mod region;
 pub mod sync_model;
 pub mod gil;
 pub mod reflect_dispatch;
@@ -537,4 +538,5 @@ pub mod prelude {
     pub use super::MutexHolder;
     pub use rava_macros::{jvm_native, jvm_boundary, jvm_ext};
     pub use rava_macros::java_try;
+    pub use crate::java_scope;
 }

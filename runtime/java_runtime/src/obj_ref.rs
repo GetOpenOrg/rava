@@ -245,7 +245,77 @@ impl<T> __Obj<T> {
             (base as *mut Header).write(Header::heap(size));
             let value = base.add(HEAD) as *mut T;
             init(value);
-            __Obj { ptr: NonNull::new_unchecked(value), _owns: PhantomData }
+            let obj = __Obj { ptr: NonNull::new_unchecked(value), _owns: PhantomData };
+            // 区域整组释放（无 GC 文档 §4.5）：活动区域内的分配登记入区域日志，日志持有一个强引用
+            if crate::region::__on_alloc(value as *mut u8, Self::GROUP_OPS) {
+                obj.inc();
+            }
+            obj
+        }
+    }
+
+    /// 本类型对象的整组释放操作（区域日志条目，单态化）
+    const GROUP_OPS: &'static group::Ops = &group::Ops {
+        // SAFETY（三个函数）：`p` 是本类型对象的值地址（区域日志登记时的 `value`）
+        drop_value: |p| unsafe { std::ptr::drop_in_place(p as *mut T) },
+        release: |p| drop(__Obj::<T> { ptr: unsafe { NonNull::new_unchecked(p as *mut T) }, _owns: PhantomData }),
+        type_name: std::any::type_name::<T>,
+    };
+}
+
+/// 区域整组释放的对象级操作（`region.rs` 调用；对象头细节只在本模块）
+pub(crate) mod group {
+    use super::{Header, ALIGN, HEAD};
+    use std::alloc::Layout;
+    use std::sync::atomic::{fence, Ordering};
+
+    /// 整组释放期间组内对象强计数的哨兵基数：组内互相释放只在其上递减，不会归零进 `drop_slow`
+    const BIG: usize = 1 << 61;
+
+    /// 一个类型的整组释放操作
+    pub(crate) struct Ops {
+        /// 析构值（含尾随元素），不归还分配
+        pub(crate) drop_value: unsafe fn(*mut u8),
+        /// 按普通路径释放一个强引用（异常出口撤销区域持有）
+        pub(crate) release: unsafe fn(*mut u8),
+        /// 诊断用类型名
+        pub(crate) type_name: fn() -> &'static str,
+    }
+
+    fn header(value: *mut u8) -> &'static Header {
+        // SAFETY: 调用方保证 value 是存活堆对象的值地址，前 HEAD 字节为其对象头
+        unsafe { &*(value.sub(HEAD) as *const Header) }
+    }
+
+    /// 整组释放（区域正常出口）：① 计数改为 `BIG + 计数`；② 逐个析构值；③ 逐个归还分配。
+    /// 逃逸判定保证组外对象不持有组内对象，② 之后组内计数恰为 `BIG + 1`（区域日志那一个）。
+    ///
+    /// # Safety
+    /// `objs` 为区域日志段：每项是本执行流在区域内登记、仍由日志持有的对象，且逃逸分析已证明
+    /// 区域结束后组外不再引用它们。
+    pub(crate) unsafe fn free(objs: &[(*mut u8, &'static Ops)]) {
+        crate::sync_model::__assert_no_field_lock("区域整组释放");
+        for &(p, _) in objs {
+            header(p).strong.fetch_add(BIG, Ordering::Relaxed);
+        }
+        fence(Ordering::Acquire);
+        for &(p, ops) in objs {
+            // SAFETY: 值存活（日志持有），计数带哨兵不会被组内释放归零
+            unsafe { (ops.drop_value)(p) };
+        }
+        if cfg!(debug_assertions) {
+            for &(p, ops) in objs {
+                let n = header(p).strong.load(Ordering::Relaxed);
+                if n != BIG + 1 {
+                    // 诊断：逃逸判定不成立（不是回收机制）；不归还分配，对象泄漏
+                    panic!("区域逃逸：{} 在整组释放后仍有 {} 个组外引用", (ops.type_name)(), n.wrapping_sub(BIG + 1));
+                }
+            }
+        }
+        for &(p, _) in objs {
+            let size = header(p).size();
+            // SAFETY: 值已析构，组外无引用；分配大小来自对象头（与 drop_slow 同一路径）
+            unsafe { std::alloc::dealloc(p.sub(HEAD), Layout::from_size_align_unchecked(size, ALIGN)) };
         }
     }
 }

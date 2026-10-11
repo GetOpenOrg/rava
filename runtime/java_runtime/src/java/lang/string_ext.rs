@@ -137,7 +137,11 @@ impl From<&str> for String {
     /// 字面量属于常量池驻留项，故经全局驻留表取规范实例——相同内容的字面量
     /// 与 `intern()` 结果是同一对象（JLS §3.10.5）。拼接等非字面量构造走
     /// `from_owned` / `of`（新对象，不入表），与 Java 语义一致。
-    fn from(s: &str) -> Self { String::from_owned(s.to_owned()).__interned() }
+    fn from(s: &str) -> Self {
+        // 驻留表是全局缓存：新建的规范实例不登记进活动区域（无 GC 文档 §4.5）
+        let _suspend = crate::region::__Suspend::new();
+        String::from_owned(s.to_owned()).__interned()
+    }
 }
 
 impl From<std::string::String> for String {

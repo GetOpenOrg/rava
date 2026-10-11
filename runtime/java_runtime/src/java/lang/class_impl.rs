@@ -57,6 +57,8 @@ impl Class {
             static CLASSES: RefCell<HashMap<std::string::String, Class>> =
                 RefCell::new(HashMap::new());
         }
+        // 类镜像全进程缓存：其分配不登记到所在区域（逃逸分析视 ldc Class 为区域外已有对象）
+        let _suspend = crate::region::__Suspend::new();
         let key = format!("{}", binary_name);
         // 映像中的类镜像（构建期建立，名字 / 组件类型 / 模块已写定）是该类的规范镜像
         if let Some(c) = crate::image_rt::image_mirror(&key) {

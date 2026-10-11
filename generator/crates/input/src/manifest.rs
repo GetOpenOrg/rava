@@ -43,6 +43,19 @@ impl IndyKind {
     }
 }
 
+/// 逃逸分析对 native / 手写方法的效果登记（`[escape]`，无 GC 文档 §4.5）；未登记即不透明
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscapeEffect {
+    /// 不存放、不保留实参；返回基本类型，或与实参无关的既有对象 / native 期间的（不登记的）分配
+    Pure,
+    /// 同 `Pure`，但返回接收者本身
+    ReturnsReceiver,
+    /// 把第 1 个实参数组的元素复制进第 3 个实参数组（`arraycopy` 形态）
+    ArrayCopy,
+    /// 同 `Pure`，但返回 native 期间新建、内容为空的对象（不登记，可被区域对象引用）
+    Fresh,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeManifest {
     /// 类型层 txt 清单（签名擦除接口 / 重载缩写）
@@ -61,6 +74,8 @@ pub struct RuntimeManifest {
     pub class_path_readers: Vec<String>,
     /// VM 内建成员
     pub intrinsic_members: BTreeSet<String>,
+    /// 逃逸分析效果登记：`类.方法:描述符` → 效果
+    pub escape_effects: BTreeMap<String, EscapeEffect>,
     pub caller_sensitive_annotations: BTreeSet<String>,
     pub sigpoly_callsite_typed: BTreeSet<String>,
     /// 引导方法（`类.方法`）→ 分类
@@ -159,6 +174,25 @@ fn intrinsics(vm: &Table) -> Result<BTreeSet<String>, InputError> {
     Ok(out)
 }
 
+fn escape_effects(vm: &Table) -> Result<BTreeMap<String, EscapeEffect>, InputError> {
+    let sec = section(vm, "escape");
+    let mut out = BTreeMap::new();
+    for (key, eff) in [
+        ("pure", EscapeEffect::Pure),
+        ("returns_receiver", EscapeEffect::ReturnsReceiver),
+        ("array_copy", EscapeEffect::ArrayCopy),
+        ("fresh", EscapeEffect::Fresh),
+    ] {
+        for m in str_list(sec, key, "escape")? {
+            if split_member(&m).is_none() {
+                return Err(InputError::Manifest(format!("escape.{key}：应为 `类.方法:描述符`：{m}")));
+            }
+            out.insert(m, eff);
+        }
+    }
+    Ok(out)
+}
+
 fn indy_kinds(vm: &Table) -> Result<BTreeMap<String, IndyKind>, InputError> {
     let sec = section(vm, "indy");
     let mut out = BTreeMap::new();
@@ -199,6 +233,7 @@ impl RuntimeManifest {
             module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
             class_path_readers: str_list(section(&vm, "class_path"), "resource_readers", "class_path")?,
             intrinsic_members: intrinsics(&vm)?,
+            escape_effects: escape_effects(&vm)?,
             caller_sensitive_annotations: str_list(section(&vm, "caller_sensitive"), "annotations", "caller_sensitive")?
                 .into_iter()
                 .collect(),

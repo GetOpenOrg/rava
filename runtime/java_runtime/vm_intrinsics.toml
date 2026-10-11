@@ -961,6 +961,29 @@ members = [
 #   object_methods  native 的细分（record 的 equals / hashCode / toString）：静态实参里的 getter 句柄
 #           读出各分量，引用分量按调用点名派发同名 Object 方法（描述符 = indy 描述符去掉首个 record 形参）
 # 未列出的引导方法按普通静态调用分析其 Java 体（安全方向）。
+# 逃逸分析的方法效果（无 GC 第一步，docs/plans/2026-10-07-no-gc-memory-model.md §4.5）。
+# 分析器遇到 native / 手写方法时缺省保守拒绝区域；这里登记其对引用图的确切效果，
+# 让常见路径（异常构造、数组复制）不阻断区域：
+# - pure：不保存任何实参、不返回实参可达对象（返回值视为区域外已有对象或基本类型）
+# - returns_receiver：只返回接收者本身，不保存实参
+# - array_copy：`(src, srcPos, dst, dstPos, len)`，dst 的内容并入 src 的内容
+# - fresh：不保存实参，返回 native 内新建、内容为空的对象（运行时类未知；native 帧内分配不登记进区域）
+[escape]
+pure = [
+    "java/lang/NullPointerException.getExtendedNPEMessage:()Ljava/lang/String;",
+    "java/lang/Object.getClass:()Ljava/lang/Class;",
+    "java/lang/Object.hashCode:()I",
+]
+fresh = [
+    "java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;",
+]
+returns_receiver = [
+    "java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;",
+]
+array_copy = [
+    "java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V",
+]
+
 [indy]
 lambda = [
     "java/lang/invoke/LambdaMetafactory.metafactory",
