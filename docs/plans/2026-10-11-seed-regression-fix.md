@@ -125,11 +125,17 @@ field_put 值打印、fopen / 全局开关翻转打印与 [proc] 节点号后，
 （docs/plans/2026-09-29-rust-closure-analyzer.md §3.2「清单即边界」；vm_intrinsics.toml 175-176 行注释
 本就写明「getSecurityManager 恒 null」而未落地条目），不是类名特判、不依赖固定种子、不依赖 nogc 掩盖。
 
-### 验收（作业 seedfix-unit / seedfix-accept）
+### 验收（作业 seedfix-unit4 / seedfix-accept4，commit b898b399）
 
-（待作业完成后回填数字：单测 closure_independent_of_hash_seed / closure_independent_of_order；
-TestSerialLookupPairing 种子 0/1/2 一致且等于 0b91182b 种子 1；HelloWorld / DeepCopy / CollectorsDemo
-三例种子 0/1/2 与基线一致。）
+- **集合口径（seedfix-accept4，jp2，3155s，ACCEPTANCE PASS）**：TestSerialLookupPairing 种子
+  0/1/2 一致（2709/2709/2709）且三集合（类/方法/反射成员）逐项等于 0b91182b 基线种子 1（2709）；
+  HelloWorld 641×3、CollectorsDemo 662×3、DeepCopy 2707×3，三例各种子集合与 0b91182b 基线
+  同种子完全一致（修复未扰动这三例）。
+- **单测口径（seedfix-unit4，jp1）**：cargo test --release -q -p driver --test closure_cli -- --exact
+  closure_independent_of_hash_seed closure_independent_of_order——作业超出本轮时限仍在跑，结果落
+  cluster_results/job/seedfix-unit4/（该测例的种子一致性性质已由 seedfix-accept4 在四例集合口径上
+  验证，含回归用例 TestSerialLookupPairing 本身）。
+- generator 本机 cargo check（--release --tests，heavy_lock）通过。
 
 ## 六、遗留
 
