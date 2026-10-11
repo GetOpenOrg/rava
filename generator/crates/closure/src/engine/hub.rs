@@ -7,9 +7,9 @@ use super::*;
 impl<'a> Engine<'a> {
     // ── 派发枢纽 ────────────────────────────────────────────────────────────
 
-    /// 取（或建立）枢纽。精确集合枢纽的父枢纽：调用点原枢纽，其集合须是本集合的子集
+    /// 取（或建立）枢纽
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn hub(&mut self, mref: &MemberRef, iface: bool, owner: u32, set: HubSet, parent: Option<u32>, site: &resolve::MethodSite, md: &classfile::descriptor::MethodDesc, via: Via) -> u32 {
+    pub(super) fn hub(&mut self, mref: &MemberRef, iface: bool, owner: u32, set: HubSet, site: &resolve::MethodSite, md: &classfile::descriptor::MethodDesc, via: Via) -> u32 {
         // 档位上下文的调用点各用一族枢纽（目标在档位上下文中克隆，见 `levels_boot.rs`）
         let lc = self.via_level(&via);
         let key = (mref.clone(), iface, set, lc);
@@ -19,99 +19,57 @@ impl<'a> Engine<'a> {
         let h = self.hubs.len() as u32;
         let ptypes = md.params.iter().map(|p| self.ptype(p)).collect();
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
-        let (open, pending, parent, set) = match &key.2 {
-            HubSet::Open(o) | HubSet::Vm(o) => (Some(*o), Vec::new(), None, None),
-            HubSet::Grow(..) => (None, Vec::new(), None, None),
-            HubSet::Exact(rs) => {
-                let parent = self.hub_parent(&key.0, iface, lc, rs, parent);
-                let pending = match parent.and_then(|p| self.hubs[p as usize].set.clone()) {
-                    Some(ps) => sorted_minus(rs, &ps),
-                    None => rs.to_vec(),
-                };
-                (None, pending, parent, Some(rs.clone()))
-            }
+        let open = match &key.2 {
+            HubSet::Open(o) | HubSet::Vm(o) => Some(*o),
+            HubSet::Grow(_) => None,
         };
-        let (lambdas, special) = parent.map(|p| (self.hubs[p as usize].lambdas.clone(), self.hubs[p as usize].special.clone())).unwrap_or_default();
         self.hubs.push(Hub {
             site: site.clone(),
             owner,
             open,
-            parent,
-            set,
             ptypes,
             ret,
             vals: None,
             via,
             expanded: false,
-            pending,
             recvs: BTreeSet::new(),
             plain: BTreeSet::new(),
-            lambdas,
-            special,
+            lambdas: Rc::default(),
+            special: BTreeMap::new(),
             links: BTreeMap::new(),
             link_seq: 0,
             edged: HashSet::default(),
             anchor: None,
             ltargets: BTreeSet::new(),
             lhubs: BTreeSet::new(),
+            lbind: BTreeSet::new(),
         });
-        if let HubSet::Exact(rs) = &key.2 {
-            let fam = self.hub_family.entry((key.0.clone(), iface, lc)).or_default();
-            let at = fam.partition_point(|x| x.1.len() <= rs.len());
-            fam.insert(at, (h, rs.clone()));
-        }
         self.hub_ids.insert(key, h);
         if let Some(o) = open {
             self.hubs_by_open.entry(o).or_default().push(h);
         }
-        if let Some(p) = parent {
-            // 父枢纽承接集合的旧部分：实参下传、返回值上汇
-            let (ptypes, ret) = (self.hubs[h as usize].ptypes.clone(), self.hubs[h as usize].ret);
-            for j in 0..ptypes.len() {
-                self.pstr_edge(PSlot::H(h, j), PSlot::H(p, j));
-            }
-            for (j, pt) in ptypes.iter().enumerate() {
-                if let Some(pt) = pt {
-                    self.flow(Node::HP(h, j as u16), Node::HP(p, j as u16), *pt);
-                }
-            }
-            if let Some(rt) = ret {
-                self.flow(Node::HR(p), Node::HR(h), rt);
-            }
-            cut::edge_plain(&format!("H:{h}"), &format!("H:{p}"));
-        }
         h
     }
 
-    /// 精确集合枢纽 rs 的父枢纽：同族（调用成员与接口标志相同）已展开的精确集合枢纽中、集合为 rs 子集的最大者
-    /// （调用点原枢纽 last 也是候选）。父枢纽承接其集合部分，新枢纽只展开差集：同一成员在大体相同的接收者集合上
-    /// 派发的各调用点（不同上下文的同一调用点、汇自同一值池的各调用点）共用已展开的部分，不各自展开全集。
-    /// 目标、实参与返回值的汇合与无父时相同（见 [`Hub`]）。族内按大小降序试探，未命中的试探次数有上限
-    fn hub_parent(&self, mref: &MemberRef, iface: bool, lc: u32, rs: &[u32], last: Option<u32>) -> Option<u32> {
-        const TRIES: usize = 16;
-        let usable = |p: u32| {
-            let ph = &self.hubs[p as usize];
-            ph.open.is_none() && ph.expanded && ph.pending.is_empty()
+    /// 精确接收者 recv（升序）达 `HUB_MIN` 的调用点经增长枢纽派发：按接收值来源 fs 取枢纽（来源全为图节点时按来源共用，
+    /// 否则按调用点；objs = 只收抽象对象的非虚调用点），接入并并入接收者（已并入的跳过）。
+    /// 枢纽只随来源建立、不随接收者集合的增长新建：同一来源的值集在各调用点恒同，枢纽数 = 来源数
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn grow_hub(&mut self, m: usize, off: u32, mref: &MemberRef, iface: bool, owner: u32, fs: &[Feed], objs: bool, recv: &[u32], site: &resolve::MethodSite, md: &classfile::descriptor::MethodDesc, via: Via, a: &Args, res: Option<Node>) -> u32 {
+        let src = match fs.iter().map(|f| if let Feed::N(n) = f { Some(*n) } else { None }).collect::<Option<Vec<Node>>>() {
+            Some(mut ns) => {
+                ns.sort_unstable();
+                ns.dedup();
+                GrowSrc::Nodes(ns.into(), objs)
+            }
+            None => GrowSrc::Site(m, off),
         };
-        let set = |p: u32| self.hubs[p as usize].set.as_deref();
-        let best = last.filter(|&p| set(p).is_some_and(|ps| sorted_subset(ps.iter().copied(), rs)));
-        let best_len = best.and_then(set).map_or(0, <[u32]>::len);
-        let Some(fam) = self.hub_family.get(&(mref.clone(), iface, lc)) else { return best };
-        let end = fam.partition_point(|x| x.1.len() <= rs.len());
-        let mut tries = 0;
-        for (p, ps) in fam[..end].iter().rev() {
-            if ps.len() <= best_len || tries >= TRIES {
-                break;
-            }
-            if !usable(*p) {
-                continue;
-            }
-            tries += 1;
-            if sorted_subset(ps.iter().copied(), rs) {
-                return Some(*p);
-            }
+        let h = self.hub(mref, iface, owner, HubSet::Grow(src), site, md, via);
+        self.link_hub(h, m, off, a, res);
+        for &r in recv {
+            self.hub_recv(h, r);
         }
-        best
+        h
     }
 
     /// 调用点接入枢纽：实参汇入 `HP`，`HR` 流向结果；逐调用点派发的接收者对本调用点派发
@@ -195,13 +153,9 @@ impl<'a> Engine<'a> {
             id
         };
         let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
-        // 本调用点已接入的最近祖先：它的 lambda 接收者都已送达本调用点（`hub_lsent` 已登记，重放即跳过），
-        // 故与它的 lambda 表相同的前缀直接跳过，结果与逐个查登记相同
-        let anc = if replay { self.linked_ancestor(m, off, h) } else { None };
         // 字节码接入点：lambda 读者只建在枢纽锚点，实参 / 结果取枢纽节点（见 `Hub::anchor`）
         let at_anchor = replay && *self.hubs[h as usize].anchor.get_or_insert((m, off)) == (m, off);
-        let skip = if replay { 0 } else { anc.map_or(0, |p| common_prefix(&lambdas, &self.hubs[p as usize].lambdas)) };
-        let lambdas: &[u32] = if replay && !at_anchor { &[] } else { &lambdas[skip..] };
+        let lambdas: &[u32] = if replay && !at_anchor { &[] } else { &lambdas[..] };
         let (la, lres) = if replay { self.hub_lambda_call(h) } else { (a.clone(), res) };
         let saved = if replay { self.call_vals.take() } else { None };
         // 锚点上的读者归本枢纽；非字节码接入点逐调用点派发，归属同接入记录
@@ -227,9 +181,6 @@ impl<'a> Engine<'a> {
             self.call_vals = saved;
         }
         for (t, rs) in special {
-            if anc.is_some_and(|p| self.ancestor_sent(p, t, &rs)) {
-                continue;
-            }
             if matches!(self.methods[t].ret_model, RetModel::HandleAccess(_)) {
                 // 句柄存取入口按接收者逐个接边（与 `hub_recv` 同口径）：合成值集会把来源标记一并归为
                 // 「由标记给出身份」，本调用点不登记所指字段，结果随调用点经父枢纽还是直接收到接收者而变
@@ -296,28 +247,7 @@ impl<'a> Engine<'a> {
         self.call_vals = saved;
     }
 
-    /// 枢纽 h 的祖先中调用点 (m, off) 已接入的最近者
-    fn linked_ancestor(&self, m: usize, off: u32, h: u32) -> Option<u32> {
-        let linked = self.hub_linked.get(&m)?;
-        let mut p = self.hubs[h as usize].parent;
-        while let Some(a) = p {
-            if linked.contains(&(off, a)) {
-                return Some(a);
-            }
-            p = self.hubs[a as usize].parent;
-        }
-        None
-    }
-
-    /// 调用点已接入的祖先 a 已把目标 t 的接收者 rs 全部送达：重放恒等。
-    /// 精确集合枢纽在首个调用点接入时一次展开、其后接收者不再增长，子枢纽的接收者表以父枢纽的为前缀，
-    /// 故已接入的祖先的接收者表即本调用点经它收到的全部接收者。与祖先共享同一张表（未追加过）时直接成立
-    fn ancestor_sent(&self, a: u32, t: usize, rs: &Rc<Vec<u32>>) -> bool {
-        let Some(ps) = self.hubs[a as usize].special.get(&t) else { return rs.is_empty() };
-        Rc::ptr_eq(ps, rs) || rs.len() <= ps.len() && (ps.starts_with(rs) || rs.iter().all(|r| ps.contains(r)))
-    }
-
-    /// 实参常量并入枢纽（沿父链下传）；变化时重新并入各中转目标
+    /// 实参常量并入枢纽；变化时重新并入各中转目标
     pub(super) fn hub_vals(&mut self, h: u32, mine: &[PV]) {
         let hub = &mut self.hubs[h as usize];
         let joined: Vec<PV> = match &hub.vals {
@@ -327,14 +257,11 @@ impl<'a> Engine<'a> {
         if hub.vals.as_ref() == Some(&joined) {
             return;
         }
-        hub.vals = Some(joined.clone());
-        let parent = hub.parent;
+        hub.vals = Some(joined);
         for t in hub.plain.clone() {
             self.hub_bind(h, t);
         }
-        if let Some(p) = parent {
-            self.hub_vals(p, &joined);
-        }
+        self.hub_lrebind(h);
     }
 
     pub(super) fn hub_expand(&mut self, h: u32) {
@@ -345,11 +272,8 @@ impl<'a> Engine<'a> {
         if std::mem::replace(&mut hub.expanded, true) {
             return;
         }
-        let xs = match hub.open {
-            Some(o) => self.g_of(o).to_vec(),
-            None => std::mem::take(&mut hub.pending),
-        };
-        for x in xs {
+        let Some(o) = hub.open else { return };
+        for x in self.g_of(o).to_vec() {
             self.hub_recv(h, x);
         }
     }
@@ -536,7 +460,7 @@ impl<'a> Engine<'a> {
         let Some(md) = parse_method(&key.desc) else { return };
         let owner = self.id(&key.owner);
         let before = self.hubs.len();
-        let h = self.hub(key, iface, owner, HubSet::Vm(owner), None, &site, &md, via);
+        let h = self.hub(key, iface, owner, HubSet::Vm(owner), &site, &md, via);
         self.vm_hub_bind(h, bind);
         if (h as usize) < before {
             return;
@@ -545,39 +469,4 @@ impl<'a> Engine<'a> {
         self.hubs[h as usize].vals = Some(vec![PV::Top; md.params.len()]);
         self.hub_expand(h);
     }
-}
-
-/// a 与 b 的公共前缀长度（同一张表时即全长）
-fn common_prefix(a: &Rc<Vec<u32>>, b: &Rc<Vec<u32>>) -> usize {
-    if Rc::ptr_eq(a, b) {
-        return a.len();
-    }
-    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
-}
-
-/// 升序序列 a 是否为升序切片 b 的子集（逐个前移，首个缺失即否）
-fn sorted_subset(a: impl Iterator<Item = u32>, b: &[u32]) -> bool {
-    let mut j = 0;
-    for x in a {
-        match b[j..].binary_search(&x) {
-            Ok(k) => j += k + 1,
-            Err(_) => return false,
-        }
-    }
-    true
-}
-
-/// 升序切片之差 a \ b
-fn sorted_minus(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut j = 0;
-    let mut out = Vec::with_capacity(a.len().saturating_sub(b.len()));
-    for &x in a {
-        while j < b.len() && b[j] < x {
-            j += 1;
-        }
-        if j >= b.len() || b[j] != x {
-            out.push(x);
-        }
-    }
-    out
 }

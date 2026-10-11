@@ -177,20 +177,18 @@ impl Engine<'_> {
         for (&h, &n) in hs.into_iter().take(TOP) {
             let hub = &self.hubs[h as usize];
             let (o, nm, d) = hub.site.key();
-            let set = match (hub.open, &hub.set) {
-                (Some(o), _) => format!("open {}", self.names[o as usize]),
-                (None, Some(s)) => format!("exact {}", s.len()),
-                // 无 open、无固定集合：方法引用的增长枢纽（`HubSet::Grow`）
-                _ => format!("grow {}", hub.recvs.len()),
+            let set = match hub.open {
+                Some(o) => format!("open {}", self.names[o as usize]),
+                // 增长枢纽（`HubSet::Grow`）
+                None => format!("grow {}", hub.recvs.len()),
             };
             eprintln!(
-                "{tag} hub H{h} replay={n} fresh={} links={} lambdas={} special={} plain={} parent={:?} [{set}] {o}.{nm}{d} via={}",
+                "{tag} hub H{h} replay={n} fresh={} links={} lambdas={} special={} plain={} [{set}] {o}.{nm}{d} via={}",
                 p.hub_pairs.get(&h).copied().unwrap_or(0),
                 hub.links.len(),
                 hub.lambdas.len(),
                 hub.special.len(),
                 hub.plain.len(),
-                hub.parent,
                 self.via_label(&hub.via),
             );
         }

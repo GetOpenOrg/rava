@@ -198,18 +198,7 @@ impl Engine<'_> {
         if self.recv_sites.contains(&(m, off)) || self.dispatch.get(&(m, off)).is_some_and(|t| !t.is_empty()) {
             return true;
         }
-        self.hub_sites.get(&(m, off)).is_some_and(|hs| {
-            hs.iter().any(|&h| {
-                let mut cur = Some(h);
-                while let Some(c) = cur {
-                    if !self.hubs[c as usize].recvs.is_empty() {
-                        return true;
-                    }
-                    cur = self.hubs[c as usize].parent;
-                }
-                false
-            })
-        })
+        self.hub_sites.get(&(m, off)).is_some_and(|hs| hs.iter().any(|&h| !self.hubs[h as usize].recvs.is_empty()))
     }
 
     /// 死 catch 表项：catch 类型不在闭包类集合内。catch-any 从不算死；

@@ -166,7 +166,7 @@ impl<'a> Engine<'a> {
         let (o, n, d) = hub.site.key();
         match hub.open {
             Some(x) => format!("{o}.{n}:{d} on open({})", self.names[x as usize]),
-            None => format!("{o}.{n}:{d} on {} 个接收者", hub.set.as_ref().map_or(hub.recvs.len(), |s| s.len())),
+            None => format!("{o}.{n}:{d} on {} 个接收者", hub.recvs.len()),
         }
     }
 
@@ -777,7 +777,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 枢纽的目标，按成员代表序号去重：经枢纽中转的目标与 lambda 读者的目标（`hub_reader.rs`），
-    /// 含父链与读者接入的枢纽（逐个可达枢纽迭代展开，不递归；读者接入可成环）。逐枢纽记忆可达闭包
+    /// 含读者接入的枢纽（逐个可达枢纽迭代展开，不递归；读者接入可成环）。逐枢纽记忆可达闭包
     fn hub_targets_canon(&self, h: u32, canon: &[usize], memo: &mut HashMap<u32, Rc<[usize]>>) -> Rc<[usize]> {
         if let Some(r) = memo.get(&h) {
             return r.clone();
@@ -796,7 +796,6 @@ impl<'a> Engine<'a> {
             let hub = &self.hubs[c as usize];
             v.extend(hub.plain.iter().map(|&t| canon[t]));
             v.extend(hub.ltargets.iter().filter(|&&t| !self.is_pseudo_method(t)).map(|&t| canon[t]));
-            stack.extend(hub.parent);
             stack.extend(hub.lhubs.iter().copied());
         }
         v.sort_unstable();
