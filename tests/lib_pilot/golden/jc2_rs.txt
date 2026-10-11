@@ -1,0 +1,75 @@
+── 紧凑输出
+  writer {"str":"hello \"world\"\n\t\\/","i":-2147483648,"l":9223372036854775807,"d":3.141592653589793,"f":1.5,"bd":12345678901234567890.000123,"bi":-98765432109876543210987654321,"short":-12,"t":true,"n":null,"pre:compiled":"seré","arr":[1,"two",[],{},"chars",123.4500],"bin":"AAEC/v9BQg==","raw":{"embedded":[1,2]},"nested":{"deep":[{"k":"中文 😀"}]}}
+  stream {"str":"hello \"world\"\n\t\\/","i":-2147483648,"l":9223372036854775807,"d":3.141592653589793,"f":1.5,"bd":12345678901234567890.000123,"bi":-98765432109876543210987654321,"short":-12,"t":true,"n":null,"pre:compiled":"seré","arr":[1,"two",[],{},"chars",123.4500],"bin":"AAEC/v9BQg==","raw":{"embedded":[1,2]},"nested":{"deep":[{"k":"中文 \uD83D\uDE00"}]}}
+  same=false firstDiff=335
+── DefaultPrettyPrinter
+{
+  "str" : "hello \"world\"\n\t\\/",
+  "i" : -2147483648,
+  "l" : 9223372036854775807,
+  "d" : 3.141592653589793,
+  "f" : 1.5,
+  "bd" : 12345678901234567890.000123,
+  "bi" : -98765432109876543210987654321,
+  "short" : -12,
+  "t" : true,
+  "n" : null,
+  "pre:compiled" : "seré",
+  "arr" : [ 1, "two", [ ], { }, "chars", 123.4500 ],
+  "bin" : "AAEC/v9BQg==",
+  "raw" : {"embedded":[1,2]},
+  "nested" : {
+    "deep" : [ {
+      "k" : "中文 😀"
+    } ]
+  }
+}
+── 自定义缩进（tab + 无空格分隔）
+{
+	"str":"hello \"world\"\n\t\\/",
+	"i":-2147483648,
+	"l":9223372036854775807,
+	"d":3.141592653589793,
+	"f":1.5,
+	"bd":12345678901234567890.000123,
+	"bi":-98765432109876543210987654321,
+	"short":-12,
+	"t":true,
+	"n":null,
+	"pre:compiled":"seré",
+	"arr":[ 1, "two", [ ], { }, "chars", 123.4500 ],
+	"bin":"AAEC/v9BQg==",
+	"raw":{"embedded":[1,2]},
+	"nested":{
+		"deep":[ {
+			"k":"中文 \uD83D\uDE00"
+		} ]
+	}
+}
+── MinimalPrettyPrinter 根分隔
+  1|"x"|[false]
+── 往返
+  bytes=false structure=false equal=true
+  bytes=true structure=false equal=true
+  bytes=false structure=true equal=true
+  bytes=true structure=true equal=true
+  lossy {"str":"hello \"world\"\n\t\\/","i":-2147483648,"l":9223372036854775807,"d":3.141592653589793,"f":1.5,"bd":1.2345678901234567E19,"bi":-98765432109876543210987654321,"short":-12,"t":true,"n":null,"pre:compiled":"seré","arr":[1,"two",[],{},"chars",123.45],"bin":"AAEC/v9BQg==","raw":{"embedded":[1,2]},"nested":{"deep":[{"k":"中文 😀"}]}}
+  pretty→compact equal=true
+  binary AAEC/v9BQg== -> 0,1,2,254,255,65,66,
+  mime AAEC/v9BQg== url AAEC_v9BQg pem "AAEC/v9BQg=="
+── 写上下文
+  after name: ctx=Object name=a out=4
+  in array: ctx=Array idx=0 path=/a/0
+  written=34 {"a":[1,[6,7],[9,10],[0.5,-0.25]]}
+── 非法写序
+  w value-in-object -> JsonGenerationException: Can not write a number, expecting field name (context: Object)
+  s value-in-object -> JsonGenerationException: Can not write a number, expecting field name (context: Object)
+  w name-in-array -> JsonGenerationException: Can not write a field name, expecting a value
+  s name-in-array -> JsonGenerationException: Can not write a field name, expecting a value
+  w end-array-in-object -> JsonGenerationException: Current context not Array but Object
+  s end-array-in-object -> JsonGenerationException: Current context not Array but Object
+  w double-name -> JsonGenerationException: Can not write a field name, expecting a value
+  s double-name -> JsonGenerationException: Can not write a field name, expecting a value
+  w end-root -> JsonGenerationException: Current context not Object but root
+  s end-root -> JsonGenerationException: Current context not Object but root
+  auto-close {"open":[{"k":"v"}]}
