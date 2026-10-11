@@ -1567,3 +1567,18 @@ owner = "fix-jdk25"
 diagnose = "rava build --jdk 25 --stop-after emit 的 [precheck] native-missing 行"
 doc = ""
 since = "2026-10-11"
+
+[[pattern]]
+id = "iface-anon-mandated-outer-ctor-param"
+stage = "compile"
+symptom = "java/lang/classfile/compound_element.rs：CompoundElement_1::<E>::new(Clone::clone(this), ..) 期望 &CompoundElement<Object>、实得 &CompoundElement<E>（E0308）；同批 class_builder.rs / code_builder.rs this.with(ClassFileElement) 期望 ClassElement / CodeElement"
+match = [["CompoundElement_1", "compound_element.rs"], ["expected `ClassElement`, found `ClassFileElement`"], ["expected `CodeElement`, found `ClassFileElement`"]]
+tests = ["DeepCopy", "DataEncryptionStandard"]
+cause = "JDK 25 javac 对接口 default 方法体内的匿名类省略 this$0 字段、外部实例作为构造器首个 ACC_MANDATED 形参；被调构造器发射签名对接口形参擦为描述符形态（CompoundElement<Object>），调用点却按 method_sig_types 的泛型形态（CompoundElement<E>）定形参、只做 Clone。修法：构造器调用点取被调发射签名（emitted_method_sig_types）为形参，与 new 的真实 Rust 签名同源，接口载体形参经 From 转换。with(ClassFileElement) 一类与 iface-default-this-superiface-param-erased 同根，efc32d6f 已修"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["cf040742"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "对照调用点实参与被调 new 的发射形参；查 generator/crates/instr/src/invoke/sig/params.rs 对 <init> 的签名来源"
+doc = ""
+since = "2026-10-11"
