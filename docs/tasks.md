@@ -89,6 +89,34 @@
 
 > 依赖树仍为 10-08 版本，以本节与活跃任务表为准。
 
+### 10-11 晚收拢：暂停派发后的剩余工作（用户 10-11 令：暂停派新子代理，本批完成后剩余工作落文档）
+
+本批子代理已全部交回，下列各线的剩余项按优先级排列。恢复派发后从第 1 条起取。各条的细节以括注文档为准。
+
+**批次状态**
+- batch-1011h 已放行（main = rust-closure-analyzer = c6b126cc）。
+- batch-1011i（0b91182b）：抽查 36/36，单测 A / B / P 通过，**单测 S 失败**（`closure_independent_of_hash_seed` 断言 closure_cli.rs:150，种子 0 与 1/2 闭包集合不同；作业时 ref dd1445e6）。重跑作业 b1011i-seed 不过滤输出，用于定位差异类。
+- batch-1011j（74919e58，叠 1011i，含 review-generator / fix-jdk25 / nogc-escape / S7 K3 文档 / G1 枢纽共享）：单测四作业与 57 例抽查在 dev 上跑。
+- batch-1011k（叠 1011j，含 review-soundness）：未开测。
+
+**剩余工作**
+1. **种子无关性回归（阻塞放行）**：1011i 新引入，1011h 时通过。候选来源是 1011i 新并入的 c1d-a54-reflect、review-runtime-perf、fix-iface-obj-overload、pilot-jackson-core、fix-invoke-box-cast，按 b1011i-seed 输出的差异类定位，修到 S 通过后再放行 1011i / 1011j / 1011k。
+2. **G1 闭包不收敛**（S0 A 34.9 GB、sb3 30.6 GB 被杀，主因是方法上下文）：选择性按对象建上下文（上下文不敏感预分析，目标 S0 ≤20 万上下文、峰值 ≤16 GiB）；查清每约 240 s 一次的约 6 GB 尖峰；补跑扫描中缺的 28 例（11 例类路径问题，17 例需 ≥16 GiB 槽）。矩阵 #12 spring-beans sb1–sb3 与 S0 Boot 受此阻塞。见性能计划 §4.12。
+3. **S7 K3 方法 trait（s7-k3，未合入）**：声明底段峰值 +24–31%（上限 ±5%），先固定切段分离两个成因；DeepCopy 在 f3368359 后复测；全量单测（含 `no_jdk_literals`）与抽查；与 Rust 标准 trait 同名的方法和接口载体方法移入 trait（K6 前必须完成）。之后 K4–K8。见 S7 计划 §9.9。
+4. **运行时性能（三测点对照 JVM）**：
+   - jackson-core jc1 release 8.95 s（JVM 0.71 s）：分派视图约 19%（归 S7），字段经 vtable 约 8%，String 跨 crate 不内联约 4%。
+   - `Method.invoke` 微基准约 43 µs / 迭代：访问检查、参数装箱、`MethodAccessor` 链未剖析。
+   - `rd::unbox_*` 解析 `__obj_str` 文本，反射热路径偏慢。
+   - 无 GC 第一步后 PartitionInteger release 46 s（JVM 0.71 s）：stream 管线执行开销。
+   - 见分诊报告 C 节、无 GC 文档 §六。
+5. **JDK 25 适配**：问题 A（StackFrameInfo 反射元素流，`FrameBuffer.at → ClassFrameInfo.declaringClass` 存根，归反射建模）；DeepCopy / DataEncryptionStandard 转译 OOM；合批后 JDK 25 全量复跑（`--reset-failed --jdk 25`），按其余失败分类处理。见 `docs/reports/2026-10-11-fix-jdk25-handoff.md`。
+6. **闭包分析器手写扫描器**：`&self` 辅助 fn 内 `self.X()` 保留 on_self（`hw-upcall-self-lost-in-helper`，现由手写侧规避）。
+7. **无 GC 后续**：所有权推断 `Weak`（逃逸到旧对象但成环）；引用类语义随 `Rc` 释放触发；JDK 方法体内区域（需开放世界事实）；`thread_local_lint` 文档头登记 `region_slot` 理由。见无 GC 文档 §六-5。
+8. **健全性审查余项**：57564806（rawmem 批量快路径）kr1 复测作业 rs-bench6 在跑（判据：批量段 ≤5 ms，CAS / 普通段不劣于 a3b7ca0a）；CAS +6%，`update` 回调改泛型内联；堆数组跨元素读-改-写改字粒度原子（`array/store.rs`）；direct ByteBuffer 的 byteBufferView VarHandle 启动即抛 ISE（main 既有，根因未查）。见分诊报告五。
+9. **生成器审查余项**：vendor 迁移 `cp -a` / `mv` 保留 mtime 复验（sg1 上三次中断，需重发）。见分诊报告「生成器修复」节。
+10. **反射强转同类风险**：`coerce.rs` 的 `to_object_text` 与方法句柄 invoke 路径可能有 fix-invoke-box-cast 同类失配，待构造测例核查。
+11. **GSSNameSpi 大闭包复查**：E0599 已修（fix-iface-obj-overload），闭包已回落到 3001 类不再触发；下次闭包纳入 jgss 时复验。
+
 - **spring-core-slice（矩阵 #11，10-10）**：spring-core 6.2.19 切片 sc1–sc4 全部 GOLDEN OK（60e68cc7，dev）。通用修复五项（lib crate 依赖序、类路径外类折叠、继承协变桥、代理接口方法元数据、开放枚举入 L3 分派），无 Spring 特判、runtime 无第三方内容。闭包 sc1 2333 / sc2 2165 / sc3 2479 / sc4 2166 个 JDK 类。回归 TestDynamicProxy / TestAnnoReflect / TestSerialProxyForm 3/3 PASS；单测仅 thread_local_lint 失败（main 既有）。详见矩阵 #11 行。
 - **c4-url（TestUrlParsingFaces，10-10）**：根因是 `URL$DefaultFactory.createURLStreamHandler@162` 按 `"sun.net.www.protocol." + protocol + ".Handler"` 按名取类，protocol 推不出，旧口径含任意串的候选只匹配已在闭包中的类，https 处理器不入闭包。修法：首段为字面量的任意串候选按类路径匹配（开放世界，`class_lookup.rs::anchored`），不用补种、无类名特判。类数：HelloWorld 580 不变、DeepCopy 3028 → 3033（+5 个处理器类）、TestUrlParsingFaces 3404 → 5123（https.Handler 经 `URL.openConnection` 分派牵出 SSL / JCA / certpath-LDAP / JNDI-RMI 栈，属 https 支持的固有代价）。抽查 8/8 通过（TestUrlParsingFaces、HelloWorld、DeepCopy、TestBuiltinUrlProtocol、TestUrlProtocolOpen、TestEmbeddedUrlRebuild、TestUriRawParts、TestSecurityPermissions）；全量单测仅 thread_local_lint 失败（main 既有，与本改动无关）；known_failures 条目已删。详见 `docs/plans/2026-10-07-c4-run-failures.md` §三。
 - **转译耗时回归（perf-regress4，第四轮达标，待合入）**：见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。CHM 表合并的真因是 `SerialCallbackContext.obj` 按类共用：序列化写方的全部对象图成了反序列化 `setObjFieldValues` 的写入目标，引起整堆字段互灌（8ce97959 让 `defaultReadObject` 路径入档案后触发）。c3ec480d 让值持有者（final `Object` 字段由构造器从实参写入）按对象分开。us1 同机对照（p4-t2）：DeepCopy 527 → 306 s / 4.1 GB，JNDI 606 → 348 s，序列化两例约 520 → 约 310 s；类集合对 batch-1010c 无新增（减少 17–40 个）。
@@ -274,7 +302,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | build-memsafe | ✅ 10-11 交付，待合入 | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
 | 声明层底段收窄 | 🔄 S7-4 10-10 提前开工（用户定） | **10-11 用户裁决路线 A**（类型标记 crate；每类方法 trait 属生成层内部细节，同 `ObjectVTable`；按 §3.1 取法 A 接受常数级分派开销；标记 crate 按档案生成；语料档案目标形态 ⑤），实施分解 K1–K8 见 S7 计划 §9.9，s7-marker 分支推进。先做依赖图模拟验证「最大 SCC 降到 22%」，且 22% 段本身 ≤1.3 GB；模拟同时对比底段可达集 / 全集、逐入口统计扇出咽喉、在现形态底段实测阶段剖析（time-passes / timings），类型标记 crate 评估纳入预编译 java.base 维度；结论汇总进 S7 计划 §9.8。D8 分段已合入：上段每段约 330 类、约 1.27 GB（10-11 起上段按上游感知峰值预算切段，§9.8.4）；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
-| 无 GC 第一步：逃逸分析 + 区域整组释放 | ⏳ 已实现待合批（nogc-escape） | PartitionInteger 内存恒定 57 MB（原 19.8 GB OOM）、输出一致；release 运行 46 s（JVM 0.71 s，stream 管线执行开销，转运行时性能线）；dev 抽查 8/9（PartitionInteger 300 s 运行超时）；全量单测作业 nogc-unit3 待结果。现状、实测与下一步见无 GC 文档 §六 |
+| 无 GC 第一步：逃逸分析 + 区域整组释放 | ⏳ 合批测试中（batch-1011j） | PartitionInteger 内存恒定 57 MB（原 19.8 GB OOM）、输出一致；release 运行 46 s（JVM 0.71 s，stream 管线执行开销，转运行时性能线）；dev 抽查 8/9（PartitionInteger 300 s 运行超时）；全量单测 nogc-unit3 630/0。现状、实测与下一步见无 GC 文档 §六 |
 | 并发小步 A | ✅ 已合入（batch-1010l，583edccd） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |
 | 并发小步 B | ⏳ 合批测试中（batch-1010r，与 fix-order-live、fix-xsltc2 同测） | 小步 A 遗留 3b95ceeb（持锁登记移入载体槽，thread_local_lint）；B 本体 c955162e（volatile 引用字段加锁 / 解锁 SeqCst、监视器让出后 SeqCst 栅栏，提交说明逐条论证含 IRIW）；efafe2cb（Thread.getThreads 锁内安全点，TestThreadNatives）。debug 抽查 25/25 + 5/5，单测 630/0。无 GC 文档 §四、§五-5 |
 | 接口重声明根类方法重载命名 | ✅ fix-iface-obj-overload 5b6aacf0 + d4cb7a55（抽查 iobj-d4cb7a55 6/6；单测 iobj-ut-d4cb7a55 三作业全过，已并入 batch-1011i） | 接口重声明 equals(Object) 且有 equals(Self) 重载时调用点误取 `equals_obj`（GSSNameSpi E0599）；调用点改按根类命名（`owner::is_iface_root_member` 单一判定）；类侧 ObjectVTable 桥接带重载槽名（`#[equals_vtable = "Owner::equals_obj"]`）；剩余：大闭包（jgss 纳入）下 GSSNameSpi 实测待扫描器 cfg 修复后复验，见 fix-jdk25 交接 C 节，测例 TestIfaceObjectOverload；failure_patterns `iface-root-member-overload-name` |
