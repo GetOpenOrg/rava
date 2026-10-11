@@ -4,7 +4,7 @@
 //! 每次访问是「(基址, 偏移) 处 `width` 字节值的读-改-写」：值以零扩展的 u64 位形流转，
 //! `op(旧)` 给新值即写入、给 None 即只读，返回旧值。按载体分派到同一存储的三种视图：
 //! - 原生内存（基址 null 的绝对地址 / 基本类型数组，`arrayBaseOffset + i × arrayIndexScale`）：
-//!   `native_memory::update` 的字节视图——数组经元素原子单元、直接内存经同宽原子指令；子字元素
+//!   `native_memory` 的字节视图——数组经元素原子单元、直接内存经包含地址的对齐字原子单元；子字元素
 //!   与按字对齐的 int 访问（JDK compareAndExchangeByte / Short 的 `offset & ~3` 掩码路径）落在
 //!   同一字节序列上，相邻元素互不干扰；
 //! - 静态字段（staticFieldBase + staticFieldOffset 的不透明 id）：`unsafe__impl::_static_rmw`（声明类字段闭包
@@ -116,13 +116,20 @@ pub(super) fn prim(o: &Object, offset: i64, width: usize, what: &str,
     panic!("stub: jdk/internal/misc/Unsafe.{} (offset={} 无共享存储：非基本类型数组 / 非静态字段 id / 运行时类无该平铺基本类型字段)", what, offset)
 }
 
-/// 读（`op` 恒 None）。
+/// 读（`op` 恒 None）。原生内存走普通读（直接内存不要求对齐；`prim` 的原生内存臂是原子读-改-写，
+/// 要求按宽度对齐）。
 pub(super) fn get(o: &Object, offset: i64, width: usize, what: &str) -> Result<u64> {
+    if crate::native_memory::is_raw(o) {
+        return crate::native_memory::load(o, offset, width);
+    }
     prim(o, offset, width, what, &mut |_| None)
 }
 
-/// 无条件写。
+/// 无条件写。原生内存走普通写（同 [`get`]）。
 pub(super) fn put(o: &Object, offset: i64, width: usize, what: &str, v: u64) -> Result<()> {
+    if crate::native_memory::is_raw(o) {
+        return crate::native_memory::store(o, offset, width, v);
+    }
     prim(o, offset, width, what, &mut |_| Some(v)).map(|_| ())
 }
 

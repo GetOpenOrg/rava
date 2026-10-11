@@ -73,50 +73,77 @@ pub(crate) fn store_bits(dst: &mut [u8], v: u64) {
     }
 }
 
-/// `(base, offset)` 处 `width`（1 / 2 / 4 / 8）字节值的原子读-改-写（Unsafe 基本类型访问器族的
-/// 原生内存形态：读、写、CAS、getAndAdd 等统一经此）。值是本机字节序零扩展的位形；`op(旧)` 给出
-/// 新值则写入其低 `width` 字节，返回旧值，给 None 即只读。基本类型数组经元素原子单元（区间在单个元素
-/// 内为该元素的 CAS，跨元素见 `__ArrayObj::__update_bytes`）；直接内存经该地址上的同宽原子指令（地址按宽度对齐时——JDK 对
-/// 未对齐地址的原子访问不作保证，未对齐时退为普通读写）。CAS 重试时 op 重新求值（须为纯函数）。
+// ── 直接内存（base 为 null 的绝对地址）────────────────────────────────────────────
+// 全部经 `rava_rawmem` 的字粒度原子原语：批量读写 / 填充 / 拷贝与 CAS 落在同一 8 字节原子单元上，
+// 同地址的并发访问恒为同宽原子操作，无数据竞争、无混宽原子访问（单元设计与地址前提见该 crate 头注）。
+// 地址前提：直接内存只来自 Unsafe.allocateMemory / reallocateMemory（Java 侧先按 HeapWordSize 向上
+// 取整，malloc 至少 16 字节对齐）与 FileChannel.map（mmap，页粒度），覆盖区间的对齐字整体可访问。
+
+/// `rava_rawmem` 的参数拒绝 → Java 异常。
+fn raw_err(e: rava_rawmem::Error) -> JvmError {
+    match e {
+        rava_rawmem::Error::NegativeLength(n) => JvmError::illegal_argument(&format!("negative size: {n}")),
+        // HotSpot 对 int / long CAS 不查对齐，结果随平台（x86 走 split lock 仍原子，aarch64 无 LSE2
+        // 时对齐故障 → InternalError）；JDK 自身对无法以单字原子完成的更新的规定是 IAE
+        //（Unsafe.compareAndExchangeShort：「Update spans the word, not supported」）。此处取后者，
+        // 各平台一致，且不静默退化为会丢并发更新的非原子读-改-写。
+        rava_rawmem::Error::Misaligned { addr, width } => JvmError::illegal_argument(&format!(
+            "Unaligned atomic update of {width} bytes at address {addr:#x}, not supported")),
+    }
+}
+
+/// 长度参数（Unsafe 的 size_t）：负数 → IllegalArgumentException（与 Java 侧 `Unsafe.checkSize`
+/// 同一口径；公开包装已先查，这里守住 native 入口本身）。
+fn len(bytes: i64) -> Result<usize> {
+    rava_rawmem::length(bytes).map_err(raw_err)
+}
+
+/// `(base, offset)` 处 `width`（1 / 2 / 4 / 8）字节值的原子读-改-写（Unsafe / VarHandle 的 CAS、交换、
+/// getAndAdd 族）。值是本机字节序零扩展的位形；`op(旧)` 给出新值则写入其低 `width` 字节，返回旧值，
+/// 给 None 即不写。基本类型数组经元素原子单元（区间在单个元素内为该元素的 CAS，跨元素见
+/// `__ArrayObj::__update_bytes`）；直接内存经包含该地址的对齐字上的 SeqCst CAS，地址须按宽度对齐，
+/// 否则 IllegalArgumentException（见 [`raw_err`]）。CAS 重试时 op 重新求值（须为纯函数）。
 pub fn update(base: &Object, offset: i64, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
     if base.0.is_jvm_null() {
-        use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering::SeqCst};
-        macro_rules! atomic {
-            ($a:ty, $t:ty) => {{
-                let p = offset as *mut $t;
-                if (p as usize) % std::mem::align_of::<$t>() == 0 {
-                    // SAFETY: 绝对地址由调用方经 allocateMemory（或 VM 承载的静态字）取得，按宽度对齐
-                    let a = unsafe { <$a>::from_ptr(p) };
-                    let mut cur = a.load(SeqCst);
-                    loop {
-                        let old = cur as u64;
-                        let Some(n) = op(old) else { return Ok(old) };
-                        match a.compare_exchange_weak(cur, n as $t, SeqCst, SeqCst) {
-                            Ok(_) => return Ok(old),
-                            Err(actual) => cur = actual,
-                        }
-                    }
-                }
-            }};
-        }
-        match width {
-            1 => atomic!(AtomicU8, u8),
-            2 => atomic!(AtomicU16, u16),
-            4 => atomic!(AtomicU32, u32),
-            8 => atomic!(AtomicU64, u64),
-            _ => {}
-        }
-        let mut b = [0u8; 8];
-        read(base, offset, &mut b[..width])?;
-        let old = load_bits(&b[..width]);
-        if let Some(n) = op(old) {
-            store_bits(&mut b[..width], n);
-            write(base, offset, &b[..width])?;
-        }
-        return Ok(old);
+        // SAFETY: 直接内存地址前提见本节头注
+        return unsafe { rava_rawmem::update(offset as usize, width, op) }.map_err(raw_err);
     }
     let start = usize::try_from(offset - ARRAY_BASE_OFFSET).unwrap_or(usize::MAX - 8);
     with_prim_array!(base, |a| a.__update_bytes(start, width, &mut *op)).flatten().ok_or_else(out_of_bounds)
+}
+
+/// 普通读（Unsafe get 族，volatile 由调用方加栅栏）：`(base, offset)` 处 `width` 字节值（零扩展）。
+/// 直接内存不要求对齐（未对齐时逐字读取，与 HotSpot 非对齐普通访问同为非整体原子）。
+pub fn load(base: &Object, offset: i64, width: usize) -> Result<u64> {
+    if base.0.is_jvm_null() {
+        // SAFETY: 同 update
+        return Ok(unsafe { rava_rawmem::load(offset as usize, width) });
+    }
+    update(base, offset, width, &mut |_| None)
+}
+
+/// 普通写（Unsafe put 族，volatile 由调用方加栅栏）：`v` 的低 `width` 字节写到 `(base, offset)`。
+pub fn store(base: &Object, offset: i64, width: usize, v: u64) -> Result<()> {
+    if base.0.is_jvm_null() {
+        // SAFETY: 同 update
+        unsafe { rava_rawmem::store(offset as usize, width, v) };
+        return Ok(());
+    }
+    update(base, offset, width, &mut |_| Some(v)).map(|_| ())
+}
+
+/// 直接内存地址上的 volatile 读（Java 侧以 `Unsafe.putIntVolatile` 等写入的轮询标记，如 Files.copy
+/// 的取消字）：与 Unsafe getXxxVolatile 同一原子单元与栅栏口径。
+///
+/// # Safety
+/// `address` 为调用方持有、在调用期间保持有效的直接内存（满足本节头注的地址前提）。
+pub unsafe fn load_volatile_direct(address: i64, width: usize) -> u64 {
+    use std::sync::atomic::{fence, Ordering};
+    fence(Ordering::SeqCst);
+    // SAFETY: 由调用方保证
+    let v = unsafe { rava_rawmem::load(address as usize, width) };
+    fence(Ordering::Acquire);
+    v
 }
 
 fn out_of_bounds() -> JvmError {
@@ -126,8 +153,8 @@ fn out_of_bounds() -> JvmError {
 /// 从 `(base, offset)` 读 `dst.len()` 字节。
 pub fn read(base: &Object, offset: i64, dst: &mut [u8]) -> Result<()> {
     if base.0.is_jvm_null() {
-        // SAFETY: 绝对地址由调用方（DirectByteBuffer 等）经 allocateMemory 取得并做过界检查
-        unsafe { std::ptr::copy_nonoverlapping(offset as *const u8, dst.as_mut_ptr(), dst.len()) };
+        // SAFETY: 同 update；区间由调用方（DirectByteBuffer 等）做过界检查
+        unsafe { rava_rawmem::read(offset as usize, dst) };
         return Ok(());
     }
     let start = usize::try_from(offset - ARRAY_BASE_OFFSET).map_err(|_| out_of_bounds())?;
@@ -141,7 +168,7 @@ pub fn read(base: &Object, offset: i64, dst: &mut [u8]) -> Result<()> {
 pub fn write(base: &Object, offset: i64, src: &[u8]) -> Result<()> {
     if base.0.is_jvm_null() {
         // SAFETY: 同 read
-        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), offset as *mut u8, src.len()) };
+        unsafe { rava_rawmem::write(offset as usize, src) };
         return Ok(());
     }
     let start = usize::try_from(offset - ARRAY_BASE_OFFSET).map_err(|_| out_of_bounds())?;
@@ -151,26 +178,28 @@ pub fn write(base: &Object, offset: i64, src: &[u8]) -> Result<()> {
     }
 }
 
-/// `(base, offset)` 起 `bytes` 字节填 `value`（Unsafe.setMemory0）。
+/// `(base, offset)` 起 `bytes` 字节填 `value`（Unsafe.setMemory0）；负 bytes → IllegalArgumentException。
 pub fn fill(base: &Object, offset: i64, bytes: i64, value: i8) -> Result<()> {
+    let n = len(bytes)?;
     if base.0.is_jvm_null() {
         // SAFETY: 同 read
-        unsafe { std::ptr::write_bytes(offset as *mut u8, value as u8, bytes as usize) };
+        unsafe { rava_rawmem::fill(offset as usize, n, value as u8) };
         return Ok(());
     }
-    write(base, offset, &vec![value as u8; bytes as usize])
+    write(base, offset, &vec![value as u8; n])
 }
 
-/// 拷贝 `bytes` 字节（Unsafe.copyMemory0）。源与目标可为同一数组（先读出再写入）；
-/// `swap_width > 1` 时按该宽度逐元素翻转字节序（Unsafe.copySwapMemory0）。
+/// 拷贝 `bytes` 字节（Unsafe.copyMemory0）；负 bytes → IllegalArgumentException。源与目标可重叠
+///（memmove 语义）；`swap_width > 1` 时按该宽度逐元素翻转字节序（Unsafe.copySwapMemory0）。
 pub fn copy(src_base: &Object, src_offset: i64, dst_base: &Object, dst_offset: i64,
             bytes: i64, swap_width: usize) -> Result<()> {
+    let n = len(bytes)?;
     if src_base.0.is_jvm_null() && dst_base.0.is_jvm_null() && swap_width <= 1 {
-        // SAFETY: 两端均为直接内存，copy（memmove 语义）允许重叠
-        unsafe { std::ptr::copy(src_offset as *const u8, dst_offset as *mut u8, bytes as usize) };
+        // SAFETY: 两端均为直接内存，同 read
+        unsafe { rava_rawmem::copy(src_offset as usize, dst_offset as usize, n) };
         return Ok(());
     }
-    let mut buf = vec![0u8; bytes as usize];
+    let mut buf = vec![0u8; n];
     read(src_base, src_offset, &mut buf)?;
     if swap_width > 1 {
         for chunk in buf.chunks_mut(swap_width) {

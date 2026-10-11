@@ -134,11 +134,9 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
     copy_if_changed(&runtime_dir.join("build.rs"), &decl.join("build.rs"))?;
     let cargo_src = runtime_dir.join("Cargo.toml");
     let cargo = std::fs::read_to_string(&cargo_src).map_err(|e| io_err(&cargo_src.display().to_string(), e))?;
-    // runtime/ 下的兄弟 crate（rava_macros、rava_coro）不复制进 scratch，以绝对路径依赖（共享 target 缓存命中）
+    // runtime/ 下的兄弟 crate（rava_macros、rava_coro、rava_rawmem …）不复制进 scratch，以绝对路径依赖（共享 target 缓存命中）
     let siblings = macros_crate.parent().unwrap_or(Path::new(""));
-    let cargo = rename_package(&cargo, &dirs.decl)
-        .replace("path = \"../rava_macros\"", &format!("path = \"{}\"", macros_crate.display()))
-        .replace("path = \"../rava_coro\"", &format!("path = \"{}\"", siblings.join("rava_coro").display()))
+    let cargo = absolutize_sibling_paths(&rename_package(&cargo, &dirs.decl), siblings)
         .replace("version = \"0.1.0\"", &format!("version = \"{}\"", scratch_pkg_version(out_dir)));
     write_if_changed(&decl.join("Cargo.toml"), &cargo)?;
     for pkg in ["java", "jdk", "sun"] {
@@ -151,6 +149,22 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
     }
     let meta_src = runtime_dir.parent().unwrap_or(Path::new("")).join("java_meta");
     mirror_meta_crate(&meta_src, &out_dir.join("java_meta"), &scratch_pkg_version(out_dir), &dirs.decl)
+}
+
+/// 清单中每个 `path = "../<名>"` 兄弟依赖改写为 `siblings/<名>` 的绝对路径（不逐个列 crate 名）。
+fn absolutize_sibling_paths(cargo: &str, siblings: &Path) -> String {
+    const PREFIX: &str = "path = \"../";
+    let mut out = String::with_capacity(cargo.len());
+    let mut rest = cargo;
+    while let Some(at) = rest.find(PREFIX) {
+        let tail = &rest[at + PREFIX.len()..];
+        let Some(end) = tail.find('"') else { break };
+        out.push_str(&rest[..at]);
+        out.push_str(&format!("path = \"{}\"", siblings.join(&tail[..end]).display()));
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// 按 overlay 清单与 runtime/ 同步：上轮清单中本轮未落盘、且无生成标记的文件删除（其后空目录自底向上

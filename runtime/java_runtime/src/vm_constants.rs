@@ -23,8 +23,9 @@ pub fn big_endian() -> bool {
     cfg!(target_endian = "big")
 }
 
-/// 是否支持非对齐访问（HotSpot `UseUnalignedAccesses`）。本运行时的原始内存读写
-/// （`native_memory::read` / `write`）按字节复制，任何平台上非对齐访问都成立。
+/// 是否支持非对齐访问（HotSpot `UseUnalignedAccesses`）。本运行时的原始内存普通读写
+/// （`native_memory::load` / `store` / `read` / `write`）按对齐字逐字合成，任何平台上非对齐普通访问
+/// 都成立（非对齐的原子读-改-写不支持，见 `native_memory::update`）。
 pub fn unaligned_access() -> bool {
     true
 }

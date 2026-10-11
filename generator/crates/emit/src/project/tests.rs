@@ -37,7 +37,7 @@ fn runtime(root: &Path) -> PathBuf {
     put(&rt.join("build.rs"), "fn main() {}\n");
     put(
         &rt.join("Cargo.toml"),
-        "[package]\nname = \"java_runtime\"\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\nrava_coro = { path = \"../rava_coro\" }\n",
+        "[package]\nname = \"java_runtime\"\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\nrava_coro = { path = \"../rava_coro\" }\nrava_rawmem = { path = \"../rava_rawmem\" }\n",
     );
     let meta = root.join("runtime").join("java_meta");
     put(&meta.join("Cargo.toml"), "[package]\nname = \"java_meta\"\nversion = \"0.1.0\"\n");
@@ -65,6 +65,9 @@ fn overlay_copies_rewrites_and_prunes() {
     assert!(cargo.contains(&format!("path = \"{}\"", macros.display())));
     let coro = root.join("runtime").join("rava_coro");
     assert!(cargo.contains(&format!("path = \"{}\"", coro.display())), "rava_coro 依赖改绝对路径");
+    let rawmem = root.join("runtime").join("rava_rawmem");
+    assert!(cargo.contains(&format!("path = \"{}\"", rawmem.display())), "rava_rawmem 依赖改绝对路径");
+    assert!(!cargo.contains("\"../"), "不留相对兄弟路径");
     assert!(!cargo.contains("0.1.0"));
     assert!(src.join("sun/mod.rs").exists(), "顶层占位 mod.rs");
     assert!(out.join("java_runtime/build.rs").exists());
