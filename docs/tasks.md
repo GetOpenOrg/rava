@@ -273,7 +273,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
 | 并发小步 A | ✅ 已合入（batch-1010l，583edccd） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |
 | 并发小步 B | ⏳ 合批测试中（batch-1010r，与 fix-order-live、fix-xsltc2 同测） | 小步 A 遗留 3b95ceeb（持锁登记移入载体槽，thread_local_lint）；B 本体 c955162e（volatile 引用字段加锁 / 解锁 SeqCst、监视器让出后 SeqCst 栅栏，提交说明逐条论证含 IRIW）；efafe2cb（Thread.getThreads 锁内安全点，TestThreadNatives）。debug 抽查 25/25 + 5/5，单测 630/0。无 GC 文档 §四、§五-5 |
-| 接口重声明根类方法重载命名 | ⏳ fix-iface-obj-overload 5b6aacf0 + d4cb7a55（抽查 iobj-d4cb7a55 6/6；单测在跑） | 接口重声明 equals(Object) 且有 equals(Self) 重载时调用点误取 `equals_obj`（GSSNameSpi E0599）；调用点改按根类命名（`owner::is_iface_root_member` 单一判定）；类侧 ObjectVTable 桥接带重载槽名（`#[equals_vtable = "Owner::equals_obj"]`），测例 TestIfaceObjectOverload；failure_patterns `iface-root-member-overload-name` |
+| 接口重声明根类方法重载命名 | ✅ fix-iface-obj-overload 5b6aacf0 + d4cb7a55（抽查 iobj-d4cb7a55 6/6；单测 iobj-ut-d4cb7a55 三作业全过，已并入 batch-1011i） | 接口重声明 equals(Object) 且有 equals(Self) 重载时调用点误取 `equals_obj`（GSSNameSpi E0599）；调用点改按根类命名（`owner::is_iface_root_member` 单一判定）；类侧 ObjectVTable 桥接带重载槽名（`#[equals_vtable = "Owner::equals_obj"]`）；剩余：大闭包（jgss 纳入）下 GSSNameSpi 实测待扫描器 cfg 修复后复验，见 fix-jdk25 交接 C 节，测例 TestIfaceObjectOverload；failure_patterns `iface-root-member-overload-name` |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py` 在服务器执行；dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 
 ---
