@@ -96,6 +96,7 @@ impl<'a> Engine<'a> {
 
     /// 方法节点（上下文已定；非字节码方法不克隆，回落本体）
     fn method_node(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
+        let ctx = self.free_ctx(&key, ctx);
         if !self.fwriter_live {
             self.handle_writer_edge(&key, &via);
         }
@@ -187,6 +188,7 @@ impl<'a> Engine<'a> {
             self.unresolved.insert(key.to_string());
         }
         self.push_m(idx);
+        self.lprof_tick();
         if kind != Kind::Missing && (is_static && key.name != "<clinit>" || key.name == "<init>") {
             self.init(&key.owner, via.clone());
         }

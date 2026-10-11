@@ -256,8 +256,8 @@ pub(super) struct LCall {
     pub(super) call: LambdaCall,
     /// 已接过的接收值
     pub(super) done: TypeSet,
-    /// 方法引用的精确接收者集合（达 `HUB_MIN` 时）当前接入的集合枢纽
-    pub(super) hub: Option<(u32, Rc<[u32]>)>,
+    /// 方法引用的精确接收者（达 `HUB_MIN` 时）接入的增长枢纽
+    pub(super) hub: Option<u32>,
     /// 静态 / 构造实现已接边
     pub(super) fixed: bool,
     /// 调用方分析重算后作废（调用点重跑时以同一调用再登记即复活）
@@ -292,26 +292,20 @@ pub(super) struct Hub {
     pub(super) owner: u32,
     /// open 类型（open 枢纽）
     pub(super) open: Option<u32>,
-    pub(super) parent: Option<u32>,
-    /// 精确集合枢纽的接收者集合（升序，与枢纽键共享）；父枢纽承接其中的子集部分
-    pub(super) set: Option<Rc<[u32]>>,
     /// 实参声明类型（不含接收者）与返回类型
     pub(super) ptypes: Vec<Option<u32>>,
     pub(super) ret: Option<u32>,
     /// 各调用点实参常量的汇合（None = 尚无调用点；首个调用点接入后才展开接收者）
     pub(super) vals: Option<Vec<PV>>,
     pub(super) via: Via,
-    /// 待展开（精确集合）/ 本枢纽展开的接收者（不含父枢纽承接的）
+    /// open 枢纽已按 G 展开（首个调用点接入后）；已并入的接收者
     pub(super) expanded: bool,
-    pub(super) pending: Vec<u32>,
     pub(super) recvs: BTreeSet<u32>,
     /// 经枢纽中转的目标
     pub(super) plain: BTreeSet<usize>,
-    /// 逐调用点派发的 lambda / 手写实现对象接收者（含父枢纽的）
-    /// 子枢纽建立时与父枢纽共享，自身展开追加时才复制（写时复制）
+    /// 逐调用点派发的 lambda / 手写实现对象接收者（接入时取快照，故按 `Rc` 共享）
     pub(super) lambdas: Rc<Vec<u32>>,
-    /// 按调用点建模的目标 → 其接收者（含父枢纽的）：逐调用点接边，同目标的接收者合成一条
-    /// 各接收者表与父枢纽共享、写时复制：重放时同一张表即祖先已全部送达
+    /// 按调用点建模的目标 → 其接收者：逐调用点接边，同目标的接收者合成一条
     pub(super) special: BTreeMap<usize, Rc<Vec<u32>>>,
     /// 调用点（方法, 偏移）→ 接入记录（重接入时换新记录）
     pub(super) links: BTreeMap<(usize, u32), Rc<Link>>,
@@ -327,6 +321,9 @@ pub(super) struct Hub {
     pub(super) ltargets: BTreeSet<usize>,
     /// 本枢纽 lambda 读者接入的枢纽（方法引用的虚分派）：其目标同样计入本枢纽的每个接入点
     pub(super) lhubs: BTreeSet<u32>,
+    /// 本枢纽 lambda 读者接边的实现方法形参段：（目标, 首个 SAM 实参所在形参位, 首个取用的枢纽实参序号）。
+    /// SAM 实参常量取枢纽合流值 `vals`，合流值变宽时按此重新并入（`hub_reader.rs`）
+    pub(super) lbind: BTreeSet<(usize, usize, usize)>,
 }
 
 /// 反射数组分配调用点（`Array.newInstance(c, n)` 等）的状态。结果的取法只在工作队列排空（单调部分的不动点）时
@@ -360,13 +357,24 @@ pub(super) struct Link {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) enum HubSet {
     Open(u32),
-    Exact(Rc<[u32]>),
     /// VM 按反射对象虚调用（`Method.invoke` / REF_invokeVirtual 的 MemberName）：接收者 open(类型)，
     /// 无字节码调用点；展开到的每个目标形参 open
     Vm(u32),
-    /// 方法引用的绑定接收者（捕获值或首个 SAM 实参）达 `HUB_MIN` 后的增长枢纽：接收者随该值增长逐个并入（`hub_recv`），
-    /// 调用点只接入一次。来源全为图节点时按来源共用（捕获值在各调用点相同），否则按读者单元各用一个（第二分量）
-    Grow(Rc<[Node]>, u32),
+    /// 精确接收者达 `HUB_MIN` 后的增长枢纽：接收者随值集增长逐个并入（`hub_recv`），调用点只接入一次。
+    /// 按接收值的来源建立（见 [`GrowSrc`]），不按接收者集合建立：同一来源的各调用点值集恒同，共用一个枢纽
+    Grow(GrowSrc),
+}
+
+/// 增长枢纽的来源键
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) enum GrowSrc {
+    /// 来源全为图节点（升序去重）。第二分量：只收抽象对象接收者（非虚调用点按对象敏感克隆的目标，`edge_recv`），
+    /// 与虚调用点的全体精确接收者分开
+    Nodes(Rc<[Node]>, bool),
+    /// 来源含物化值集：按调用点（方法, 偏移）各用一个
+    Site(usize, u32),
+    /// 方法引用调用读者单元（`lcalls` 序号）各用一个
+    Reader(u32),
 }
 
 #[derive(Clone)]

@@ -60,6 +60,9 @@ mod hub_reader;
 mod recv_fp;
 mod site_prof;
 mod lambda_prof;
+mod ctx_prof;
+mod ctx_free;
+mod hub_prof;
 mod gather;
 mod defs;
 pub use defs::{ClassNode, From, Kind, Level, Via};
@@ -342,12 +345,8 @@ pub struct Engine<'a> {
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet, u32), u32>,
     hubs_by_open: BTreeMap<u32, Vec<u32>>,
-    /// 调用点 → 所连枢纽（输出分派结果用）；调用点当前的精确集合枢纽
+    /// 调用点 → 所连枢纽（输出分派结果用）
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
-    /// 调用点当前的精确集合枢纽及其接收者集合（集合未变的重跑免查 `hub_ids`）
-    hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
-    /// 精确集合枢纽按（调用成员, 接口调用）分族，族内按集合大小升序：新枢纽取族内最大的子集枢纽为父（`hub.rs`）
-    hub_family: HashMap<(MemberRef, bool, u32), Vec<(u32, Rc<[u32]>)>>,
     /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)
     gathers: Vec<(gather::Slot, u32, bool)>,
     gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
@@ -385,8 +384,6 @@ pub struct Engine<'a> {
     /// （单调：此后恒按原入口接边，已接的直连边保留）
     rdirect: HashMap<(usize, u32), MemberRef>,
     rdirect_fallback: HashSet<(usize, u32)>,
-    /// 直连调用点上各实例目标的 lambda / 手写层对象接收者最近一次的精确集合枢纽与集合（同 `hub_last`，按目标分开）
-    rdirect_last: HashMap<(usize, u32, MemberRef), (u32, Rc<[u32]>)>,
     /// 直连调用点上各实例目标已接的精确接收者与已接入枢纽的 open 类型（方法 → (偏移, 目标) → 记录；同 `hub_linked` 清空）
     rdirect_done: HashMap<usize, HashMap<(u32, MemberRef), reflect_direct::DirectDone>>,
     /// 有挂起精确接收者的直连记录（方法, (偏移, 目标)），排空时定夺（`reflect_direct.rs::rdirect_release`）
@@ -442,6 +439,9 @@ pub struct Engine<'a> {
     ext_vm: Option<Box<concrete::ExtVm>>,
     /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
     level_ctxs: HashMap<u32, i32>,
+    /// 上下文透明方法（`ctx_free.rs`）：判定缓存；进本体的次数（诊断）
+    ctx_free_memo: HashMap<MemberRef, bool>,
+    ctx_free_hits: u64,
     level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,

@@ -248,8 +248,12 @@ impl<'a> Engine<'a> {
                     Feed::S(_) => None,
                 });
                 let grow = match shared.collect::<Option<Vec<Node>>>() {
-                    Some(ns) => HubSet::Grow(ns.into(), u32::MAX),
-                    None => HubSet::Grow(Rc::from([]), at as u32),
+                    Some(mut ns) => {
+                        ns.sort_unstable();
+                        ns.dedup();
+                        HubSet::Grow(GrowSrc::Nodes(ns.into(), false))
+                    }
+                    None => HubSet::Grow(GrowSrc::Reader(at as u32)),
                 };
                 self.lambda_virtual(at, m, off, (k, l.imh.interface, owner), &site, via, (&cur, &delta), &rest, res, grow);
             }
@@ -265,7 +269,7 @@ impl<'a> Engine<'a> {
         let (cur, delta) = vals;
         let (lid, ret) = (self.lcalls[at].call.0, self.lcalls[at].call.2);
         let Some(md) = parse_method(&k.desc) else { return };
-        if let (false, Some((h, _))) = (delta.classes.is_empty(), self.lcalls[at].hub.clone()) {
+        if let (false, Some(h)) = (delta.classes.is_empty(), self.lcalls[at].hub) {
             // 已接入增长枢纽：只并入新增接收者
             let fresh = TypeSet { classes: delta.classes.clone(), open: IdSet::default() };
             let fresh = self.receivers(m, &fresh, owner);
@@ -286,8 +290,8 @@ impl<'a> Engine<'a> {
                 }
             } else {
                 // 首次达 `HUB_MIN`：接入增长枢纽，已有接收者全部并入（共用枢纽上已并入的即跳过）
-                let h = self.hub(k, iface, owner, grow, None, site, &md, via.clone());
-                self.lcalls[at].hub = Some((h, Rc::from([])));
+                let h = self.hub(k, iface, owner, grow, site, &md, via.clone());
+                self.lcalls[at].hub = Some(h);
                 self.lprof_recv(lid, &[h], 2);
                 self.link_hub(h, m, off, rest, res);
                 for &r in recv.iter() {
@@ -298,7 +302,7 @@ impl<'a> Engine<'a> {
         if !delta.open.is_empty() {
             let opens: Vec<u32> = cur.open.iter().collect();
             for o in self.open_roots(&opens) {
-                let h = self.hub(k, iface, owner, HubSet::Open(o), None, site, &md, via.clone());
+                let h = self.hub(k, iface, owner, HubSet::Open(o), site, &md, via.clone());
                 self.lprof_recv(lid, &[h], 2);
                 self.link_hub(h, m, off, rest, res);
             }

@@ -20,6 +20,11 @@ pub(super) struct LambdaCap {
 impl<'a> Engine<'a> {
     /// 调用点 m@off 经 lambda 接到实现方法 t（形参类型 ptypes，非接收者形参自 base 起）
     pub(super) fn bind_lambda_params(&mut self, m: usize, off: u32, t: usize, base: usize, ptypes: &[Option<u32>], c: &LambdaCap) {
+        // 枢纽 lambda 读者：SAM 实参取自枢纽（`hub_reader.rs`），不取锚点调用点的帧
+        if let Some(h) = self.reader_hub() {
+            self.hub_lambda_bind(h, t, base, ptypes, c);
+            return;
+        }
         let n = ptypes.len();
         let (Some(cv), Some(sv)) = (c.vals.clone(), self.call_vals.clone()) else {
             self.bind_pvs(t, base, n, None);
