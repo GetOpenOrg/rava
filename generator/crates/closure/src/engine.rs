@@ -61,6 +61,7 @@ mod recv_fp;
 mod site_prof;
 mod lambda_prof;
 mod ctx_prof;
+mod ctx_free;
 mod hub_prof;
 mod gather;
 mod defs;
@@ -438,6 +439,9 @@ pub struct Engine<'a> {
     ext_vm: Option<Box<concrete::ExtVm>>,
     /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
     level_ctxs: HashMap<u32, i32>,
+    /// 上下文透明方法（`ctx_free.rs`）：判定缓存；进本体的次数（诊断）
+    ctx_free_memo: HashMap<MemberRef, bool>,
+    ctx_free_hits: u64,
     level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,
