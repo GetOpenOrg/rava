@@ -380,7 +380,6 @@ impl Drop for Stack {
         LIVE.fetch_sub(1, Ordering::Relaxed);
         // 栈顶 KEEP 以下在锁外交还；是否保留 KEEP 视热槽余额
         release(self.slot, self.stride, KEEP);
-        let idx = ((self.slot - self.chunk) / self.stride) as u32;
         let limit = pool_limit();
         let mut guard = SLAB.lock().unwrap_or_else(|e| e.into_inner());
         let slab = &mut *guard;
@@ -390,7 +389,13 @@ impl Drop for Stack {
             // SAFETY: 栈顶 KEEP 位于本槽可用区内
             unsafe { libc::madvise((top - KEEP) as *mut libc::c_void, KEEP, ADVICE_RELEASE) };
         }
-        let c = slab.chunks.get_mut(&self.chunk).expect("slab");
+        let Some(c) = slab.chunks.get_mut(&self.chunk) else {
+            // 不变量破坏（存活栈的块必在登记表中）：Drop 内 panic 会在展开中二次 panic 而中止进程，
+            // debug 构建当场暴露；release 构建泄漏该槽（不归还空闲表、不解除映射），进程继续
+            debug_assert!(false, "rava_coro: 栈槽 {:#x} 所属块 {:#x} 不在登记表", self.slot, self.chunk);
+            return;
+        };
+        let idx = ((self.slot - self.chunk) / self.stride) as u32;
         c.free.push(idx << 1 | warm as u32);
         if warm {
             c.warm += 1;
@@ -406,7 +411,11 @@ impl Drop for Stack {
             return;
         }
         // 已有另一个空块：本块整块释放
-        let c = slab.chunks.remove(&self.chunk).expect("slab");
+        // 上方已在同一把锁下取到本块，此处必在；防御同上（缺失则不解除映射）
+        let Some(c) = slab.chunks.remove(&self.chunk) else {
+            debug_assert!(false, "rava_coro: 块 {:#x} 释放时不在登记表", self.chunk);
+            return;
+        };
         slab.avail.remove(&self.chunk);
         slab.warm -= c.warm;
         slab.empty -= 1;
@@ -414,5 +423,23 @@ impl Drop for Stack {
         drop(guard);
         // SAFETY: 块内已无存活栈，此后不再访问
         unsafe { libc::munmap(self.chunk as *mut libc::c_void, c.slots * self.stride) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 登记表里查不到块的栈句柄（不变量破坏）被丢弃：release 构建不 panic，泄漏该槽；
+    /// debug 构建由 debug_assert 报出。
+    #[test]
+    #[cfg_attr(debug_assertions, should_panic(expected = "不在登记表"))]
+    fn drop_with_unknown_chunk_leaks_instead_of_aborting() {
+        let real = Stack::new().expect("分配协程栈");
+        // 伪造句柄：同一槽，块地址不在登记表（槽内容只被 madvise 丢弃，真句柄稍后照常归还）
+        let bogus = Stack { slot: real.slot, chunk: real.chunk.wrapping_sub(1), stride: real.stride };
+        LIVE.fetch_add(1, Ordering::Relaxed);
+        drop(bogus);
+        drop(real);
     }
 }
