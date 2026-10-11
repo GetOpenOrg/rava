@@ -196,8 +196,9 @@ pub(super) struct HwWrite {
 /// 按声明形参位置的实参来源（基本类型为 None）
 pub(super) type Args = Vec<Option<Vec<Feed>>>;
 
-/// 调用点上 lambda 调用读者的键（lambda、返回类型、结果节点）：同一调用点同一 lambda 的不同实参并入同一读者
-pub(super) type LambdaKey = (u32, Option<u32>, Option<Node>);
+/// 调用点上 lambda 调用读者的键（lambda、返回类型、结果节点、所属枢纽读者）：同一调用点同一 lambda 的不同实参并入同一读者；
+/// 锚定在同一调用点的不同枢纽各有读者（共用则后到枢纽的效果记到先到者名下，随处理顺序而变）
+pub(super) type LambdaKey = (u32, Option<u32>, Option<Node>, Option<u32>);
 
 /// b 的各实参来源都已含于 a
 pub(super) fn args_cover(a: &Args, b: &Args) -> bool {
