@@ -56,8 +56,15 @@
 - 生成树 `rg-cmp3-e11a3191`（sg1，gen_trees 27 例 base 96fc1cf4 对 e11a3191）：生成 `.rs` **零差异**，raw-audit identical，closure.json `indy_models` 零差异（验收集无模式 switch 调用点）。差异只有四类，均为预期：① 各例新增 `vendor/`，Cargo.toml 宏 / 协程依赖改指 `../vendor/<名>`（修复 7）；② 日志 `[equiv-audit]` 多出 `field-npe=N`（修复 5，482–3128），其余审计计数逐例一致；③ 日志中的 scratch 路径（base 在 `base_wt/` 下）；④ 物化峰值内存噪声（±2%，对象数与回退组数一致）。宏分类统一（修复 1）与 try 标签（修复 2）只影响宏展开，不进生成树。
 - seed_check：DeepCopy / HelloWorld / TestNestedTry / TestTryInLoop 均 `seed-diff-lines=0`。
 - DeepCopy `--stop-after emit --perf`（sg1 同机新旧交替各 4 次）：首轮冷启动两版均约 216 s（closure 冷）；热态合计 base 10.94 / 10.99 / 10.95 s，new 10.79 / 10.80 / 10.76 s，无回归（overlay 阶段因落 vendor 多 3 ms）。
-- vendor 可搬移：scratch 内 Cargo.toml 无仓库绝对路径；DeepCopy 先编宏 crate，HelloWorld scratch 共享同一 target 时宏 crate 全部 `Fresh`；搬移后 `cargo metadata` 可解析、可构建。<!-- VMOVE -->
-- 抽查 `rg-spot-e11a3191`（kr1）：<!-- SPOT -->
+- vendor 可搬移：scratch 内 Cargo.toml 无仓库绝对路径；DeepCopy 先编宏 crate，HelloWorld scratch 共享同一 target 时宏 crate 全部 `Fresh`；搬移后 `cargo metadata` 可解析、可构建（复核用 `cp -r`，不保留 mtime，宏 crate 重编属预期；保留 mtime 的 `cp -a` / `mv` 复核见下方未完成项）。
+- 抽查 `rg-spot-e11a3191`（kr1，15 例：验收集 12 例 TestNestedTry / TestTryInLoop / TestSuppressed / TestSwitchExpression / TestSwitchString / TestSwitchFallthrough / TestCasting / TestHashMapOps / TestSynchronized / TestArrayList / TestStreamBasic / TestCompletableFuture，加 HelloWorld / DeepCopy / TestAnnoReflect）：收尾时 6/15 PASS（DeepCopy、HelloWorld、TestAnnoReflect、TestArrayList、TestCasting、TestCompletableFuture），0 失败；kr1 与其他代理争用，单槽排队，其余 9 例仍在跑。
+
+未完成项与下一步（10-11 收尾，用户指令暂停派发）：
+
+1. 收 `rg-spot-e11a3191` 余下 9 例结果（`cluster_results/spot/rg-spot-e11a3191/`）；全过即可攒批合入，有失败按修复 2 / 5（try 标签、field-npe 判空）与修复 1（宏分类）排查。
+2. vendor 搬移保留 mtime 的复核未完成：作业 `rg-vmove-e11a3191`（sg1）远端进程三次无 done 被归还，已停。脚本在 worktree `build/review/vendor_move.sh`（HelloWorld emit → 宏 crate 首编 → `cp -a` / `mv` 到 /tmp 再编，预期均 `Fresh`）；换空闲服务器重发即可。若搬移后仍重编，根因在 cargo 指纹含 workspace 绝对路径，终态改为 `--remap-path-prefix` 不足以解决时再议，代码层无需改动 vendor 方案。
+3. 待办余项「描述符 / 注解递归无深度上限」未纳入本批。
+4. 分支 `review-generator` 只推 origin 与 github，未合入 main（按派发约束），等抽查全过后攒批。
 
 ## 二、待办（不派，主线空档或相关改动顺手做）
 
