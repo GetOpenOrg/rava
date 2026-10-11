@@ -34,7 +34,9 @@ impl<T: Into<Object>> From<T> for JvmError {
 fn vm_throw<T: Into<Object>>(built: Result<T>) -> JvmError {
     // 诊断：RUST_BACKTRACE=full 时打印 VM 抛出点（NPE / 越界 / CCE …）的 Rust 回溯
     // （定位翻译体内的抛出位置）
-    if std::env::var("RUST_BACKTRACE").map(|v| v == "full").unwrap_or(false) {
+    // 诊断开关进程内只读一次（每次抛出都查环境变量是热路径上的分配与系统调用）
+    static FULL_BACKTRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *FULL_BACKTRACE.get_or_init(|| std::env::var("RUST_BACKTRACE").is_ok_and(|v| v == "full")) {
         eprintln!("[vm-throw]\n{}", std::backtrace::Backtrace::force_capture());
     }
     match built {

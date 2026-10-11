@@ -29,7 +29,7 @@ impl ClassLoader {
         {
             return Ok(super::Class::default());
         }
-        Ok(super::Class::for_class(String::from(slash.as_str())))
+        Ok(super::Class::for_class(slash.as_str()))
     }
 
     /// native `findLoadedClass0(String name)`：本加载器作为定义加载器登记过的类。原生镜像中类对象
@@ -54,7 +54,7 @@ impl ClassLoader {
         if !defined_here {
             return Ok(super::Class::default());
         }
-        Ok(super::Class::for_class(String::from(slash.as_str())))
+        Ok(super::Class::for_class(slash.as_str()))
     }
 }
 
@@ -158,7 +158,7 @@ fn _define(loader: ClassLoader, name: &String, bytes: &[u8], pd: crate::java::se
         return Err(_throwable(crate::java::lang::LinkageError::new_str(String::from(
             format!("attempted duplicate class definition for {}.", class.replace('/', ".")).as_str())).map(Object::from)));
     }
-    let mirror = super::Class::for_class(String::from(class));
+    let mirror = super::Class::for_class(class);
     if crate::predefined::record(class, Clone::clone(&loader), pd) {
         mirror.__set_classLoader(loader);
     }

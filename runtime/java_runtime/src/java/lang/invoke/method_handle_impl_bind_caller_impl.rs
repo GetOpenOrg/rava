@@ -16,7 +16,7 @@ impl MethodHandleImpl_BindCaller {
     #[jvm_native]
     pub fn makeInjectedInvoker(targetClass: Class) -> Result<Class> {
         let host = format!("{}", targetClass.__get_name()).replace('.', "/");
-        Ok(Class::for_class(String::from(crate::injected_invoker::define(&host))))
+        Ok(Class::for_class(crate::injected_invoker::define(&host)))
     }
 
     /// `generateInvokerTemplate()`：模板类字节只供 `makeInjectedInvoker` 定义隐藏类，该定义点

@@ -35,26 +35,20 @@
 use crate::error::Result;
 use crate::java::lang::Object;
 use crate::prelude::JArray;
-use std::collections::HashMap;
-use crate::sync_model::__Shared as Rc;
 
-/// 按名分派闭包：(方法名, 描述符, 接收者, 实参) → 处理结果。
+/// 按名分派入口：(方法名, 描述符, 接收者, 实参) → 处理结果（各类生成的 `__reflect_dispatch`）。
 /// `None` = 本类未声明该方法（上溯继续）；`Some(r)` = 已处理（含错误传播）。
-pub type ReflectDispatch =
-    Rc<crate::__DynFn!((&str, &str, Object, &JArray<Object>) -> Option<Result<Object>>)>;
+pub type ReflectDispatch = fn(&str, &str, Object, &JArray<Object>) -> Option<Result<Object>>;
 
-crate::__process_static! {
-    static DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, ReflectDispatch>> =
-        crate::sync_model::__RefSlot::new(HashMap::new());
-}
+/// 分派表：登记一次后冻结为按类名有序的不可变表，此后查表二分、不加锁、不克隆
+static DISPATCHERS: std::sync::OnceLock<Box<[(&'static str, ReflectDispatch)]>> = std::sync::OnceLock::new();
 
-/// 生成项目 main 启动时登记分派闭包（binary name 斜线形态；重登记幂等）。
-pub fn register_method_dispatch(dispatchers: &[(&str, ReflectDispatch)]) {
-    DISPATCHERS.with(|d| {
-        for (name, f) in dispatchers {
-            d.put((*name).to_owned(), Clone::clone(f));
-        }
-    });
+/// 生成项目 main 启动时登记分派入口（binary name 斜线形态；进程内一次，重登记忽略）。
+pub fn register_method_dispatch(dispatchers: &[(&'static str, ReflectDispatch)]) {
+    let mut table = dispatchers.to_vec();
+    table.sort_by(|a, b| a.0.cmp(b.0));
+    table.dedup_by(|a, b| a.0 == b.0);
+    let _ = DISPATCHERS.set(table.into_boxed_slice());
 }
 
 /// 生成项目 main 启动时登记各声明类的静态字段表（`X::__STATICS`，见 `field_reflect`）。
@@ -84,7 +78,8 @@ pub fn final_field(name: &str) -> crate::error::JvmError {
 }
 
 fn lookup(class_slash: &str) -> Option<ReflectDispatch> {
-    DISPATCHERS.with(|d| d.borrow().get(class_slash).map(Clone::clone))
+    let table = DISPATCHERS.get()?;
+    table.binary_search_by(|(c, _)| (*c).cmp(class_slash)).ok().map(|i| table[i].1)
 }
 
 /// 统一按名分派入口（Method.invoke / Constructor.newInstance 共用）。
@@ -126,9 +121,9 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
         if recv.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        recv.0.__class_name().to_owned()
+        recv.0.__class_name()
     } else {
-        declaring_slash.to_owned()
+        declaring_slash
     };
     // 目标方法体抛出（非分派臂实参 marshalling 失败）：登记为「目标抛出」，
     // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
@@ -144,19 +139,19 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     // "object is not an instance of declaring class"，属实参不符、不包装为 InvocationTargetException）。
     // 实例判定以接收者视图为准，再按父类链复核（手写实现对象的视图可能不全）
     if is_virtual && declaring_slash != "java/lang/Object" && !recv.0.is_instance_of(declaring_slash)
-        && !superclass_chain(&cur).iter().any(|c| c == declaring_slash) {
+        && !superclass_chain(cur).any(|c| c == declaring_slash) {
         crate::exec_context::state().bad_arg.set(true);
         return Err(crate::error::JvmError::illegal_argument("object is not an instance of declaring class"));
     }
     let mut cur = cur;
     let mut hops = 0usize;
     loop {
-        if let Some(f) = lookup(&cur) {
+        if let Some(f) = lookup(cur) {
             if let Some(r) = f(name, descriptor, Clone::clone(&recv), args) {
                 return finish(r);
             }
         }
-        match superclass(&cur) {
+        match superclass(cur) {
             Some(z) if hops < 256 => cur = z,
             _ => break, // 无父类 / 表外（接口 / Object 上方）/ 防御环
         }
@@ -186,17 +181,17 @@ pub fn native_invoke(declaring_slash: &str, name: &str, descriptor: &str,
         crate::exec_context::state().bad_arg.set(true);
         return Err(crate::error::JvmError::null_pointer());
     }
-    let params = crate::java::lang::Class::__descriptor_params(descriptor);
     let argc = if args.is_jvm_null() { 0 } else { args.len()? as usize };
-    if argc != params.len() {
+    let expected = descriptor_params(descriptor).count();
+    if argc != expected {
         crate::exec_context::state().bad_arg.set(true);
         return Err(crate::error::JvmError::illegal_argument(
-            &format!("wrong number of arguments: {argc} expected: {}", params.len())));
+            &format!("wrong number of arguments: {argc} expected: {expected}")));
     }
-    for (i, p) in params.iter().enumerate() {
+    for (i, p) in descriptor_params(descriptor).enumerate() {
         let target = match p.strip_prefix('L').and_then(|r| r.strip_suffix(';')) {
             Some(b) => b,
-            None if p.starts_with('[') => p.as_str(),
+            None if p.starts_with('[') => p,
             None => continue,
         };
         let a = args.get(i as i32)?;
@@ -209,36 +204,54 @@ pub fn native_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     reflect_invoke(declaring_slash, name, descriptor, recv, args)
 }
 
-/// 直接父类（Class.getSuperclass 的公共查询面，java_meta 生成）；无父类 / 表外 → None
-fn superclass(class_slash: &str) -> Option<String> {
-    let zuper = crate::java::lang::Class::for_class(crate::java::lang::String::from(class_slash))
-        .getSuperclass()
-        .unwrap_or_default();
-    if Object::from(Clone::clone(&zuper)).0.is_jvm_null() {
-        return None;
+/// 描述符形参逐项切片（`(I[JLjava/lang/String;)V` → `I`、`[J`、`Ljava/lang/String;`），不分配
+fn descriptor_params(descriptor: &str) -> impl Iterator<Item = &str> {
+    let body = descriptor.strip_prefix('(').and_then(|d| d.split_once(')')).map_or("", |(b, _)| b);
+    let mut rest = body;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let dims = rest.len() - rest.trim_start_matches('[').len();
+        let end = match rest.as_bytes().get(dims) {
+            Some(b'L') => rest[dims..].find(';').map_or(rest.len(), |k| dims + k + 1),
+            Some(_) => dims + 1,
+            None => rest.len(),
+        };
+        let (p, tail) = rest.split_at(end);
+        rest = tail;
+        Some(p)
+    })
+}
+
+/// 直接父类（与 Class.getSuperclass 同一数据面：数组 → Object，直接父类表，注入调用器 → Object）；
+/// 无父类 / 表外 → None。返回表内静态名，不分配
+fn superclass(class_slash: &str) -> Option<&'static str> {
+    if class_slash.starts_with('[') {
+        return Some("java/lang/Object");
     }
-    Some(format!("{}", zuper.__get_name()).replace('.', "/"))
+    match crate::meta::row(crate::meta::class_direct_super(), class_slash) {
+        Some(z) => Some(*z),
+        None if crate::injected_invoker::is_injected(class_slash) => Some("java/lang/Object"),
+        None => None,
+    }
 }
 
 /// class_slash 起的父类链（含自身）
-fn superclass_chain(class_slash: &str) -> Vec<String> {
-    let mut chain = vec![class_slash.to_owned()];
-    while chain.len() <= 256 {
-        match superclass(&chain[chain.len() - 1]) {
-            Some(z) => chain.push(z),
-            None => break,
-        }
-    }
-    chain
+fn superclass_chain(class_slash: &str) -> impl Iterator<Item = &str> {
+    let mut next = Some(class_slash);
+    std::iter::from_fn(move || {
+        let cur = next?;
+        next = superclass(cur);
+        Some(cur)
+    }).take(257)
 }
 
-/// static 判定：经方法元数据表（Class.__declared_method_meta 的公共查询面）。
+/// static 判定：经方法元数据表（L3 分派协议的 static/虚分派判别面）。
 fn is_static_descriptor(class_slash: &str, name: &str, descriptor: &str) -> bool {
-    let cls = crate::java::lang::Class::for_class(
-        crate::java::lang::String::from(class_slash));
-    cls.__declared_method_meta(name, descriptor)
-        .map(|(_mods, is_static, _native, _abstract)| is_static)
-        .unwrap_or(false)
+    crate::meta::row(crate::meta::class_methods(), class_slash)
+        .and_then(|ms| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
+        .is_some_and(|m| m.is_static)
 }
 
 // ── 实参/返回值的边界 marshalling（分派闭包发射侧共用）─────────────────────

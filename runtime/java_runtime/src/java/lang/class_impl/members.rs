@@ -47,7 +47,7 @@ impl Class {
                     .map(|p| class_for_descriptor(&p)).collect();
                 c.__set_parameterTypes(JArray::from(params));
                 let excs: Vec<Class> = meta.exceptions.iter()
-                    .map(|e| Class::for_class(String::from(*e))).collect();
+                    .map(|e| Class::for_class(*e)).collect();
                 c.__set_exceptionTypes(JArray::from(excs));
                 c.__set_annotations(__anno_bytes(meta.annotations));
                 c.__set_parameterAnnotations(__anno_bytes(meta.param_annotations));

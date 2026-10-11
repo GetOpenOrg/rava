@@ -25,14 +25,14 @@ impl Reflection {
     #[jvm_native]
     pub fn getCallerClass() -> Result<Class> {
         if let Some(caller) = crate::reflect_dispatch::current_caller_sensitive() {
-            return Ok(Class::for_class(String::from(caller)));
+            return Ok(Class::for_class(caller));
         }
         let frames = crate::vm_stack::capture_java_frames();
         let caller = frames
             .iter()
             .position(|f| f.class == "jdk/internal/reflect/Reflection" && f.method.name == "getCallerClass")
             .and_then(|at| frames[at + 1..].iter().skip(1).find(|f| !f.is_ignored_by_security_stack_walk()));
-        Ok(Class::for_class(String::from(caller.map_or("java/lang/Object", |f| f.class))))
+        Ok(Class::for_class(caller.map_or("java/lang/Object", |f| f.class)))
     }
 
     /// native `getClassAccessFlags(Class)`：class 文件的类访问标志（非 InnerClasses 的内部标志）。

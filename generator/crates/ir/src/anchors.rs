@@ -9,7 +9,7 @@
 pub const OBJECT: &str = "Object";
 /// 字符串常量载体：`String::from("..")` / `String::from_utf16_lit(&[..])`。
 pub const STRING: &str = "String";
-/// 类字面量载体：`Class::for_class(String::from("<binary>"))`。
+/// 类字面量载体：`Class::for_class("<binary>")`。
 pub const CLASS: &str = "Class";
 /// JVM 数组载体 `JArray<E>`：checkcast 到数组时按元素类型分派（`try_cast_array::<E>`）。
 pub const ARRAY: &str = "JArray";

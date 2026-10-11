@@ -29,7 +29,7 @@ impl SecurityManager {
         };
         let classes: Vec<Class> = frames[start..].iter()
             .filter(|f| !f.is_native() && !f.is_ignored_by_security_stack_walk())
-            .map(|f| Class::for_class(String::from(f.class)))
+            .map(|f| Class::for_class(f.class))
             .collect();
         Ok(JArray::from(classes))
     }

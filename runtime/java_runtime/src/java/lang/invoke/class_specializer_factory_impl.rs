@@ -26,6 +26,6 @@ where
     ) -> Result<Class> {
         let key: Object = speciesData.key()?.into();
         crate::species_dyn::register(format!("{}", key), Object::from(speciesData));
-        Ok(Class::for_class(String::from(crate::species_dyn::SPECIES_DYN)))
+        Ok(Class::for_class(crate::species_dyn::SPECIES_DYN))
     }
 }

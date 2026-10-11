@@ -35,6 +35,35 @@
 
 `Class.for_class` 每次 `format!`（`class_impl.rs:55-83`）；反射分派全局锁 + 闭包 clone（`reflect_dispatch.rs:46-88`）；ldc 字面量每次重新驻留（`string_ext.rs:141`）；`vm_throw` 每次读 `RUST_BACKTRACE`（`error.rs:34-38`）。验收以三测点（运行 / 构建 / 体积）前后对照。
 
+#### C 性能实测（分支 `review-runtime-perf`）
+
+改动（只动 VM 基础设施与生成器发射形态，不新增手写方法）：
+- `Class::for_class(&str)`：按 `&str` 查镜像，不再 `format!`；`java_class!` 宏的 ldc 逐调用点 `OnceLock` 改写由 `String::from("lit")` 扩到 `Class::for_class("lit")`（`rava_macros_core/src/block/ldc.rs`），类字面量与字符串常量首次执行后零分配，驻留同一性不变。
+- 反射分派表：注册时排序去重后冻结为 `OnceLock<Box<[(&str, fn)]>>`，查找二分、无锁无 clone；分派器由 `Rc` 闭包改为 fn 指针（生成器 `emit/src/phase2/dispatch.rs` 发射 `as ReflectDispatch`）。上溯超类链、静态判定改走有序元数据表 `meta::row`（二分，保持原首匹配语义），描述符参数拆分零分配。
+- `vm_throw`：`RUST_BACKTRACE` 读一次缓存于 `OnceLock<bool>`。
+
+三测点（us1 同机前后；基线 39d6d123 / 微基准基线 1ae0d00f，改后 9d601f05 / 43f37f63；运行取 5 次中位数）：
+
+| 用例 | 构建 s 前 → 后 | 运行 s 前 → 后 | 二进制字节 前 → 后 |
+|---|---|---|---|
+| DeepCopy | 476.06 → 467.95 | 0.284 → 0.269 | 371311800 → 370171776 |
+| StreamDemo | 65.34 → 65.14 | 0.023 → 0.022 | 65361848 → 65381520 |
+| TestAnnoReflect | 284.53 → 290.64 | 0.174 → 0.172 | 289032952 → 288454784 |
+| TestDynamicProxy | 252.80 → 252.01 | 0.171 → 0.175 | 265451848 → 265081736 |
+| sc1 | 302.51 → 304.54 | 0.277 → 0.252 | 303699912 → 303336560 |
+| sc2 | 268.16 → 261.17 | 0.291 → 0.272 | 269713568 → 269045720 |
+| sc3 | 326.16 → 321.22 | 0.203 → 0.201 | 316744488 → 316204336 |
+| sc4 | 261.22 → 263.11 | 0.181 → 0.175 | 270642720 → 270365328 |
+| TestReflectLdcHotLoop（微基准，100 万次） | 65.30 → 65.55 | **107.410 → 43.197** | 66567024 → 66577376 |
+
+构建耗时在 ±2% 噪声内，体积持平（多数略减）；常规用例运行时热路径占比小，持平或略快；微基准提速 2.49×，峰值 RSS 持平（约 24.7 MB）。计时脚本 `scripts/perf_hotpath.sh`，结果 `cluster_results/job/perf-rt-{base,after}-us1`、`perf-rt-mb-{base,after}`。
+
+验证：本机 cargo check（generator `--release --tests`、rava_macros_core `--tests`）通过；集群单测 ut-closure / ut-rest（作业 perf-rt-ut，82f55952）641 过 0 败；抽查 perf-rt-a4（43f37f63，jp2 + kr1）DeepCopy / StreamDemo / TestAnnoReflect / TestDynamicProxy / HelloWorld / TestReflectLdcHotLoop 6/6 PASS。
+
+余项：
+- 微基准改后仍约 43 µs / 迭代（JVM 为微秒以下），剩余开销在 `Method.invoke` 的字节码翻译路径（访问检查、参数装箱、`MethodAccessor` 链），未剖析；属后续性能项。
+- 既有缺陷：`Method.invoke` 返回的装箱 `Integer` 经 `(Integer)` checkcast 抛 `ClassCastException: java/lang/Integer cannot be cast to java/lang/Integer`（`try_cast<Integer>` 失配，前后均复现），微基准改经 `hashCode()` 取值绕开；需另修。
+
 ## 二、待办（不派，主线空档或相关改动顺手做）
 
 - 健全性：`Handoff<T>` 无界 Send（`gil.rs:158`）；`native_memory` 批量拷贝与 CAS 混访、未对齐 CAS 退化、`fill` 负数（`native_memory.rs:83-162`）；`rava_coro` Drop 中 `expect`（`stack.rs:393,409`）。

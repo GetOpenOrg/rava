@@ -373,7 +373,7 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
         let path = class_use_path(ctx, bin, USER_CRATE);
         let tf = object_turbofish(ctx, bin);
         let rt = ctx.crates().root();
-        let line = format!("    (\"{bin}\", {rt}::sync_model::__Shared::new(|n, d, r, a| {path}{tf}::__reflect_dispatch(n, d, r, a))),");
+        let line = format!("    (\"{bin}\", {path}{tf}::__reflect_dispatch as {rt}::reflect_dispatch::ReflectDispatch),");
         Some((appended(&em.text, &text), line))
     });
     DispatchReg { methods: methods.into_values().collect(), fields }

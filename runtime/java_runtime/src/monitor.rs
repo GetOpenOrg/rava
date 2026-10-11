@@ -572,6 +572,5 @@ impl Drop for MonitorGuard {
 /// `MonitorGuard::acquire` 使用；跨 crate（java_runtime 内部 / 用户 crate）统一
 /// 经 prelude 调用，免逐文件 import `Class`。
 pub fn class_monitor(binary_name: &str) -> Object {
-    Object::from(crate::java::lang::Class::for_class(
-        crate::java::lang::String::from(binary_name)))
+    Object::from(crate::java::lang::Class::for_class(binary_name))
 }

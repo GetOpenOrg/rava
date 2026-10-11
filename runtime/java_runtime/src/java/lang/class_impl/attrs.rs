@@ -75,7 +75,7 @@ impl Class {
         };
         let out: Vec<Class> = subs.iter()
             .filter(|s| Class::__is_known_class(s))
-            .map(|s| Class::for_class(String::from(*s)))
+            .map(|s| Class::for_class(*s))
             .collect();
         Ok(JArray::from(out))
     }
@@ -101,7 +101,7 @@ impl Class {
                 .unwrap_or_default()
         };
         let out: Vec<Class> = list.into_iter()
-            .map(|i| Class::for_class(String::from(i)))
+            .map(|i| Class::for_class(i))
             .collect();
         Ok(JArray::from(out))
     }
@@ -143,7 +143,7 @@ impl Class {
         if initialize && !slash.starts_with('[') {
             crate::ensure_class_initialized(&slash)?;
         }
-        Ok(Class::for_class(String::from(slash.as_str())))
+        Ok(Class::for_class(slash.as_str()))
     }
 
     /// 原生镜像中「可加载」的类：生成闭包内的类（java_meta 修饰符表，含用户类）与数组类名；

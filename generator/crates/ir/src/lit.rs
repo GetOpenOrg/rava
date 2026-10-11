@@ -1,7 +1,7 @@
 //! 字面量（← `Lit(value: str)`）。
 //!
 //! Python 的 `Lit` 原样携带渲染文本（`"42i32"`、`'String::from("x")'`、
-//! `'Class::for_class(String::from("java/lang/X"))'`、`'Object::default()'`）；
+//! `'Class::for_class("java/lang/X")'`、`'Object::default()'`）；
 //! 这里按语义分成变体，渲染形态由 `render::lit` 唯一决定。
 
 use crate::IrError;
@@ -96,7 +96,7 @@ pub enum Lit {
     JString(String),
     /// 含孤立代理项的 Java 字符串常量：`String::from_utf16_lit(&[0x0041, ..])`
     JStringUtf16(Vec<u16>),
-    /// 类字面量（`X.class`）：`Class::for_class(String::from("<binary>"))`
+    /// 类字面量（`X.class`）：`Class::for_class("<binary>")`
     ClassRef(String),
     /// 空引用 `aconst_null`：`Object::default()`
     Null,

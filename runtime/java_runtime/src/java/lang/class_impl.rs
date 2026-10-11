@@ -42,9 +42,13 @@ impl Class {
         Ok(c)
     }
 
-    /// `ldc` 装载的类字面量（`X.class` / `X[].class`）：每个 binary name 对应唯一
-    /// 的 Class 对象，首次请求时创建并在线程内缓存 —— 保证 `X.class == X.class`
+    /// `ldc` 装载的类字面量（`X.class` / `X[].class`）与 VM 内部按名取镜像的统一入口：每个 binary name
+    /// 对应唯一的 Class 对象，首次请求时创建并进程内缓存 —— 保证 `X.class == X.class`
     /// 的身份语义（JVMS §5.1 运行时常量池的类引用只解析一次）。
+    ///
+    /// 入参是 binary name 的 `&str`（斜线形态）：查找全程不分配——映像表二分、运行期缓存按 `&str` 借用键查，
+    /// 只有首次建镜像时分配。生成代码的类字面量站点另由 `java_class!` 展开为调用点私有单元（见宏 `ldc`
+    /// 模块），首次之后连查表也省去。
     ///
     /// `getName()` 返回 Java 形式的二进制名：斜线换点（`java/util/List` →
     /// `java.util.List`），数组类型保持 JVM 描述符形态（`[Ljava.lang.String;`）；隐藏类
@@ -52,32 +56,31 @@ impl Class {
     /// JVM 隐藏类命名），反向换回斜线即元数据表键。
     /// isAssignableFrom 的层次查询在运行时经 java_meta 生成的层次表进行，
     /// 此处不再携带/登记超类型数据。
-    pub fn for_class(binary_name: String) -> Class {
+    pub fn for_class(binary_name: &str) -> Class {
         crate::__process_static! {
             static CLASSES: RefCell<HashMap<std::string::String, Class>> =
                 RefCell::new(HashMap::new());
         }
-        let key = format!("{}", binary_name);
         // 映像中的类镜像（构建期建立，名字 / 组件类型 / 模块已写定）是该类的规范镜像
-        if let Some(c) = crate::image_rt::image_mirror(&key) {
+        if let Some(c) = crate::image_rt::image_mirror(binary_name) {
             return Class::from(c);
         }
-        if let Some(c) = CLASSES.with(|cache| cache.borrow().get(&key).cloned()) {
+        if let Some(c) = CLASSES.with(|cache| cache.borrow().get(binary_name).cloned()) {
             return c;
         }
         let mut c = Class::default();
         c._init_not_null();
-        let dotted = crate::meta::java_name(&key);
+        let dotted = crate::meta::java_name(binary_name);
         c.__set_name(String::from(dotted.as_str()));
         // 数组类的 componentType 字段由 VM 在建镜像时填充（HotSpot set_component_mirror）：
         // 字节码翻译的 `componentType()` / `arrayType` 链直接读该字段（MethodHandleImpl
         // .makeCollector 的 nCopies(n, arrayType.componentType())）。元素 Class 经 for_class
         // 解析——须在缓存借用之外（递归入本函数）
-        if let Some(rest) = key.strip_prefix('[') {
+        if let Some(rest) = binary_name.strip_prefix('[') {
             c.__set_componentType(class_for_descriptor(rest));
         }
-        let mirror_key = key.replace('.', "/");
-        let c = CLASSES.with(|cache| cache.intern(key, c));
+        let mirror_key = binary_name.replace('.', "/");
+        let c = CLASSES.with(|cache| cache.intern(binary_name.to_owned(), c));
         c.__pin_mirror_hash(&mirror_key);
         c
     }
@@ -202,9 +205,8 @@ impl Class {
     /// （method_handle_natives_impl.rs，MemberName 解析内核）；未声明 → None。
     pub fn __declared_method_meta(&self, name: &str, descriptor: &str) -> Option<(i32, bool, bool, bool)> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        crate::meta::class_methods().iter()
-            .find(|(n, _)| *n == cls_key)
-            .and_then(|(_, ms)| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
+        crate::meta::row(crate::meta::class_methods(), &cls_key)
+            .and_then(|ms| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
             .map(|m| (m.modifiers, m.is_static, m.is_native, m.is_abstract))
     }
 
@@ -247,7 +249,7 @@ impl Class {
         let ret_start = meta.descriptor.find(')').map(|i| i + 1).unwrap_or(meta.descriptor.len());
         let ret = class_for_descriptor(&meta.descriptor[ret_start..]);
         let excs: Vec<Class> = meta.exceptions.iter()
-            .map(|e| Class::for_class(String::from(*e)))
+            .map(|e| Class::for_class(*e))
             .collect();
         let mut m = crate::java::lang::reflect::Method::default();
         m._init_not_null();
@@ -354,14 +356,14 @@ impl Class {
     pub fn getSuperclass(&self) -> Result<Class> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         if name.starts_with('[') {
-            return Ok(Class::for_class(String::from("java/lang/Object")));
+            return Ok(Class::for_class("java/lang/Object"));
         }
-        match crate::meta::class_direct_super().iter().find(|(n, _)| *n == name) {
+        match crate::meta::row(crate::meta::class_direct_super(), &name) {
             // for_class 的缓存键是斜线形态（与 ldc 类字面量同一调用形态）——身份语义
             //（`zuper == Enum.class`）依赖同一缓存条目
-            Some((_, sup)) => Ok(Class::for_class(String::from(*sup))),
+            Some(sup) => Ok(Class::for_class(sup)),
             // @CallerSensitive 注入调用器（运行期登记的隐藏类）：超类 Object（JDK 模板同）
-            None if crate::injected_invoker::is_injected(&name) => Ok(Class::for_class(String::from("java/lang/Object"))),
+            None if crate::injected_invoker::is_injected(&name) => Ok(Class::for_class("java/lang/Object")),
             None => Ok(Class::default()),
         }
     }
@@ -456,8 +458,8 @@ fn class_for_descriptor(desc: &str) -> Class {
     };
     match slashes.as_bytes().first() {
         Some(b'L') if slashes.ends_with(';') =>
-            Class::for_class(String::from(&slashes[1..slashes.len() - 1])),
-        Some(b'[') => Class::for_class(String::from(slashes.as_str())),
+            Class::for_class(&slashes[1..slashes.len() - 1]),
+        Some(b'[') => Class::for_class(slashes.as_str()),
         Some(b'B') => prim("byte"),
         Some(b'C') => prim("char"),
         Some(b'D') => prim("double"),
@@ -511,19 +513,15 @@ impl Class {
 /// 反射族内部：直接父类表查询（L3 分派协议的上溯数据面，
 /// reflect_dispatch::reflect_invoke 消费）。
 pub fn __direct_super_lookup(class_slash: &str) -> Option<&'static str> {
-    crate::meta::class_direct_super().iter()
-        .find(|(n, _)| *n == class_slash)
-        .map(|(_, s)| *s)
+    crate::meta::row(crate::meta::class_direct_super(), class_slash).copied()
 }
 
 /// 反射族内部：方法元数据表的 static 判定（L3 分派协议的 static/虚分派
 /// 判别面，reflect_dispatch 消费）。未声明 → false（按虚方法处理，上溯）。
 pub fn __method_is_static(class_slash: &str, name: &str, descriptor: &str) -> bool {
-    crate::meta::class_methods().iter()
-        .find(|(n, _)| *n == class_slash)
-        .and_then(|(_, ms)| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
-        .map(|m| m.is_static)
-        .unwrap_or(false)
+    crate::meta::row(crate::meta::class_methods(), class_slash)
+        .and_then(|ms| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
+        .is_some_and(|m| m.is_static)
 }
 
 
