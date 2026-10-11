@@ -122,9 +122,16 @@ pub struct Failure {
     pub timeout: bool,
     pub first_error: String,
     pub log: Option<PathBuf>,
+    /// 某个 rustc 被 SIGKILL 终止（内存超限时 OOM Killer 挑最大的 rustc）
+    pub rustc_killed: bool,
 }
 
 impl Failure {
+    /// 疑似内存不足：rustc 或 cargo 本身被 SIGKILL（超时自杀不算）
+    pub fn oom(&self) -> bool {
+        !self.timeout && (self.rustc_killed || self.signal == Some(9))
+    }
+
     pub fn summary(&self) -> String {
         if self.timeout {
             return format!("cargo build 超时（{}）", self.first_error);
@@ -134,7 +141,8 @@ impl Failure {
             return format!("cargo build 被信号 {s} 终止{oom}");
         }
         let log = self.log.as_ref().map(|l| format!("（全文 → {}）", l.display())).unwrap_or_default();
-        format!("cargo build 失败：{}{log}", self.first_error)
+        let oom = if self.rustc_killed { "——rustc 被 SIGKILL，疑似 OOM" } else { "" };
+        format!("cargo build 失败{oom}：{}{log}", self.first_error)
     }
 }
 
@@ -183,6 +191,11 @@ pub fn collect_artifacts(stdout: &str, scratch: &Path, bin: &str) -> (Vec<PathBu
 pub fn first_error(stderr: &str) -> String {
     let l = stderr.lines().find(|l| l.starts_with("error")).unwrap_or("unknown build error");
     l.chars().take(160).collect()
+}
+
+/// cargo 报告某个 rustc 被 SIGKILL 终止（`process didn't exit successfully: ... (signal: 9, SIGKILL: kill)`）
+pub fn rustc_killed(stderr: &str) -> bool {
+    stderr.lines().any(|l| l.contains("(signal: 9, SIGKILL"))
 }
 
 /// 等待子进程；超时则杀整个进程组（子进程以自身为组长启动）
@@ -277,7 +290,8 @@ pub fn compile(out: &Path, bin: &str, heavy: &Heavy, mem: &MemPlan, c: &CargoOpt
         let signal = std::os::unix::process::ExitStatusExt::signal(&status);
         #[cfg(not(unix))]
         let signal = None;
-        return Err(Failure { exit: status.code(), signal, timeout: false, first_error: first_error(&stderr), log: Some(log) });
+        let rustc_killed = rustc_killed(&stderr);
+        return Err(Failure { exit: status.code(), signal, timeout: false, first_error: first_error(&stderr), log: Some(log), rustc_killed });
     }
     exe.ok_or_else(|| fail(format!("cargo 产物清单中没有 bin {bin} 的可执行文件")))
 }
@@ -320,6 +334,15 @@ mod tests {
     fn first_error_line() {
         assert_eq!(first_error("warning: x\nerror[E0308]: mismatched\nerror: again"), "error[E0308]: mismatched");
         assert_eq!(first_error("ok"), "unknown build error");
+    }
+
+    #[test]
+    fn rustc_sigkill_is_oom() {
+        let e = "error: could not compile `java_base_decl` (lib)\n\nCaused by:\n  process didn't exit successfully: `rustc --crate-name x` (signal: 9, SIGKILL: kill)";
+        assert!(rustc_killed(e));
+        assert!(!rustc_killed("error[E0308]: mismatched types"));
+        let f = Failure { rustc_killed: true, ..Failure::default() };
+        assert!(f.oom() && !Failure { timeout: true, signal: Some(9), ..Failure::default() }.oom());
     }
 
     #[test]

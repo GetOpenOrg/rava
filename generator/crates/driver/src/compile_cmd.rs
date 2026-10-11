@@ -34,14 +34,22 @@ pub fn compile_stage(out: &Path, repo: &Path, emit: &EmitSummary, c: &CompileArg
     st.stage = Stage::Compile;
     let heavy = Heavy::decide(emit.jdk_classes);
     st.heavy = Some(heavy.clone());
-    let mem = crate::mem_budget::decide(out, c.profile, c.build_mem_mb);
-    st.mem = Some(mem.clone());
+    let mut mem = crate::mem_budget::decide(out, c.profile, c.build_mem_mb);
     let opts = CargoOpts {
         target_dir: c.target_dir.clone().unwrap_or_else(|| repo.join("build").join("target")),
         profile: c.profile,
         timeout: c.build_timeout.map(Duration::from_secs).or_else(|| c.build_timeout_scale.map(|k| heavy.default_timeout() * k)),
     };
-    let r = cargo::compile(out, &emit.bin, &heavy, &mem, &opts);
+    // 估计是上包络，实测仍 OOM（rustc 被 SIGKILL）时作业数退半重编：已编完的 crate 由 cargo 缓存命中，
+    // 只重编被杀的与未编的；退到 1 作业仍 OOM 即单进程峰值超出本机内存，如实报失败
+    let r = loop {
+        let r = cargo::compile(out, &emit.bin, &heavy, &mem, &opts);
+        match &r {
+            Err(f) if f.oom() && mem.halve() => println!("[cargo-env] {}；作业数退半为 {} 重编", f.summary(), mem.jobs),
+            _ => break r,
+        }
+    };
+    st.mem = Some(mem);
     // 链接成功只留可执行文件；失败的中间产物同样只是缓存，一并删除
     if !c.keep_artifacts && out.join(cargo::ARTIFACTS_FILE).exists() {
         crate::artifacts::prune_scratch(out, r.is_ok())?;
