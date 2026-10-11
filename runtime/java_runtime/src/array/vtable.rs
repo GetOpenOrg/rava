@@ -220,7 +220,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     fn __identity(&self) -> *const () { self.target().__identity() }
     fn __object(&self) -> Option<Object> { self.target().__object() }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { self.target().__array_len() }
-    fn __erased_vtable(&self, slot: &mut dyn std::any::Any) { self.target().__erased_vtable(slot) }
+    fn __erased_vtable(&self, depth: u16, slot: &mut dyn std::any::Any) { self.target().__erased_vtable(depth, slot) }
     fn __array_elem_assignable(&self, target_elem: &str, slot: &mut dyn std::any::Any) -> bool {
         self.target().__array_elem_assignable(target_elem, slot)
     }

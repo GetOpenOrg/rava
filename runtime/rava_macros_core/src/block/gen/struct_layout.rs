@@ -20,7 +20,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 字段单元内联于存储（与对象同一分配）：基本字段 `__PrimCell<T>`（普通字段 relaxed、volatile
     // 字段 SeqCst，由访问器选择），引用字段 `__RefField<Option<T>>`（`None` = 从未写入）。
     // 擦除字段以 Object 存储（声明类型提及类型形参；JVM 字段存储按描述符擦除）。
-    // 存储只由分配钩子建立在 `__Shared` 中，wrapper 重建钩子经 `__Ref::from_storage` 共享
+    // 存储只由分配钩子建立在 `__Shared` 中，wrapper 重建钩子经 `__Handle::from_storage` 共享
     // 同一存储（不复制），对象标识即存储地址。
     let erased_ref_cell: TokenStream2 = quote! { __RefField<::std::option::Option<Object>> };
     let mut inner_field_tokens: Vec<TokenStream2> = Vec::new();
@@ -169,34 +169,40 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         None => quote! {},
     };
 
-    // 擦除 vtable 查询（运行时类覆盖）：inner 即 vtable 对象（`impl *__VTable for
-    // __inner`），按调用方 slot 的（擦除）类 vtable 类型把自身的视图指针填入（调用方与
-    // 持有本存储的句柄合成 `__Ref`，S7-2）——运行时类自身槽直取 self；祖先类槽经
-    // supertrait 上转。与上方 `__interface` 的接口查询同形，
-    // 意义在于**按运行时类**应答（wrapper 侧的同名方法按静态类生成臂，祖先视图包装
-    // 的「降回中间类」查询由此承接——中间型 catch/checkcast 的擦除重建路径）。
-    let ancestor_vtable_idents: Vec<Ident> = ctx.meta.all_superclasses.iter()
-        .filter(|anc| !anc.is_empty())
-        .map(|anc| format_ident!("{}__VTable", anc))
-        .collect();
+    // 擦除 vtable 查询（运行时类覆盖，S7 计划 §9.9 K1）：inner 即 vtable 对象（`impl *__VTable
+    // for __inner`），按调用方给出的 display 深度把对应类的视图指针填入 slot——本类深度直取
+    // self，祖先深度经 supertrait 上转；一次 `match` + 一次槽类型比较，代价与继承深度无关
+    // （取法 A）。深度与描述符 display 表同口径：祖先按根在前排列、不含 Object，本类深度 =
+    // 祖先数。wrapper 的 `__vt()` 与擦除重建路径（中间型 catch/checkcast）都经此按运行时类应答。
+    let self_depth = ctx.meta.all_superclasses.len() as u16;
+    let (ancestor_depths, ancestor_vtable_idents): (Vec<u16>, Vec<Ident>) = ctx.meta.all_superclasses.iter()
+        .enumerate()
+        .filter(|(_, anc)| !anc.is_empty())
+        .map(|(k, anc)| (k as u16, format_ident!("{}__VTable", anc)))
+        .unzip();
     let erased_vtable_query: TokenStream2 = quote! {
-        fn __erased_vtable(&self, slot: &mut dyn ::std::any::Any) {
-            if let ::std::option::Option::Some(s) =
-                slot.downcast_mut::<::std::option::Option<::std::ptr::NonNull<dyn #vtable_trait_ident>>>()
-            {
-                *s = ::std::option::Option::Some(
-                    ::std::ptr::NonNull::from(self as &dyn #vtable_trait_ident));
-                return;
-            }
-            #(
-                if let ::std::option::Option::Some(s) =
-                    slot.downcast_mut::<::std::option::Option<::std::ptr::NonNull<dyn #ancestor_vtable_idents>>>()
-                {
-                    *s = ::std::option::Option::Some(
-                        ::std::ptr::NonNull::from(self as &dyn #ancestor_vtable_idents));
-                    return;
+        fn __erased_vtable(&self, depth: u16, slot: &mut dyn ::std::any::Any) {
+            match depth {
+                #self_depth => {
+                    if let ::std::option::Option::Some(s) =
+                        slot.downcast_mut::<::std::option::Option<::std::ptr::NonNull<dyn #vtable_trait_ident>>>()
+                    {
+                        *s = ::std::option::Option::Some(
+                            ::std::ptr::NonNull::from(self as &dyn #vtable_trait_ident));
+                    }
                 }
-            )*
+                #(
+                    #ancestor_depths => {
+                        if let ::std::option::Option::Some(s) =
+                            slot.downcast_mut::<::std::option::Option<::std::ptr::NonNull<dyn #ancestor_vtable_idents>>>()
+                        {
+                            *s = ::std::option::Option::Some(
+                                ::std::ptr::NonNull::from(self as &dyn #ancestor_vtable_idents));
+                        }
+                    }
+                )*
+                _ => {}
+            }
         }
     };
 

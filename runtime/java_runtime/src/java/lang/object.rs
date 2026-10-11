@@ -219,13 +219,13 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     #[doc(hidden)]
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { None }
 
-    /// 擦除视图导出（S7-2）：`slot` 是调用方（`From<Object> for X<A>` / `X::__virtual_view`，
-    /// 知道目标类 X）构造的 `Option<NonNull<dyn X__VTable>>`。运行时类是 X 或 X 的子类时，
-    /// 生成类的存储把自身以 X 的擦除 vtable 形态的指针填入（类 vtable trait 非泛型、超类链是其
-    /// supertrait —— 子类 vtable 直接上转）；调用方与句柄合成 `__Ref`，对任意类型实参成立。
-    /// 其余对象（基本类型、闭包、接口载体、wrapper 本身等）不填 `slot`。
+    /// 类视图导出（S7 计划 §3.1 取法 A）：`slot` 是调用方（wrapper 分派入口 `X::__vt()`，
+    /// 知道目标类 X）构造的 `Option<NonNull<dyn X__VTable>>`，`depth` 是 X 在 display 表中的
+    /// 深度。运行时类是 X 或 X 的子类时，生成类的存储按 `depth` 只比较一次槽类型，把自身以
+    /// X 的擦除 vtable 形态的指针填入（类 vtable trait 非泛型、超类链是其 supertrait —— 子类
+    /// vtable 直接上转），对任意类型实参成立。其余对象（基本类型、闭包、接口载体等）不填 `slot`。
     #[doc(hidden)]
-    fn __erased_vtable(&self, _slot: &mut dyn std::any::Any) {}
+    fn __erased_vtable(&self, _depth: u16, _slot: &mut dyn std::any::Any) {}
 
     /// 数组协变的元素赋值兼容探针（S-4）：receiver 是引用元素数组（JArray），调用方
     /// （`From<Object> for JArray<T>`，知道目标元素类型 T）给出 T 的 binary name `target_elem`

@@ -1,6 +1,6 @@
 //! 映像区：分段的 `__BootImage{k}` 结构与 `BOOT_IMAGE_{k}` 常量初值。
 //!
-//! 引用的常量形态按槽的静态类型：`Object` → 句柄；类 wrapper → `__from_image(__Ref::image(..))`
+//! 引用的常量形态按槽的静态类型：`Object` → 句柄；类 wrapper → `__from_image(__Handle::image(..))`
 //! （类 vtable 由 `X__inner` 经 supertrait 链实现）；接口载体 → `__from_image(__IfaceRef::image(..))`
 //! （对象的类有 `impl I for X` 块时取接口视图，否则与运行期 `__IfaceRef::new` 同为无视图）；同形数组 →
 //! `JArray::__image`，形态不一致的数组 → 映像中的擦除协变视图（`JArray::__image_view`）。类镜像是映像对象。
@@ -137,8 +137,7 @@ impl Plan<'_, '_> {
             SlotTy::Class(c) if !arr => {
                 let (p, o) = (self.path(c), self.img(t));
                 Some(format!(
-                    "{p}::__from_image(__Ref::image(__Handle::image(__Obj::image(&{o}.value as &dyn ObjectVTable)), \
-                     &{o}.value as &dyn {p}__VTable))"
+                    "{p}::__from_image(__Handle::image(__Obj::image(&{o}.value as &dyn ObjectVTable)))"
                 ))
             }
             SlotTy::Iface(c) => {
@@ -166,7 +165,7 @@ impl Plan<'_, '_> {
     /// 引用数组元素的类型化 null
     fn typed_null(&self, st: &SlotTy) -> String {
         match st {
-            SlotTy::Class(c) => format!("{}::__from_image(__Ref::NULL)", self.expr_path(c)),
+            SlotTy::Class(c) => format!("{}::__from_image(__Handle::NULL)", self.expr_path(c)),
             SlotTy::Iface(c) => format!("{}::__IMAGE_NULL", self.expr_path(c)),
             SlotTy::Array(_) => "JArray::__IMAGE_NULL".to_string(),
             SlotTy::Object | SlotTy::Other => "Object::__NULL".to_string(),

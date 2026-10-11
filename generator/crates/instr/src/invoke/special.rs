@@ -177,8 +177,8 @@ fn gen_super_method(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call
             base_fn.push_str(&format!("::<{}>", sim.cfg.class_type_params.join(", ")));
         }
     }
-    // 首参是 vtable 引用：宏把字面 this/self 接收者重写为 `this.__r.vt()`；其余按同一形态发射
-    let recv_arg = if obj_e == "this" || obj_e == "self" { obj_e } else { format!("({obj_e}).__r.vt()") };
+    // 首参是 vtable 引用：宏把字面 this/self 接收者重写为 `this.__vt()`；其余按同一形态发射
+    let recv_arg = if obj_e == "this" || obj_e == "self" { obj_e } else { format!("({obj_e}).__vt()") };
     let all: Vec<String> = std::iter::once(recv_arg).chain(args).collect();
     emit_call_result(env, sim, call, &sp_owner, &format!("{base_fn}({})?", all.join(", ")))
 }

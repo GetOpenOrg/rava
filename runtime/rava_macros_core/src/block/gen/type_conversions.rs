@@ -1,5 +1,5 @@
 //! Java 类型转换：BINARY_NAME 常量、`From<Object>`（downcast / 擦除重建）、
-//! `Into<Object>`、`From<Child> for Ancestor`（vtable trait upcasting，含多级跳跃）。
+//! `Into<Object>`、`From<Child> for Ancestor`（上转只搬句柄，含多级跳跃）。
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -50,9 +50,9 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     // `From<Object> for X<A>` 对任意 A 成立：
     //   1. 快路径：运行时类与目标实例化同族同参（含子类按超类实参映射的视图）→ slot 命中；
     //   2. 擦除路径：运行时类是本类**或其子类**（Java 泛型运行时本就擦除）→ 句柄不变，
-    //      经句柄所持存储的 `__erased_vtable` 取本类视图指针，重建本实例化视图（共享存储
-    //      与对象标识，S7-2）。子类值经超类 vtable supertrait 上转，任意实例化
-    //      均可重建（`Enum::<Object>::from(枚举常量)` 即此形态）；
+    //      直接以句柄重建本实例化 wrapper（共享存储与对象标识，S7-2；视图由 `__vt()` 按
+    //      本类深度现取，§9.9 K1）。任意实例化均可重建（`Enum::<Object>::from(枚举常量)`
+    //      即此形态）；
     //   3. 其余（运行时类不是本类族）→ checkcast 的 ClassCastException（既有语义）。
     // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`（读描述符）；按类只转交本类描述符
     // 与部件构造入口（拆 crate §7.5.4 #2）。
@@ -76,7 +76,7 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     };
 
     // ══════════════════════════════════════════════════════════════════════════
-    // 10. From<ClassName> for each ancestor（vtable trait upcasting，含多级跳跃）
+    // 10. From<ClassName> for each ancestor（上转只搬句柄，含多级跳跃）
     // ══════════════════════════════════════════════════════════════════════════
 
     let from_child_for_parent: TokenStream2 = if ctx.meta.superclass.is_some() {
@@ -85,21 +85,20 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
         let ancestors = ctx.meta.all_superclasses.clone();
         let impls: Vec<TokenStream2> = ancestors.iter().map(|anc_name| {
             let anc_ident = format_ident!("{}", anc_name);
-            let anc_vtable = format_ident!("{}__VTable", anc_name);
             let atag = ctx.meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
             if atag.is_empty() {
                 // 非泛型祖先：目标无类型实参
                 return quote! {
                     impl #impl_g From<#struct_ident #ty_g> for #anc_ident #where_c {
                         fn from(child: #struct_ident #ty_g) -> #anc_ident {
-                            #anc_ident::__from_parts(
-                                child.__r.upcast(|__v| __v as &dyn #anc_vtable))
+                            // 上转只搬句柄（S7 计划 §9.9 K1）
+                            #anc_ident::__from_parts(child.__r)
                         }
                     }
                 };
             }
             // 泛型祖先：擦除实例化视图（A-1 γ'）——对祖先的**任意**类型实参成立
-            // （Java 泛型运行时擦除，vtable 非泛型后 upcast 不再依赖实参一致；
+            // （Java 泛型运行时擦除，句柄与实参无关，upcast 不依赖实参一致；
             // `CountedCompleter<Object>: From<Sorter<T>>` 这类跨实例化 upcast）。
             // 祖先形参以带宏标准 bound 的新形参承载（宏为所有类的形参注入同一组
             // Clone/Default/'static/From<Object>/Into<Object>，祖先 wrapper 的 impl
@@ -125,8 +124,7 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
                     From<#struct_ident #ty_g> for #anc_ident #anc_ty_args #gamma_where_c
                 {
                     fn from(child: #struct_ident #ty_g) -> #anc_ident #anc_ty_args {
-                        #anc_ident::#anc_ty_args::__from_parts(
-                            child.__r.upcast(|__v| __v as &dyn #anc_vtable))
+                        #anc_ident::#anc_ty_args::__from_parts(child.__r)
                     }
                 }
             }

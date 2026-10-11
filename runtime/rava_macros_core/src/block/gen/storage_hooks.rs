@@ -17,18 +17,15 @@ pub(crate) fn hook_ident(ctx: &GenContext, what: &str) -> Ident {
 /// 钩子为模块级自由函数（拆层时拆为导出定义 + 外壳）
 pub(crate) fn generate(ctx: &GenContext) -> Vec<TokenStream2> {
     let inner_ident = &ctx.inner_ident;
-    let vtable_trait_ident = &ctx.vtable_trait_ident;
     let alloc = hook_ident(ctx, "alloc");
     let offsets = hook_ident(ctx, "offsets");
     let names: Vec<&Ident> = ctx.meta.superclass_fields.iter().map(|(n, _)| n)
         .chain(ctx.fields.iter().map(|(n, _)| n))
         .collect();
     vec![quote! {
-        /// 分配一个默认存储，返回其本类引用（构造器的 `_init_not_null` 调用；S7-2 起 null 不分配）
-        pub fn #alloc() -> __Ref<dyn #vtable_trait_ident> {
-            __Ref::new(
-                __Obj::new(<#inner_ident as ::std::default::Default>::default()),
-                |__i| __i as &dyn #vtable_trait_ident)
+        /// 分配一个默认存储，返回其对象句柄（构造器的 `_init_not_null` 调用；S7-2 起 null 不分配）
+        pub fn #alloc() -> __Handle {
+            __Handle::alloc(__Obj::new(<#inner_ident as ::std::default::Default>::default()))
         }
     }, quote! {
         /// 平铺实例字段（继承字段在前、自有字段在后）在存储中的字节偏移（描述符 `offsets`）

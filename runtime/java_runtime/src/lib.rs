@@ -501,7 +501,7 @@ pub mod prelude {
     #![allow(unused_imports)]
     pub use super::array::JArray;
     pub use super::class_desc::__ClassDesc;
-    pub use super::handle::{__Handle, __IfaceRef, __Ref};
+    pub use super::handle::{__Handle, __IfaceRef};
     pub use super::obj_ref::__Obj;
     pub use super::java::lang::__TypedNull;
     pub use super::error::{JvmError, Result};

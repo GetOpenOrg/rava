@@ -2,7 +2,7 @@
 //!
 //! 接收者统一为 `this: &dyn X__VTable`（不再按调用方类型单态化）：base 体只经本类 vtable
 //! trait 及其 supertrait 链访问 `this`，`&dyn` 上调的是同一组 trait 方法、命中同一实现。
-//! 调用方传 `&X__inner`（unsize）、`&dyn Sub__VTable`（trait upcasting）或 `w.__r.vt()`。
+//! 调用方传 `&X__inner`（unsize）、`&dyn Sub__VTable`（trait upcasting）或 `w.__vt()`。
 
 use super::*;
 

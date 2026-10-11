@@ -418,30 +418,31 @@ impl PartialEq for Object {
 }
 impl Eq for Object {}
 
-/// 类 wrapper 的部件构造入口（`X::__from_parts`）：类型化引用 → 本类视图。
-pub type __PartsFn<W, V> = fn(crate::handle::__Ref<V>) -> W;
+/// 类 wrapper 的部件构造入口（`X::__from_parts`）：句柄 → 本类 wrapper。
+pub type __PartsFn<W> = fn(crate::handle::__Handle) -> W;
 
-/// 运行时类是本类或其子类时，按原对象的句柄重建本类视图（共享存储与对象标识，
-/// 子类 vtable 经 supertrait 上转）；否则 `None`。宏生成的 `X::__virtual_view` 只转交到这里：
-/// 逻辑与具体类无关，按类只差 wrapper 与 vtable trait 两个类型（拆 crate §7.5.4 #2）。
-pub fn __erased_view<W, V: ?Sized + 'static>(obj: &Object, parts: __PartsFn<W, V>) -> Option<W> {
-    crate::handle::__ref_from_object::<V>(obj).map(parts)
+/// 运行时类是本类（描述符 `desc`）或其子类时，以原对象的句柄构造本类 wrapper（共享存储与
+/// 对象标识；分派时按本类深度取视图，§3.1 取法 A）；否则 `None`（含 null、闭包、无运行时类值）。
+/// 宏生成的 `X::__virtual_view` 只转交到这里：逻辑与具体类无关（拆 crate §7.5.4 #2）。
+pub fn __erased_view<W>(obj: &Object, desc: &'static crate::class_desc::__ClassDesc,
+                        parts: __PartsFn<W>) -> Option<W> {
+    if obj.0.is_jvm_null() || !obj.0.__desc().is_some_and(|d| d.is_subclass_of(desc)) {
+        return None;
+    }
+    Some(parts(crate::handle::__Handle::new(Clone::clone(&obj.0))))
 }
 
 /// `From<Object> for X` 的全部逻辑（宏按类只生成一行转交，拆 crate §7.5.4 #2）。判定按序：
 ///   1. null 通过任何 checkcast（JVMS §6.5），得到本类的 null 引用；
-///   2. 运行时类是本类或其子类（描述符 display 表 O(1)，S7-1）→ 以 Object 所持存储为句柄，
-///      取本类擦除 vtable 指针（子类 vtable 经超类 supertrait 上转），重建任意实例化视图
-///      （S7-2；S7-2b 起 Object 直接持有存储，不再有「持有对象即 W」的取回臂）；
+///   2. 运行时类是本类或其子类（描述符 display 表 O(1)，S7-1）→ 以 Object 所持存储为句柄
+///      构造本类 wrapper，对任意实例化成立（分派时按本类深度取视图，§3.1 取法 A）；
 ///   3. 其余 → checkcast 的 ClassCastException。
-pub fn __class_from_object<W, V>(obj: Object, desc: &'static crate::class_desc::__ClassDesc,
-                                 parts: __PartsFn<W, V>) -> W
-where W: Default, V: ?Sized + 'static {
+pub fn __class_from_object<W>(obj: Object, desc: &'static crate::class_desc::__ClassDesc,
+                              parts: __PartsFn<W>) -> W
+where W: Default {
     if obj.0.is_jvm_null() { return W::default(); }
     if obj.0.__desc().is_some_and(|d| d.is_subclass_of(desc)) {
-        if let Some(r) = crate::handle::__ref_from_object::<V>(&obj) {
-            return parts(r);
-        }
+        return parts(crate::handle::__Handle::new(Clone::clone(&obj.0)));
     }
     obj.__checkcast_fail(desc.binary_name)
 }

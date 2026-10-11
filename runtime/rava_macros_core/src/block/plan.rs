@@ -179,6 +179,16 @@ mod tests {
         assert!(!a.contains("compile_error"), "{a}");
     }
 
+    /// S7 计划 §9.9 K1：wrapper 只持对象句柄，不含本类视图指针；分派经 `__vt()` 按深度现取
+    #[test]
+    fn wrapper_holds_handle_only() {
+        let out = super::super::expand(TokenStream2::from_str(CLASS).unwrap()).to_string();
+        proc_macro2::extra::invalidate_current_thread_spans();
+        assert!(out.contains("pub __r : __Handle ,"), "{out}");
+        assert!(!out.contains("__Ref <") && !out.contains("__Ref ::"), "{out}");
+        assert!(out.contains("self . __r . view :: < dyn B__VTable > (0u16)"), "{out}");
+    }
+
     #[test]
     fn try_labels_renumbered_by_first_use() {
         let a = renumber_try_labels("'java_try_end_7 : { 'java_try_7 : { break 'java_try_end_7 ; } } 'java_try_9 x");

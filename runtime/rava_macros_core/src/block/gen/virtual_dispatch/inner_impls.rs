@@ -15,7 +15,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
 
     // 实现的接口：impl Iface__VTable for __inner（擦除签名 → 本类成员的桥接）
     let interface_impls: Vec<TokenStream2> = ctx.iface_impls.iter()
-        .map(|ii| expand_interface_impl(ii, &ctx.struct_ident, &ctx.inner_ident, &ctx.vtable_trait_ident,
+        .map(|ii| expand_interface_impl(ii, &ctx.struct_ident, &ctx.inner_ident,
                                         &ctx.erased_ty_args, &ctx.phantom_init))
         .collect();
 
@@ -100,8 +100,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         own_accessor_impls.push(quote! {
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
                 #struct_ident {
-                    __r: unsafe { __Ref::from_storage(self,
-                                    |__i| __i as &dyn #vtable_trait_ident) },
+                    __r: unsafe { __Handle::from_storage(self) },
                     #phantom_init
                 }
             }
@@ -299,7 +298,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                                 // `__impl_<method>`（类型实参全 Object）做 Object ↔ 类型化转换。
                                 let impl_name = format_ident!("__impl_{}", sig.ident);
                                 let wrapper_call = erased_wrapper_call(
-                                    sig, &impl_name, &ctx.struct_ident, &ctx.vtable_trait_ident,
+                                    sig, &impl_name, &ctx.struct_ident,
                                     &ctx.erased_ty_args, &ctx.phantom_init, &ctx.type_param_names,
                                     &ov_erasure,
                                 );
@@ -312,7 +311,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                         None if attr_str(&f.attrs, "body").as_deref() == Some("handwritten") => {
                             let impl_name = format_ident!("__impl_{}", sig.ident);
                             let wrapper_call = erased_wrapper_call(
-                                sig, &impl_name, &ctx.struct_ident, &ctx.vtable_trait_ident,
+                                sig, &impl_name, &ctx.struct_ident,
                                 &ctx.erased_ty_args, &ctx.phantom_init, &ctx.type_param_names,
                                 &ov_erasure,
                             );
@@ -387,8 +386,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
             };
             items.push(quote! {
                 fn #anc_hook(&self) -> #anc_ident #anc_erased_args {
-                    #anc_from_parts(unsafe { __Ref::from_storage(self,
-                                               |__i| __i as &dyn #anc_vtable_ident) })
+                    #anc_from_parts(unsafe { __Handle::from_storage(self) })
                 }
             });
 
@@ -425,8 +423,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         own_accessor_impls.push(quote! {
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
                 #struct_ident {
-                    __r: unsafe { __Ref::from_storage(self,
-                                    |__i| __i as &dyn #vtable_trait_ident) },
+                    __r: unsafe { __Handle::from_storage(self) },
                     #phantom_init
                 }
             }

@@ -5,12 +5,12 @@
 //!   - `ClassName__VTable` trait（虚方法分派接口，含 default impl）
 //!   - `ClassName__inner` 存储 struct（平铺字段，无 `_super` 嵌套）
 //!   - `impl AncestorVTable for ClassName__inner`（字段访问器 + 覆盖方法）
-//!   - `pub struct ClassName { __r: __Ref<dyn ClassName__VTable> }`（句柄 + 本类视图指针，S7-2）
+//!   - `pub struct ClassName { __r: __Handle }`（对象句柄，S7-2；视图经 `__vt()` 现取，§9.9 K1）
 //!   - 接口：载体 `pub struct Iface { __ref: __IfaceRef<dyn Iface__VTable> }`（Object 句柄 + 接口视图指针，S7-2c）
 //!   - `impl From<ClassName> for Object`（Object 直接持有存储，S7-2b）
 //!   - 字段访问器委托 + 虚方法委托 + 构造器（on wrapper）
 //!   - `ClassName__methodName_base` 自由函数（super() 调用路由）
-//!   - `From<ClassName> for DirectParent`（vtable trait upcasting）
+//!   - `From<ClassName> for DirectParent`（上转只搬句柄）
 //!   - `From<Object> for ClassName`（downcast 路径）
 //!
 //! ## virtual_in 属性

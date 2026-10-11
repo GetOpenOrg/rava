@@ -302,12 +302,10 @@ pub(crate) fn expand_interface_impl(
     ii: &InterfaceImpl,
     struct_ident: &Ident,
     inner_ident: &Ident,
-    vtable_trait_ident: &Ident,
     erased_ty_args: &TokenStream2,
     phantom_init: &TokenStream2,
 ) -> TokenStream2 {
     let iface_vtable = format_ident!("{}__VTable", ii.iface);
-    let erased_vt: TokenStream2 = quote! { dyn #vtable_trait_ident };
     let methods: Vec<TokenStream2> = ii.fns.iter().map(|f| {
         let sig = without_param_mut(&f.sig);
         let args = param_idents(&sig);
@@ -324,8 +322,7 @@ pub(crate) fn expand_interface_impl(
         quote! {
             #sig {
                 let __wrapper: #struct_ident #erased_ty_args = #struct_ident {
-                    __r: unsafe { __Ref::from_storage(self,
-                                    |__i| __i as &#erased_vt) },
+                    __r: unsafe { __Handle::from_storage(self) },
                     #phantom_init
                 };
                 let __result = __wrapper.#target(#(::std::convert::From::from(#args)),*)?;
@@ -424,7 +421,6 @@ pub(crate) fn erased_wrapper_call(
     sig: &syn::Signature,
     impl_name: &Ident,
     struct_ident: &Ident,
-    vtable_trait_ident: &Ident,
     erased_ty_args: &TokenStream2,
     phantom_init: &TokenStream2,
     type_param_names: &HashSet<String>,
@@ -433,8 +429,7 @@ pub(crate) fn erased_wrapper_call(
     let call = erased_impl_call(sig, impl_name, type_param_names, erasure);
     quote! {
         let __w: #struct_ident #erased_ty_args = #struct_ident {
-            __r: unsafe { __Ref::from_storage(self,
-                            |__i| __i as &dyn #vtable_trait_ident) },
+            __r: unsafe { __Handle::from_storage(self) },
             #phantom_init
         };
         #call
