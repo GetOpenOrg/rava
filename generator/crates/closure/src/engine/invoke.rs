@@ -203,6 +203,15 @@ impl<'a> Engine<'a> {
     /// 接收者 r 上分派已解析方法
     #[allow(clippy::too_many_arguments)]
     pub(super) fn dispatch_one(&mut self, m: usize, off: u32, r: u32, site: &resolve::MethodSite, a: &Args, ret: Option<u32>, res: Option<Node>, via_lambda: u32) {
+        // 临时诊断（RAVA_DBG_SITE）：调用点键匹配时打印分派接收者
+        if let Ok(want) = std::env::var("RAVA_DBG_SITE") {
+            if format!("{}@{off}", self.methods[m].key) == want {
+                let rt = self.ty(r);
+                let name = self.names[rt as usize].to_string();
+                let sel = self.h.select(&name, site).map(|s| s.key().0.to_string()).unwrap_or_default();
+                eprintln!("[dispatch] {want} 接收者 {name} → {sel}");
+            }
+        }
         self.recv_sites.insert((m, off));
         // lambda 接收者不在此去重：同一调用的去重与增量由 `invoke_lambda` 负责
         let lambda = self.lambdas.contains_key(&r);
