@@ -389,7 +389,8 @@ fn default_init_interfaces(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     out
 }
 
-/// 根类虚方法（toString / hashCode / equals）在本类视角的 vtable 所属类 Rust 名
+/// 根类虚方法（toString / hashCode / equals）在本类视角的 vtable 桥接目标：所属类 Rust 名；
+/// 该槽在所属类 vtable 上的方法名与 Java 名不同（类内同名重载带描述符后缀）时追加 `::<槽名>`
 fn root_method_vtable_owner(ctx: &EmitCtx<'_>, ci: &ClassInfo, name: &str, desc: &str) -> Option<String> {
     let mut seen = BTreeSet::new();
     let mut cur = Some(ci);
@@ -398,11 +399,15 @@ fn root_method_vtable_owner(ctx: &EmitCtx<'_>, ci: &ClassInfo, name: &str, desc:
             break;
         }
         if let Some(decl) = c.methods().iter().find(|m| m.name == name && m.desc == desc && !m.is_static()) {
-            let hw = ctx.input.handwritten.get(c.name()).is_some_and(|h| h.methods.contains(&safe_ident(&decl.name)));
-            if hw || ctx.member_rust_name(c, decl) != decl.name {
+            let hw_names = [safe_ident(&decl.name), safe_ident(&ctx.member_rust_name(c, decl))];
+            if ctx.input.handwritten.get(c.name()).is_some_and(|h| hw_names.iter().any(|n| h.methods.contains(n))) {
                 return None;
             }
-            return Some(ctx.find_virtual_in(decl, c)).filter(|s| !s.is_empty()).map(|b| ctx.short(&b));
+            let owner = ctx.find_virtual_in(decl, c);
+            let owner_ci = ctx.class(&owner)?;
+            let slot = safe_ident(&ctx.member_rust_name(owner_ci, decl));
+            let short = ctx.short(&owner);
+            return Some(if slot == decl.name { short } else { format!("{short}::{slot}") });
         }
         let sc = c.super_class();
         cur = if !sc.is_empty() && sc != OBJECT { ctx.class(sc) } else { None };

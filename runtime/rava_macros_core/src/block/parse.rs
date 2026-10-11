@@ -229,6 +229,7 @@ pub(crate) struct ClassMeta {
     /// toString() 所属 vtable 的 Rust 类名（本类或祖先）；None = 继承链上没有翻译出的 toString。
     pub to_string_vtable: Option<String>,
     /// hashCode()I / equals(Object)Z 所属 vtable 的 Rust 类名（本类或祖先）；None = 沿用根类实现。
+    /// 三项取值 `Owner` 或 `Owner::<槽名>`：所属类内同名重载使槽名带描述符后缀时由生成器给出槽名。
     pub hash_code_vtable: Option<String>,
     pub equals_vtable: Option<String>,
     /// 共置 `_impl.rs` 手写 impl 块提供的 wrapper inherent 方法名（不在宏块内、不进 vtable）。

@@ -334,6 +334,13 @@ pub fn resolve_bridge_target(reg: &Registry, ci: &ClassInfo, mname: &str, desc: 
     None
 }
 
+/// 接口接收者上的根类公开虚方法（接口重声明的 equals / hashCode / toString 等）：接口不发射
+/// 这类成员（规划器 `root_keyed` 口径），调用经根类 vtable 分派，Rust 名取根类名，
+/// 不受接口自身同名重载影响
+pub fn is_iface_root_member(ctx: &InstrCtx, iface: &ClassInfo, mname: &str, desc: &str) -> bool {
+    iface.is_interface() && ctx.facts.root_virtual.contains(&(mname.to_string(), param_part(desc).to_string()))
+}
+
 /// 接口（或其超接口，广度）中声明实例方法 `mname:desc` 的接口（`_declaring_interface`）；
 /// 根类虚方法的重声明、私有 / 合成方法不算 → None
 pub fn declaring_interface(ctx: &InstrCtx, iface: &ClassInfo, mname: &str, desc: &str) -> Option<String> {

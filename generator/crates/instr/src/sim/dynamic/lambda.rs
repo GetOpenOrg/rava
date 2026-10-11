@@ -107,10 +107,7 @@ pub(super) fn gen_lambda(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
     let (impl_cls, impl_mname, impl_desc) = (impl_ref.owner.as_str(), impl_ref.name.as_str(), impl_ref.desc.as_str());
     // 接口重声明的根类公开方法（`handle::equals` → ProcessHandle.equals）：接口不发射这类
     // 成员（经根类 vtable 分派），实现句柄按 JVM 方法解析落到根类
-    let impl_is_iface = env.ctx.reg().get(impl_cls).is_some_and(|c| c.is_interface());
-    let impl_cls = if impl_is_iface
-        && env.ctx.facts.root_virtual.contains(&(impl_mname.to_string(), crate::owner::param_part(impl_desc).to_string()))
-    {
+    let impl_cls = if env.ctx.reg().get(impl_cls).is_some_and(|c| crate::owner::is_iface_root_member(&env.ctx, c, impl_mname, impl_desc)) {
         ty::consts::OBJECT
     } else {
         impl_cls
