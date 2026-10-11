@@ -280,7 +280,7 @@ fn element_store_error(src: &Object, dest: &Object) -> Result<JvmError> {
         Ok(c.strip_prefix('L').and_then(|x| x.strip_suffix(';')).unwrap_or(c).to_string())
     };
     let (stype, bound) = (component(src)?, component(dest)?);
-    let class_of = |n: &str| Class::for_class(String::from(n.replace('.', "/").as_str()));
+    let class_of = |n: &str| Class::for_class(&n.replace('.', "/"));
     let msg = if class_of(&stype).isAssignableFrom(class_of(&bound))? {
         format!("arraycopy: element type mismatch: can not cast one of the elements of {stype}[] to the type of the destination array, {bound}")
     } else {
