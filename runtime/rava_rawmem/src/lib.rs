@@ -380,9 +380,12 @@ pub unsafe fn copy(src: usize, dst: usize, n: usize) {
 }
 
 /// 普通读：`addr` 处 `width`（1..=8）字节的本机字节序值（零扩展）。不跨字时为单次原子读。
+/// `#[inline]`：跨 crate 内联进 Unsafe getXxx 热循环（srem-bench5 对照显示批量路径扩块后
+/// 未内联的普通读写受代码布局牵连回退约 8%）。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
+#[inline]
 pub unsafe fn load(addr: usize, width: usize) -> u64 {
     let off = addr & (WORD - 1);
     if off + width <= WORD {
@@ -396,10 +399,12 @@ pub unsafe fn load(addr: usize, width: usize) -> u64 {
 }
 
 /// 普通写：`v` 的低 `width`（1..=8）字节写到 `addr`。对齐的 8 字节为单次原子写，其余字内写为
-/// 同字 CAS 合并；跨字写逐字完成（与 HotSpot 非对齐普通访问同为非整体原子）。
+/// 同字 CAS 合并；跨字写逐字完成（与 HotSpot 非对齐普通访问同为非整体原子）。`#[inline]` 同
+/// [`load`]。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
+#[inline]
 pub unsafe fn store(addr: usize, width: usize, v: u64) {
     let off = addr & (WORD - 1);
     if off == 0 && width == WORD {
