@@ -93,15 +93,6 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     _ensure(info.0.__unsafe_int_set("bci", frame.bci), "bci");
 }
 
-/// JDK 21：仅类模式的帧缓冲元素是 Class 本身
-#[cfg(not(jdk_ge_25))]
-fn _fill_class_only<T>(frames: &JArray<T>, index: i32, frame: &JavaFrame) -> Result<()>
-where
-    T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
-{
-    frames.set(index, T::from(Object::from(Class::for_class(String::from(frame.class)))))
-}
-
 /// ClassFrameInfo.flags 的成员位并入（构造器已写入的 RETAIN_CLASS_REF 等高位保留）
 #[cfg(jdk_ge_25)]
 fn _or_flags(info: &Object, frame: &JavaFrame) {
@@ -170,6 +161,11 @@ where
                         "StackWalker::getCallerClass called from @CallerSensitive '{}' method",
                         frame.external_name())));
                 }
+                // JDK 21：仅类模式的帧缓冲元素是 Class 本身。数组写入留在 native 体内：闭包分析器按 native
+                // 形参建模手写体对实参数组的写入（移入自由函数则其元素值池断开，Class 元素被判恒 null）
+                #[cfg(not(jdk_ge_25))]
+                frames.set(index, T::from(Object::from(Class::for_class(String::from(frame.class)))))?;
+                #[cfg(jdk_ge_25)]
                 _fill_class_only(frames, index, &frame)?;
             }
             decoded += 1;
@@ -184,30 +180,33 @@ where
     #[jvm_native]
     pub fn callStackWalk(&self, mode: i64, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
-        self.__call_stack_walk(mode, skipframes, batch_size, start_index, frames)
+        self.__call_stack_walk(mode, skipframes, batch_size, start_index, start_index + batch_size, frames)
     }
 
     /// native `callStackWalk(int mode, int skipframes, ContinuationScope, Continuation, int bufferSize,
-    /// int startIndex, T[] frames)`（JDK 25：mode 改为 int）
+    /// int startIndex, T[] frames)`（JDK 25：mode 改为 int；bufferSize 为缓冲区总长（含保留首元素），
+    /// 填帧上界是 bufferSize 而非 startIndex + batchSize，HotSpot `StackWalk::walk` 同口径）
     #[cfg(jdk_ge_25)]
     #[jvm_native]
     pub fn callStackWalk(&self, mode: i32, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
-        self.__call_stack_walk(i64::from(mode), skipframes, batch_size, start_index, frames)
+        self.__call_stack_walk(i64::from(mode), skipframes, batch_size, start_index, batch_size, frames)
     }
 
-    fn __call_stack_walk(&self, mode: i64, skipframes: i32, batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
+    /// `limit`：填帧的排他上界下标（缓冲区须至少这么长）
+    fn __call_stack_walk(&self, mode: i64, skipframes: i32, batch_size: i32, start_index: i32, limit: i32,
+                         frames: JArray<T>) -> Result<R> {
         if frames.is_jvm_null() {
             return Err(_npe("frames_array is null"));
         }
-        if frames.len()? < start_index + batch_size {
+        if frames.len()? < limit {
             return Err(JvmError::illegal_argument("not enough space in buffers"));
         }
         let all = crate::vm_stack::capture_java_frames();
         let mut cursor = all.iter().position(|f| !_is_walker_impl(f.class)).unwrap_or(all.len());
         cursor = (cursor + skipframes.max(0) as usize).min(all.len());
         let mut stream = Anchored { frames: all, cursor };
-        let end_index = Self::__fill_in_frames(mode, &mut stream, batch_size, start_index, &frames)?;
+        let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
         if end_index - start_index < 1 {
             return Err(_internal_error("stack walk: decode failed"));
         }
@@ -228,21 +227,21 @@ where
     #[jvm_native]
     pub fn fetchStackFrames_l_l_i_i_arr_obj(&self, mode: i64, anchor: i64, batch_size: i32, start_index: i32,
                                             frames: JArray<T>) -> Result<i32> {
-        Self::__fetch_stack_frames(mode, anchor, batch_size, start_index, frames)
+        Self::__fetch_stack_frames(mode, anchor, start_index, start_index + batch_size, frames)
     }
 
     /// native `fetchStackFrames(int mode, long anchor, int lastBatchFrameCount, int bufferSize, int startIndex,
     /// T[] frames)`（JDK 25）。lastBatchFrameCount 供 HotSpot 把栈帧流推过上一批末帧；本模型的流位置在填帧时
-    /// 已停在下一个待检视帧，无需再推
+    /// 已停在下一个待检视帧，无需再推；bufferSize 口径同 callStackWalk
     #[cfg(jdk_ge_25)]
     #[jvm_native]
     pub fn fetchStackFrames_i_l_i_i_i_arr_obj(&self, mode: i32, anchor: i64, _last_batch_frame_count: i32, batch_size: i32,
                                               start_index: i32, frames: JArray<T>) -> Result<i32> {
-        Self::__fetch_stack_frames(i64::from(mode), anchor, batch_size, start_index, frames)
+        Self::__fetch_stack_frames(i64::from(mode), anchor, start_index, batch_size, frames)
     }
 
     /// 按锚点续取下一批，返回 endIndex（流已到底 → startIndex）
-    fn __fetch_stack_frames(mode: i64, anchor: i64, batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<i32> {
+    fn __fetch_stack_frames(mode: i64, anchor: i64, start_index: i32, limit: i32, frames: JArray<T>) -> Result<i32> {
         let Some(mut stream) = crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor) else {
             return Err(_internal_error("doStackWalk: corrupted buffers on stack"));
         };
@@ -250,11 +249,11 @@ where
             if frames.is_jvm_null() {
                 return Err(_npe("frames_array is null"));
             }
-            if frames.len()? < start_index + batch_size {
+            if frames.len()? < limit {
                 return Err(JvmError::illegal_argument("not enough space in buffers"));
             }
             let had_more = stream.cursor < stream.frames.len();
-            let end_index = Self::__fill_in_frames(mode, &mut stream, batch_size, start_index, &frames)?;
+            let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
             if had_more && end_index == start_index {
                 return Err(_internal_error("doStackWalk: decode frames failed"));
             }

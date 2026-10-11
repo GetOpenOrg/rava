@@ -1011,9 +1011,13 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # - Class.module：类镜像所属模块（create_mirror 按包条目写入），按「定义加载器 + 包」查 VM 模块表（启动序列以
 #   映像中 defineModule0 登记的模块为初值），未登记的包归定义加载器的无名模块（class_impl.rs `__vm_module`）。
 #   闭包分析器给该钩子的值池接上映像 VM 模块表的模块（[concrete.vm_fields] class_module）。
+# - Class.protectionDomain（JDK 25 起取代 native getProtectionDomain0 的镜像字段）：defineClass 传入的保护域，
+#   按定义加载器表落地（class_impl/attrs.rs `__vm_protection_domain`）；引导类为 null（回落 allPermDomain）。
+#   JDK 21 无此字段，条目不命中。
 [vm_state.field_hooks]
 "java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true, boot_noop = true }
 "java/lang/Class.module:Ljava/lang/Module;" = { hook = "java/lang/Class.__vm_module", receiver = true }
+"java/lang/Class.protectionDomain:Ljava/security/ProtectionDomain;" = { hook = "java/lang/Class.__vm_protection_domain", receiver = true, boot_noop = true }
 
 [vm_state.loader_map]
 class = "jdk/internal/module/ModuleLoaderMap$Modules"

@@ -508,8 +508,16 @@ pub(crate) fn restore_erased_accessors(block: &mut Block, erased: &std::collecti
                     }
                 }
             } else if let Some(field) = m.strip_prefix("__set_") {
-                if self.0.contains_key(field) && mc.args.len() == 1 {
+                if let (Some(ty), 1) = (self.0.get(field), mc.args.len()) {
                     let arg = &mut mc.args[0];
+                    // 实参尾部的裸 `.into()` 是生成器按 wrapper 形参（字段声明类型）写的上转：
+                    // 外包 `Into<Object>` 后其目标类型不再可推断（E0283），钉为声明类型
+                    if let Expr::MethodCall(inner) = &*arg {
+                        if inner.method == "into" && inner.args.is_empty() && inner.turbofish.is_none() {
+                            let recv = &inner.receiver;
+                            *arg = syn::parse_quote!(::std::convert::Into::<#ty>::into(#recv));
+                        }
+                    }
                     *arg = syn::parse_quote!(::std::convert::Into::<Object>::into(#arg));
                 }
             }
@@ -517,5 +525,21 @@ pub(crate) fn restore_erased_accessors(block: &mut Block, erased: &std::collecti
     }
     if !erased.is_empty() {
         Restorer(erased).visit_block_mut(block);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::ToTokens;
+
+    /// 擦除字段写入：实参尾部裸 `.into()` 钉为字段声明类型，外包 `Into<Object>`
+    #[test]
+    fn erased_setter_pins_inner_into() {
+        let mut block: syn::Block = syn::parse_quote!({ this.__set_buf(Clone::clone(&x).into()); });
+        let mut erased = std::collections::HashMap::new();
+        erased.insert("buf".to_string(), syn::parse_quote!(Buffer<Info>));
+        super::restore_erased_accessors(&mut block, &erased);
+        let text = block.to_token_stream().to_string().replace(' ', "");
+        assert!(text.contains("::std::convert::Into::<Object>::into(::std::convert::Into::<Buffer<Info>>::into(Clone::clone(&x)))"), "{text}");
     }
 }

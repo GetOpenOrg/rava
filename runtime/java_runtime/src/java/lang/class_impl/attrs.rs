@@ -200,8 +200,30 @@ impl Class {
     /// 无签名者的 CodeSource，经 `SecureClassLoader.getProtectionDomain(cs)`（按代码源缓存，同源类共享
     /// 同一保护域）取域；类路径条目即应用加载器 ucp 的首条目（initPhase3 按字节码建立，空
     /// `java.class.path` 为当前目录，与 JDK 同口径）。其余加载器定义的类为 null（同引导类回落）。
+    /// JDK 25 起该 native 删除，保护域改为镜像字段 `protectionDomain`，由 `__vm_protection_domain` 落地。
+    #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn getProtectionDomain0(&self) -> Result<crate::java::security::ProtectionDomain> {
+        self.__defined_protection_domain()
+    }
+
+    /// VM 注入状态 `protectionDomain` 的落地（JDK 25 起为 Class 的 final transient 字段，HotSpot
+    /// `java_lang_Class::create_mirror` 按 defineClass 传入的保护域写入；vm_intrinsics.toml
+    /// `[vm_state.field_hooks]`，准入 ③）：首次访问前按与 JDK 21 `getProtectionDomain0` 同一口径取域填充。
+    #[cfg(jdk_ge_25)]
+    pub fn __vm_protection_domain(&self) -> Result<&Self> {
+        if !Object::from(self.__get_protectionDomain()).0.is_jvm_null() {
+            return Ok(self);
+        }
+        let pd = self.__defined_protection_domain()?;
+        if !Object::from(Clone::clone(&pd)).0.is_jvm_null() {
+            self.__set_protectionDomain(pd);
+        }
+        Ok(self)
+    }
+
+    /// 定义类时传入的保护域（见 `getProtectionDomain0`）
+    fn __defined_protection_domain(&self) -> Result<crate::java::security::ProtectionDomain> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         // 预定义类：首次定义时 defineClass 传入的保护域（crate::predefined）
         if crate::meta::class_defining_loader(&name) == Some("defined") {
