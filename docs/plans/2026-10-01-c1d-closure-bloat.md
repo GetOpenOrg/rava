@@ -1801,8 +1801,24 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
     （2.56 s），split 模式建 3.3 µs + 启 16.5 µs。
   - 全线程剖析（vtrest-prof-04b329b2，dev-opt）热点：libc 自身约 21%（malloc / free / memcpy）、`rava_coro::Context::new` 2–4%、
     `Object::eq` 约 3%、按类名 `binary_search` 的 instanceof 1–1.5%、`Thread::currentThread`、持锁计数（`hold_slot` / `held`）、
-    monitor 侧表 HashMap、`instance_field_by_id` / `__field_slot`、`native_memory::is_raw`。主线程分解在补测（采样器新增
-    `SAMPLER_MAIN=1` 线程 CPU 定时器模式，进程级 ITIMER_PROF 下主线程样本不足）。
+    monitor 侧表 HashMap、`instance_field_by_id` / `__field_slot`、`native_memory::is_raw`。主线程分解见下。
+  - 主线程调度时间线（作业 vtrest-sched-9731d052，us1，`scripts/diag/sched_timeline.py`）：建 + 启循环期间主线程在 CPU 上
+    约 100%、就绪排队约 0、阻塞约 0——**循环纯 CPU 受限**，不是锁争用或 CPU 争用；循环 2.6–3.0 s（26–30 µs/VT，前 10⁴ 个约
+    30 µs、后段约 18.5 µs，前段含 CHM 扩容与堆增长）。判据 `lateStarts == 0` 要求最后一个虚拟线程在第一个睡满 2 s 前开跑，
+    即循环须 ≤约 1.8 s（≤18 µs/VT），差 1.5–1.6 倍。split 模式（建与启分开）`true`。
+  - 主线程剖析（作业 vtrest-mprof2-45e38d28，`SAMPLER_MAIN=1`，2 kHz 线程 CPU 定时器；% 为主线程样本，含 join 段约 30%）：
+    `Thread.Builder.start` 60%，其中 `VirtualThread.start` 45%（`ThreadContainers.TrackingRootContainer.onStart` 的
+    CHM 键集 add 17.7%——`jdk.trackAllThreads` 缺省即跟踪，忠实语义；`submitRunContinuation` → `ForkJoinPool.execute` 23%，
+    内 `WorkQueue.push` 11.5%、`signalWork` 7.9%，后者含 `unpark` 载体的 futex 唤醒 6.2%，与 HotSpot 同为必需），
+    创建（`newVirtualThread` / `<init>`）14.6%。横向热点：Unsafe 字段访问按名解析（偏移 id → (声明类, 字段名) →
+    `__field_slot` 沿超类链 + `binary_search` → `__unsafe_word(名)`，含 `instance_field_by_id` / `ClassDesc` 遍历 /
+    `meta::supertypes` / `is_raw`）合计约 8–9% 自身；malloc（`VirtualThread` 分配、CHM 节点、AQS 节点）约 8%；
+    用户代码 `mode.equals(...)` 3.6%。monitor park / unpark 本身只有 futex 系统调用，无可省开销。
+  - 结论：剩余 1.6 倍不在本线（线程 / Continuation / monitor）边界内，属生成代码与运行期的通用常数：① Unsafe 偏移解析改为
+    按类直接槽位（宏生成的偏移表或按 (类, id) 缓存，涉及 rava_macros 与 `unsafe__impl` / `reflect_dispatch`，S7 / R1）；
+    ② instanceof / checkcast 走 `__ClassDesc`（F 线已列）；③ 分配次数（R1-next 续）。三项合计预计 20–25%，单靠它们仍可能
+    不够，需叠加构建档位（dev-opt 已过墙钟与内存，release 未测）。均属 tasks.md F「纯优化 暂停」，本轮不实施；
+    TestVirtualThreadScale 维持 known_failures（签名不变）。T1b 复审按派发顺序排在 ② 之后，本轮未做。
 
 ### 21.9 a3 实施记录（2026-10-05，分支 c1d-a3）
 
