@@ -411,6 +411,9 @@ impl<'a> Engine<'a> {
         // 按对象物化（concrete.rs `object_results`）：[对象数, 回退后应用的组合数, 上下文含物化对象的方法节点数]
         let pctx = self.methods.iter().filter(|x| x.1.ctx != NOCTX && self.names[x.1.ctx as usize].contains("@concrete:")).count();
         v["pobj"] = json!([self.concrete.pobj_stats[0], self.concrete.pobj_stats[1], pctx]);
+        // 增长枢纽接收者峰值 / 升级为共享枢纽的增长枢纽数 / 共享枢纽数 / 升级阈值（hub_share.rs）
+        let shared = self.hub_ids.keys().filter(|k| matches!(k.2, HubSet::Shared(_))).count();
+        v["hub_share"] = json!([self.grow_max, self.hub_upgraded, shared, hub_share::HUB_SHARE]);
         v
     }
 }

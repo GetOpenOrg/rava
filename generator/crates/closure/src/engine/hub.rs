@@ -16,12 +16,21 @@ impl<'a> Engine<'a> {
         if let Some(&h) = self.hub_ids.get(&key) {
             return h;
         }
-        let h = self.hubs.len() as u32;
         let ptypes = md.params.iter().map(|p| self.ptype(p)).collect();
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
+        self.hub_new(key, site, owner, ptypes, ret, via)
+    }
+
+    /// 建立键为 key 的枢纽（调用方已确认不存在）
+    pub(super) fn hub_new(&mut self, key: (MemberRef, bool, HubSet, u32), site: &resolve::MethodSite, owner: u32, ptypes: Vec<Option<u32>>, ret: Option<u32>, via: Via) -> u32 {
+        let h = self.hubs.len() as u32;
         let open = match &key.2 {
             HubSet::Open(o) | HubSet::Vm(o) => Some(*o),
-            HubSet::Grow(_) => None,
+            HubSet::Grow(_) | HubSet::Shared(_) => None,
+        };
+        let share = match &key.2 {
+            HubSet::Grow(src) => Some((key.0.clone(), key.1, matches!(src, GrowSrc::Nodes(_, true)))),
+            _ => None,
         };
         self.hubs.push(Hub {
             site: site.clone(),
@@ -43,6 +52,9 @@ impl<'a> Engine<'a> {
             ltargets: BTreeSet::new(),
             lhubs: BTreeSet::new(),
             lbind: BTreeSet::new(),
+            share,
+            fwd: None,
+            skeys: HashSet::default(),
         });
         self.hub_ids.insert(key, h);
         if let Some(o) = open {
@@ -74,6 +86,8 @@ impl<'a> Engine<'a> {
 
     /// 调用点接入枢纽：实参汇入 `HP`，`HR` 流向结果；逐调用点派发的接收者对本调用点派发
     pub(super) fn link_hub(&mut self, h: u32, m: usize, off: u32, a: &Args, res: Option<Node>) {
+        // 已升级的增长枢纽：接入转发到共享枢纽
+        let h = self.hub_fwd(h);
         // 枢纽上的接边属调用点（重接随调用方整方法重接），不归当前 lambda 调用读者
         // 枢纽 lambda 读者代接时，接入记录与其接边归该读者的枢纽（`hub_reader.rs`）
         let host = self.reader_hub();
@@ -82,7 +96,7 @@ impl<'a> Engine<'a> {
         self.cur_lcall = outer;
     }
 
-    fn link_hub_in(&mut self, h: u32, m: usize, off: u32, a: &Args, res: Option<Node>) {
+    pub(super) fn link_hub_in(&mut self, h: u32, m: usize, off: u32, a: &Args, res: Option<Node>) {
         // 同一分析结果下重跑调用点：实参来源与常量不变，已接入即完成（与 `dispatched` 同口径，分析重算时清空）。
         // 字节码调用点上的 lambda 调用由自身读者单元增量驱动；非字节码调用方按当前值重新接边
         if !self.hub_linked.entry(m).or_default().insert((off, h)) {
@@ -314,6 +328,7 @@ impl<'a> Engine<'a> {
     }
 
     fn hub_recv_in(&mut self, h: u32, r: u32) {
+        let h = self.hub_fwd(h);
         let owner = self.hubs[h as usize].owner;
         if !self.sub(r, owner) {
             return;
@@ -323,6 +338,10 @@ impl<'a> Engine<'a> {
             return;
         }
         if !self.hubs[h as usize].recvs.insert(r) {
+            return;
+        }
+        // 增长枢纽接收者超过阈值：永久升级为共享枢纽（已并入的接收者连同 r 一并转发）
+        if self.hubs[h as usize].share.is_some() && self.hub_grown(h) {
             return;
         }
         let site = self.hubs[h as usize].site.clone();
@@ -406,6 +425,13 @@ impl<'a> Engine<'a> {
 
     /// 接收者 r 的目标 t 按调用点建模：登记进枢纽的逐调用点目标表，对已接入的各调用点接边
     fn hub_special(&mut self, h: u32, t: usize, r: u32) {
+        // 同效果键的接收者已有代表接过边：逐调用点效果相同，只把 r 注入被调方 this
+        if let Some(k) = self.special_key(t, r) {
+            if !self.hubs[h as usize].skeys.insert((t, k)) {
+                self.add_to(Node::P(t, 0), &TypeSet::exact(r));
+                return;
+            }
+        }
         Rc::make_mut(self.hubs[h as usize].special.entry(t).or_default()).push(r);
         let ret = self.hubs[h as usize].ret;
         let links: Vec<_> = self.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect();

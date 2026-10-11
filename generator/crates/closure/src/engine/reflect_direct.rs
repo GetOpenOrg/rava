@@ -325,6 +325,7 @@ impl<'a> Engine<'a> {
 
     /// 实参 a 接到枢纽 h 的形参（不含接收者）：调用点已接入（`link_hub` 去重）后实参来源增长时补接
     fn direct_hub_args(&mut self, h: u32, a: &Args) {
+        let h = self.hub_fwd(h);
         let ptypes = self.hubs[h as usize].ptypes.clone();
         for (j, f) in a.iter().enumerate() {
             if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(j)) {
