@@ -277,7 +277,8 @@ mod tests {
 
     impl Sandbox {
         fn new(tag: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("rava-jdk-{tag}-{}", std::process::id()));
+            // 前缀 sb- 与其他测试的临时目录隔开（曾与 pinned_major_reads_first_integer 的 rava-jdk-pin-<pid> 同名，并行时被删）
+            let root = std::env::temp_dir().join(format!("rava-jdk-sb-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("jvm")).unwrap();
             let env = JdkEnv { java_home: None, cellars: Vec::new(), jvm_dirs: vec![root.join("jvm")], macos_java_home: false };
