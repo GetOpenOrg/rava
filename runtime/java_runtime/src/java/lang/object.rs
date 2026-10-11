@@ -188,7 +188,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// （类 wrapper 的 null 判定是其固有方法 `is_jvm_null`，S7-2b）。
     fn is_jvm_null(&self) -> bool { false }
 
-    /// 接口视图查询（接口引用 `__IfaceRef` 建立时的运行时入口，S7-2c）：`slot` 是调用方提供的
+    /// 接口视图查询（invokeinterface 入口 `__IfaceRef::enter` 每次现取，S7-2c / §9.9 K2）：`slot` 是调用方提供的
     /// `Option<NonNull<dyn I__VTable>>`（I 为目标 Java 接口）；对象的运行时类实现 I 时，
     /// 把自身以该接口的擦除 vtable 形态的指针填入 `slot`（与 `__erased_vtable` 同形，
     /// 调用方以持有本对象的 Object 为句柄，指针不持有）。

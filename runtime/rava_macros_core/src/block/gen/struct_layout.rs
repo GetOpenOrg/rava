@@ -130,7 +130,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let iface_vtable_idents: Vec<Ident> = ctx.iface_impls.iter()
         .map(|ii| format_ident!("{}__VTable", ii.iface))
         .collect();
-    // 接口视图指针填入（S7-2c，与下方 `__erased_vtable` 同形）：调用方（`__IfaceRef::new`）
+    // 接口视图指针填入（S7-2c，与下方 `__erased_vtable` 同形）：调用方（invokeinterface 入口 `__IfaceRef::enter`）
     // 以持有本存储的 Object 为句柄，指针不持有——不再按接口单态化 `__Shared<dyn I__VTable>`。
     let interface_query: TokenStream2 = if iface_vtable_idents.is_empty() {
         quote! {}

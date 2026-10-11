@@ -1,8 +1,8 @@
 //! 映像区：分段的 `__BootImage{k}` 结构与 `BOOT_IMAGE_{k}` 常量初值。
 //!
 //! 引用的常量形态按槽的静态类型：`Object` → 句柄；类 wrapper → `__from_image(__Handle::image(..))`
-//! （类 vtable 由 `X__inner` 经 supertrait 链实现）；接口载体 → `__from_image(__IfaceRef::image(..))`
-//! （对象的类有 `impl I for X` 块时取接口视图，否则与运行期 `__IfaceRef::new` 同为无视图）；同形数组 →
+//! （类 vtable 由 `X__inner` 经 supertrait 链实现）；接口载体 → `__from_image(__IfaceRef::new(..))`
+//! （只持句柄，接口视图在 invokeinterface 入口现取，§9.9 K2）；同形数组 →
 //! `JArray::__image`，形态不一致的数组 → 映像中的擦除协变视图（`JArray::__image_view`）。类镜像是映像对象。
 //! 占位对象的槽取 null，由启动序列在其步骤处回填；槽类型无常量形态（[`SlotTy::Other`]）的引用是残差写入
 //! （[`Residual`]），由启动序列写入。
@@ -140,16 +140,7 @@ impl Plan<'_, '_> {
                     "{p}::__from_image(__Handle::image(__Obj::image(&{o}.value as &dyn ObjectVTable)))"
                 ))
             }
-            SlotTy::Iface(c) => {
-                let p = self.path(c);
-                let view = !arr && self.ems.get(ty).is_some_and(|em| em.iface_views.iter().any(|v| v == c));
-                let r = if view {
-                    format!("__IfaceRef::image({}, &{}.value as &dyn {p}__VTable)", self.obj_ref(t), self.img(t))
-                } else {
-                    format!("__IfaceRef::null({})", self.obj_ref(t))
-                };
-                Some(format!("{p}::__from_image({r})"))
-            }
+            SlotTy::Iface(c) => Some(format!("{}::__from_image(__IfaceRef::new({}))", self.path(c), self.obj_ref(t))),
             SlotTy::Array(view) if arr => {
                 if squash(&self.elem_short(ty)) == *view {
                     Some(format!("JArray::__image(&{}.value)", self.img(t)))
