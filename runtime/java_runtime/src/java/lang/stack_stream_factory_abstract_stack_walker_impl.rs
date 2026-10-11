@@ -95,7 +95,10 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
 
 /// JDK 21：仅类模式的帧缓冲元素是 Class 本身
 #[cfg(not(jdk_ge_25))]
-fn _fill_class_only<T: From<Object>>(frames: &JArray<T>, index: i32, frame: &JavaFrame) -> Result<()> {
+fn _fill_class_only<T>(frames: &JArray<T>, index: i32, frame: &JavaFrame) -> Result<()>
+where
+    T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
+{
     frames.set(index, T::from(Object::from(Class::for_class(String::from(frame.class)))))
 }
 
