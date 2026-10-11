@@ -91,6 +91,16 @@ unsafe fn merge(addr: usize, off: usize, width: usize, v: u64) {
     }
 }
 
+/// 已知 8 字节对齐的地址的字单元（免二次掩码；批量路径的整字段起点对齐、步进为字）。
+///
+/// # Safety
+/// `addr` 8 字节对齐且满足模块头注的地址前提。
+#[inline]
+unsafe fn word_aligned<'a>(addr: usize) -> &'a AtomicU64 {
+    // SAFETY: 地址 8 字节对齐（由调用方保证，不再掩低 3 位）
+    unsafe { AtomicU64::from_ptr(addr as *mut u64) }
+}
+
 /// 字节串 → 本机字节序零扩展值（`bytes.len() <= 8`）。
 #[inline]
 fn bits_of(bytes: &[u8]) -> u64 {
@@ -110,7 +120,8 @@ fn head_len(addr: usize, n: usize) -> usize {
     (addr.wrapping_neg() & (WORD - 1)).min(n)
 }
 
-/// 读 `dst.len()` 字节：头 / 尾不足一字的段各一次整字读取后截取，中间整字逐字 Relaxed 读。
+/// 读 `dst.len()` 字节：头 / 尾不足一字的段各一次整字读取后截取，中间整字逐字 Relaxed 读
+///（8 字 ×8 展开：原子访问不能向量化，展开消循环控制开销，让访存端口满吞吐）。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
@@ -123,22 +134,40 @@ pub unsafe fn read(addr: usize, dst: &mut [u8]) {
         let w = unsafe { word(addr) }.load(Ordering::Relaxed).to_ne_bytes();
         dst[..h].copy_from_slice(&w[off..off + h]);
     }
-    let (body, tail) = dst[h..].split_at_mut((n - h) / WORD * WORD);
     let mut a = addr + h;
-    for c in body.chunks_exact_mut(WORD) {
-        // SAFETY: 由调用方保证
-        c.copy_from_slice(&unsafe { word(a) }.load(Ordering::Relaxed).to_ne_bytes());
-        a += WORD;
+    let mut i = h;
+    while n - i >= 8 * WORD {
+        // SAFETY: a 为对齐字地址，由调用方保证
+        let w0 = unsafe { word_aligned(a) }.load(Ordering::Relaxed).to_ne_bytes();
+        let w1 = unsafe { word_aligned(a + WORD) }.load(Ordering::Relaxed).to_ne_bytes();
+        let w2 = unsafe { word_aligned(a + 2 * WORD) }.load(Ordering::Relaxed).to_ne_bytes();
+        let w3 = unsafe { word_aligned(a + 3 * WORD) }.load(Ordering::Relaxed).to_ne_bytes();
+        let w4 = unsafe { word_aligned(a + 4 * WORD) }.load(Ordering::Relaxed).to_ne_bytes();
+        let w5 = unsafe { word_aligned(a + 5 * WORD) }.load(Ordering::Relaxed).to_ne_bytes();
+        let w6 = unsafe { word_aligned(a + 6 * WORD) }.load(Ordering::Relaxed).to_ne_bytes();
+        let w7 = unsafe { word_aligned(a + 7 * WORD) }.load(Ordering::Relaxed).to_ne_bytes();
+        dst[i..i + WORD].copy_from_slice(&w0);
+        dst[i + WORD..i + 2 * WORD].copy_from_slice(&w1);
+        dst[i + 2 * WORD..i + 3 * WORD].copy_from_slice(&w2);
+        dst[i + 3 * WORD..i + 4 * WORD].copy_from_slice(&w3);
+        dst[i + 4 * WORD..i + 5 * WORD].copy_from_slice(&w4);
+        dst[i + 5 * WORD..i + 6 * WORD].copy_from_slice(&w5);
+        dst[i + 6 * WORD..i + 7 * WORD].copy_from_slice(&w6);
+        dst[i + 7 * WORD..i + 8 * WORD].copy_from_slice(&w7);
+        a += 8 * WORD;
+        i += 8 * WORD;
     }
-    if !tail.is_empty() {
-        // SAFETY: 由调用方保证
-        let w = unsafe { word(a) }.load(Ordering::Relaxed).to_ne_bytes();
-        let t = tail.len();
-        tail.copy_from_slice(&w[..t]);
+    while i < n {
+        let t = (n - i).min(WORD);
+        // SAFETY: a 为对齐字地址，由调用方保证（末字可能只取前 t 字节）
+        let w = unsafe { word_aligned(a) }.load(Ordering::Relaxed).to_ne_bytes();
+        dst[i..i + t].copy_from_slice(&w[..t]);
+        a += WORD;
+        i += t;
     }
 }
 
-/// 写 `src`：头 / 尾不足一字的段经同字 CAS 合并，中间整字逐字 Relaxed 写。
+/// 写 `src`：头 / 尾不足一字的段经同字 CAS 合并，中间整字逐字 Relaxed 写（8 字 ×8 展开）。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
@@ -149,22 +178,48 @@ pub unsafe fn write(addr: usize, src: &[u8]) {
         // SAFETY: 由调用方保证
         unsafe { merge(addr, addr & (WORD - 1), h, bits_of(&src[..h])) };
     }
-    let (body, tail) = src[h..].split_at((n - h) / WORD * WORD);
     let mut a = addr + h;
-    for c in body.chunks_exact(WORD) {
-        let mut b = [0u8; WORD];
-        b.copy_from_slice(c);
-        // SAFETY: 由调用方保证
-        unsafe { word(a) }.store(u64::from_ne_bytes(b), Ordering::Relaxed);
-        a += WORD;
+    let mut i = h;
+    while n - i >= 8 * WORD {
+        // SAFETY: a 为对齐字地址，由调用方保证
+        unsafe {
+            let mut b = [0u8; WORD];
+            b.copy_from_slice(&src[i..i + WORD]);
+            word_aligned(a).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+            b.copy_from_slice(&src[i + WORD..i + 2 * WORD]);
+            word_aligned(a + WORD).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+            b.copy_from_slice(&src[i + 2 * WORD..i + 3 * WORD]);
+            word_aligned(a + 2 * WORD).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+            b.copy_from_slice(&src[i + 3 * WORD..i + 4 * WORD]);
+            word_aligned(a + 3 * WORD).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+            b.copy_from_slice(&src[i + 4 * WORD..i + 5 * WORD]);
+            word_aligned(a + 4 * WORD).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+            b.copy_from_slice(&src[i + 5 * WORD..i + 6 * WORD]);
+            word_aligned(a + 5 * WORD).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+            b.copy_from_slice(&src[i + 6 * WORD..i + 7 * WORD]);
+            word_aligned(a + 6 * WORD).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+            b.copy_from_slice(&src[i + 7 * WORD..i + 8 * WORD]);
+            word_aligned(a + 7 * WORD).store(u64::from_ne_bytes(b), Ordering::Relaxed);
+        }
+        a += 8 * WORD;
+        i += 8 * WORD;
     }
-    if !tail.is_empty() {
+    while n - i >= WORD {
+        let mut b = [0u8; WORD];
+        b.copy_from_slice(&src[i..i + WORD]);
+        // SAFETY: a 为对齐字地址，由调用方保证
+        unsafe { word_aligned(a).store(u64::from_ne_bytes(b), Ordering::Relaxed) };
+        a += WORD;
+        i += WORD;
+    }
+    if i < n {
+        // 尾段（不足一字）：CAS 合并，只替换区间内字节
         // SAFETY: 由调用方保证
-        unsafe { merge(a, 0, tail.len(), bits_of(tail)) };
+        unsafe { merge(a, 0, n - i, bits_of(&src[i..])) };
     }
 }
 
-/// `[addr, addr + n)` 填 `value`（Unsafe.setMemory0）。
+/// `[addr, addr + n)` 填 `value`（Unsafe.setMemory0）。整字段 8 字 ×8 展开。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
@@ -177,9 +232,23 @@ pub unsafe fn fill(addr: usize, n: usize, value: u8) {
     }
     let mut a = addr + h;
     let end = addr + n;
+    while end - a >= 8 * WORD {
+        // SAFETY: a 为对齐字地址，由调用方保证
+        unsafe {
+            word_aligned(a).store(full, Ordering::Relaxed);
+            word_aligned(a + WORD).store(full, Ordering::Relaxed);
+            word_aligned(a + 2 * WORD).store(full, Ordering::Relaxed);
+            word_aligned(a + 3 * WORD).store(full, Ordering::Relaxed);
+            word_aligned(a + 4 * WORD).store(full, Ordering::Relaxed);
+            word_aligned(a + 5 * WORD).store(full, Ordering::Relaxed);
+            word_aligned(a + 6 * WORD).store(full, Ordering::Relaxed);
+            word_aligned(a + 7 * WORD).store(full, Ordering::Relaxed);
+        }
+        a += 8 * WORD;
+    }
     while end - a >= WORD {
         // SAFETY: 由调用方保证
-        unsafe { word(a) }.store(full, Ordering::Relaxed);
+        unsafe { word_aligned(a).store(full, Ordering::Relaxed) };
         a += WORD;
     }
     if a < end {
@@ -188,10 +257,41 @@ pub unsafe fn fill(addr: usize, n: usize, value: u8) {
     }
 }
 
+/// `n` 个连续对齐字：8 字先全部读出、再全部写入。块内先读后写对任意同偏移重叠（`dst` 与 `src`
+/// 低 3 位相同）都安全：写字 `i` 只可能覆盖字 `i + d` 的源（`d = (dst - src) / 8 ≥ 1`，
+/// 同偏移时差为字的倍数），而那些字要么在本块更靠后（已随本块读出）、要么在更靠后的块
+///（本函数按块序处理后已被读过，见 [`copy`] 的方向论证）。
+///
+/// # Safety
+/// 两地址均 8 字节对齐且满足模块头注的地址前提。
+#[inline]
+unsafe fn copy_word_block(s: usize, d: usize) {
+    // SAFETY: 由调用方保证
+    let a0 = unsafe { word_aligned(s) }.load(Ordering::Relaxed);
+    let a1 = unsafe { word_aligned(s + WORD) }.load(Ordering::Relaxed);
+    let a2 = unsafe { word_aligned(s + 2 * WORD) }.load(Ordering::Relaxed);
+    let a3 = unsafe { word_aligned(s + 3 * WORD) }.load(Ordering::Relaxed);
+    let a4 = unsafe { word_aligned(s + 4 * WORD) }.load(Ordering::Relaxed);
+    let a5 = unsafe { word_aligned(s + 5 * WORD) }.load(Ordering::Relaxed);
+    let a6 = unsafe { word_aligned(s + 6 * WORD) }.load(Ordering::Relaxed);
+    let a7 = unsafe { word_aligned(s + 7 * WORD) }.load(Ordering::Relaxed);
+    unsafe {
+        word_aligned(d).store(a0, Ordering::Relaxed);
+        word_aligned(d + WORD).store(a1, Ordering::Relaxed);
+        word_aligned(d + 2 * WORD).store(a2, Ordering::Relaxed);
+        word_aligned(d + 3 * WORD).store(a3, Ordering::Relaxed);
+        word_aligned(d + 4 * WORD).store(a4, Ordering::Relaxed);
+        word_aligned(d + 5 * WORD).store(a5, Ordering::Relaxed);
+        word_aligned(d + 6 * WORD).store(a6, Ordering::Relaxed);
+        word_aligned(d + 7 * WORD).store(a7, Ordering::Relaxed);
+    }
+}
+
 /// 拷贝 `n` 字节（memmove 语义，区间可重叠）。
 ///
 /// 源与目标字内偏移相同时（`allocateMemory` 区间之间、缓冲区同偏移拷贝的常见情形）走逐字快路径：
-/// 头 / 尾段先整段读出再写入，中间整字一读一写；目标在源之后且重叠时自尾向头。其余情形按块经栈缓冲
+/// 头 / 尾段先整段读出再写入，中间整字 8 字 ×8 展开一读一写；目标在源之后且重叠时自尾向头按块
+/// 降序处理（块内先读后写，对任意同偏移重叠安全，见 [`copy_word_block`]）。其余情形按块经栈缓冲
 /// 读出再写入。
 ///
 /// # Safety
@@ -208,16 +308,27 @@ pub unsafe fn copy(src: usize, dst: usize, n: usize) {
             read(src + at, &mut b[..len]);
             write(dst + at, &b[..len]);
         };
-        // SAFETY: 由调用方保证；源与目标同偏移，第 i 字一读一写
-        let step = |i: usize| unsafe {
-            let at = h + i * WORD;
-            word(dst + at).store(word(src + at).load(Ordering::Relaxed), Ordering::Relaxed);
+        // SAFETY: 由调用方保证；源与目标同偏移，第 i 字一读一写（8 字块展开）
+        let block = |at: usize| unsafe { copy_word_block(src + at, dst + at) };
+        // SAFETY: 由调用方保证；单个整字一读一写
+        let word1 = |at: usize| unsafe {
+            word_aligned(dst + at).store(word_aligned(src + at).load(Ordering::Relaxed), Ordering::Relaxed)
         };
         if backward {
             if t > 0 {
                 small(n - t, t);
             }
-            (0..words).rev().for_each(step);
+            // 整字段自尾向头：先满块（块间降序），余字自尾向头
+            let body_end = h + words * WORD;
+            let mut e = body_end;
+            while e - h >= 8 * WORD {
+                e -= 8 * WORD;
+                block(e);
+            }
+            while e > h {
+                e -= WORD;
+                word1(e);
+            }
             if h > 0 {
                 small(0, h);
             }
@@ -225,7 +336,17 @@ pub unsafe fn copy(src: usize, dst: usize, n: usize) {
             if h > 0 {
                 small(0, h);
             }
-            (0..words).for_each(step);
+            // 整字段自首向尾：余字在前、满块升序（全程地址递增即可，dst < src 时写字 i 覆盖的
+            // 源字 i − d 必已读过）
+            let mut at = h;
+            for _ in 0..words % 8 {
+                word1(at);
+                at += WORD;
+            }
+            while at + 8 * WORD <= h + words * WORD {
+                block(at);
+                at += 8 * WORD;
+            }
             if t > 0 {
                 small(n - t, t);
             }

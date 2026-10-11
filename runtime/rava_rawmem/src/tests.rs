@@ -89,12 +89,13 @@ fn bulk_read_write_fill_copy() {
     assert_eq!(all[25], 22, "填充终点后一字节不变");
 }
 
-/// 起点偏移 0..8 × 长度 0..40 全组合：读 / 写 / 填充 / 同偏移拷贝与逐字节参照一致，区间外字节不变。
+/// 起点偏移 0..8 × 长度 0..80 全组合（跨 8 字展开块边界）：读 / 写 / 填充 / 同偏移拷贝与逐字节
+/// 参照一致，区间外字节不变。
 #[test]
 fn bulk_every_offset_and_length() {
     for off in 0..8usize {
-        for n in 0..40usize {
-            let b = Buf::new(8);
+        for n in 0..80usize {
+            let b = Buf::new(12);
             let base = b.addr();
             let init: Vec<u8> = (0..b.len()).map(|i| (i * 7 + 1) as u8).collect();
             unsafe { write(base, &init) };
@@ -109,17 +110,39 @@ fn bulk_every_offset_and_length() {
             unsafe { fill(base + off, n, 0x5A) };
             want[off..off + n].fill(0x5A);
             assert_eq!(b.bytes(), want, "fill off={off} n={n}");
-            unsafe { copy(base + 64 - 16 + off % 8 - 8, base + off, n.min(8)) };
-            let from = 64 - 16 + off % 8 - 8;
-            want.copy_within(from..from + n.min(8), off);
+            let cn = n.min(40);
+            unsafe { copy(base + 48 + off % 8, base + off, cn) };
+            want.copy_within(48 + off % 8..48 + off % 8 + cn, off);
             assert_eq!(b.bytes(), want, "copy off={off} n={n}");
+        }
+    }
+}
+
+/// 同偏移（快路径）拷贝穷举：源与目标字内偏移 0..8 相同，长度 0..72（含 8 字块边界前后），
+/// 目标-源差取 ±8 / ±16 / ±64 字节（重叠两个方向 + 非重叠），与 `copy_within` 参照一致。
+#[test]
+fn copy_same_offset_every_length_and_delta() {
+    for off in 0..8usize {
+        for n in 0..72usize {
+            for d in [-64i64, -16, -8, 8, 16, 64] {
+                let b = Buf::new(48);
+                let base = b.addr();
+                let init: Vec<u8> = (0..b.len()).map(|i| (i * 13 % 241) as u8).collect();
+                unsafe { write(base, &init) };
+                let to = 64 + off;
+                let from = to as i64 + d;
+                let mut want = init.clone();
+                want.copy_within(from as usize..from as usize + n, to);
+                unsafe { copy(base + from as usize, base + to, n) };
+                assert_eq!(b.bytes(), want, "off={off} n={n} d={d}");
+            }
         }
     }
 }
 
 #[test]
 fn copy_overlapping_matches_memmove() {
-    for (from, to, n) in [(0usize, 7usize, 1500usize), (7, 0, 1500), (3, 3, 100), (0, 600, 512), (1, 2, 1023), (0, 8, 1500), (8, 0, 1500), (3, 11, 1001), (11, 3, 1001), (2, 10, 5), (13, 5, 3), (5, 13, 16), (6, 14, 2)] {
+    for (from, to, n) in [(0usize, 7usize, 1500usize), (7, 0, 1500), (3, 3, 100), (0, 600, 512), (1, 2, 1023), (0, 8, 1500), (8, 0, 1500), (3, 11, 1001), (11, 3, 1001), (2, 10, 5), (13, 5, 3), (5, 13, 16), (6, 14, 2), (3, 11, 520), (5, 21, 200), (1, 9, 129), (7, 15, 65), (0, 8, 65), (8, 0, 65), (4, 68, 40)] {
         let b = Buf::new(400);
         let base = b.addr();
         let init: Vec<u8> = (0..b.len()).map(|i| (i * 31 % 251) as u8).collect();
