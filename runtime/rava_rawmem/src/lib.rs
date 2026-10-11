@@ -418,14 +418,14 @@ pub unsafe fn store(addr: usize, width: usize, v: u64) {
 
 /// 原子读-改-写：`addr` 处 `width`（1 / 2 / 4 / 8）字节值（本机字节序零扩展）。`op(旧)` 给新值即
 /// 原子替换，给 None 即不写；返回旧值。顺序一致（Java CAS 的 volatile 读写语义）。CAS 重试时 op
-/// 重新求值（须为纯函数）。
+/// 重新求值（须为纯函数）。回调为泛型（各调用点单态化内联，热循环无 dyn 间接调用与掩码函数调用）。
 ///
 /// 地址须按 `width` 对齐，否则 [`Error::Misaligned`]：未对齐区间可能跨字，无法以单条原子指令完成，
 /// 退化为读-改-写会丢并发更新。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
-pub unsafe fn update(addr: usize, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64, Error> {
+pub unsafe fn update<F: FnMut(u64) -> Option<u64> + ?Sized>(addr: usize, width: usize, op: &mut F) -> Result<u64, Error> {
     if width == 0 || width > WORD || !width.is_power_of_two() || addr % width != 0 {
         return Err(Error::Misaligned { addr, width });
     }

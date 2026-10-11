@@ -100,10 +100,11 @@ fn len(bytes: i64) -> Result<usize> {
 
 /// `(base, offset)` 处 `width`（1 / 2 / 4 / 8）字节值的原子读-改-写（Unsafe / VarHandle 的 CAS、交换、
 /// getAndAdd 族）。值是本机字节序零扩展的位形；`op(旧)` 给出新值则写入其低 `width` 字节，返回旧值，
-/// 给 None 即不写。基本类型数组经元素原子单元（区间在单个元素内为该元素的 CAS，跨元素见
+/// 给 None 即不写。回调为泛型（经 `unsafe__ext::prim` 单态化内联到 CAS 热循环，无 dyn 间接调用）。
+/// 基本类型数组经元素原子单元（区间在单个元素内为该元素的 CAS，跨元素见
 /// `__ArrayObj::__update_bytes`）；直接内存经包含该地址的对齐字上的 SeqCst CAS，地址须按宽度对齐，
 /// 否则 IllegalArgumentException（见 [`raw_err`]）。CAS 重试时 op 重新求值（须为纯函数）。
-pub fn update(base: &Object, offset: i64, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
+pub fn update<F: FnMut(u64) -> Option<u64> + ?Sized>(base: &Object, offset: i64, width: usize, op: &mut F) -> Result<u64> {
     if base.0.is_jvm_null() {
         // SAFETY: 直接内存地址前提见本节头注
         return unsafe { rava_rawmem::update(offset as usize, width, op) }.map_err(raw_err);

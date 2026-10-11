@@ -76,15 +76,17 @@ fn bits_boxed_like(cur: &Object, bits: u64) -> Object {
 
 /// 宽度 `width` 的访问在字段视图（字 / 双字）上的掩码合成：op 看到低 `width` 字节，
 /// 写回只替换这些字节。
-fn masked(width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> impl FnMut(u64) -> Option<u64> + '_ {
+fn masked<'a, F: FnMut(u64) -> Option<u64> + ?Sized + 'a>(width: usize, op: &'a mut F) -> impl FnMut(u64) -> Option<u64> + 'a {
     let m = mask(width);
     move |cur| op(cur & m).map(|n| (cur & !m) | (n & m))
 }
 
 /// 统一载体：`(o, offset)` 处 `width` 字节值的读-改-写（见模块头注），返回旧值（低 `width`
-/// 字节，零扩展）。`what` 为访问器签名（缺口报文用）。
-pub(super) fn prim(o: &Object, offset: i64, width: usize, what: &str,
-                   op: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
+/// 字节，零扩展）。`what` 为访问器签名（缺口报文用）。回调为泛型：各访问器（`cas` 的比较闭包、
+/// VarHandle 的 getAndAdd 等）单态化后内联进 CAS 热循环（rs-bench5 的 CAS 段 +6% 出在 `&mut dyn`
+/// 间接调用与掩码函数调用）。
+pub(super) fn prim<F: FnMut(u64) -> Option<u64> + ?Sized>(o: &Object, offset: i64, width: usize, what: &str,
+                   op: &mut F) -> Result<u64> {
     if crate::native_memory::is_raw(o) {
         return crate::native_memory::update(o, offset, width, op);
     }
