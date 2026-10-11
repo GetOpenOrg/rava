@@ -2,9 +2,11 @@
 
 use super::*;
 
-fn fact_value(f: &Fact) -> V {
+/// 清单事实按返回描述符取值：`J` 返回的整数事实是 long 常量（lcmp 等长整型折叠只认 `V::Long`）
+fn fact_value(f: &Fact, desc: &str) -> V {
     match f {
         Fact::Null => V::Null,
+        Fact::Int(i) if desc.ends_with(")J") => V::Long(i64::from(*i)),
         Fact::Int(i) => V::Int(*i),
     }
 }
@@ -16,7 +18,7 @@ impl Ctx<'_> {
             return c.2.clone();
         }
         let k = m.to_string();
-        let fact = self.man.return_fact(&k).map(fact_value);
+        let fact = self.man.return_fact(&k).map(|f| fact_value(f, &m.desc));
         // 类型取返回描述符（absint 对 ty = None 的调用结果按描述符补齐），来源由 absint 换成本调用点
         let caller_class = self.man.returns_caller_class(&k);
         let nonnull_ret = if self.man.empty.is_factory(&k) {
@@ -24,7 +26,7 @@ impl Ctx<'_> {
         } else {
             caller_class.then(nonnull_ref)
         };
-        let empty_query = self.man.empty.query(&m.name, &m.desc).map(fact_value);
+        let empty_query = self.man.empty.query(&m.name, &m.desc).map(|f| fact_value(f, &m.desc));
         let target = self
             .exact_target(opcode, m, iface)
             .filter(|(cf, t)| cf.method(&t.name, &t.desc).is_some_and(|tm| self.kind_of(cf, tm) == Kind::Bytecode))
@@ -130,5 +132,17 @@ impl Ctx<'_> {
             || site.class.access & acc::FINAL != 0 && !site.class.is_interface();
         let (o, n, d) = site.key();
         exact.then(|| (site.class.clone(), MemberRef { owner: o, name: n, desc: d }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_return_fact_is_long_constant() {
+        assert!(matches!(fact_value(&Fact::Int(0), "()J"), V::Long(0)));
+        assert!(matches!(fact_value(&Fact::Int(1), "()Z"), V::Int(1)));
+        assert!(matches!(fact_value(&Fact::Null, "()Ljava/lang/Object;"), V::Null));
     }
 }
