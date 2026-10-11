@@ -133,6 +133,7 @@
 - **C4 全量第一轮（10-10，dev）**：1109 例，复跑后通过 1090、失败 19。已登记 13（JUnit 10、VirtualThreadScale、HttpLoopback 2、XmlTransform）；新登记 known_failures 5 例（f680bab4）并派修：TestThreadNatives → conc-step-b；TestReflectFieldMethod / TestReflectInvokePerReceiver / TestSecurityManagerContext → c4-reflect；TestUrlParsingFaces → c4-url。TestHttpLoopbackAsync 本轮编译 OOM（14 GB），资源类。
 - **审查生成器修复（review-generator，10-11）**：待办「生成器 / 宏」七项已落地（4f2fb0a5…e11a3191，见 `docs/reports/2026-10-11-code-review-triage.md`「生成器修复」节）；单测 rc=0、27 例生成 `.rs` 零差异、seed_check 4/4、DeepCopy emit 无回归；抽查 rg-spot-e11a3191 15/15 全过，vendor `cp -a`/`mv` 复核待重发；未合入 main。
 - **10-11 用户裁决与派发**：S7-4 类型标记 crate 选路线 A（每类方法 trait 属生成层内部细节，同 `ObjectVTable`；接受常数级分派开销；标记 crate 按档案生成；语料档案目标 ⑤），实施由 s7-marker 推进（S7 计划 §9.8.3 / §9.9）；reflect-marker 耗时回归改名后派出（reflect-perf，先复测）；G1 续作（枢纽建立口径，性能计划 §4.10）待 batch-1011b 放行后派。巡检 cron 保留；迁往 dev 的切换窗口定在「在跑代理全部交回、无在测批次」的第一个空档（交接文档 /data/workspace/handoff）。
+- **S7-4 K3 方法 trait（s7-k3，10-11 交回，未合入）**：wrapper 可读层成员移入 `X__Methods`，生成器按 owner 精确导入，runtime 只加 `use` 行。生成树对照只多出 `use` 行，宏单测 21/21，工作区 check 8/9 通过（DeepCopy 已修、未复测）。声明底段峰值 +24–31%，超出 ±5%；全量单测与抽查未跑。未完成项、K4–K8 续作见 S7 计划 §9.9「现状」K3 条目与「K4 及后续方案」。K4 未派（10-11 暂停派发新代理）。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
 - **暂缓**：
   - 纯优化线（10-06 分级）；U1 重议；
