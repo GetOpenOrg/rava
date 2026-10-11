@@ -218,6 +218,12 @@ impl<'a> Engine<'a> {
     pub(super) fn image_field(&mut self, key: &MemberRef, fi: usize) {
         let Some(s) = self.img.as_mut() else { return };
         let k = (key.owner.clone(), key.name.clone());
+        // 临时诊断（RAVA_DBG_FIELD）：该字段节点首次出现时的映像判定
+        if let Ok(want) = std::env::var("RAVA_DBG_FIELD") {
+            if key.to_string() == want {
+                eprintln!("[img-field] {want} build_time={} statics 有 {} pending {:#?}", s.build_time.contains(&key.owner), s.statics.get(&k).is_some(), s.pending.get(&k).map(|v| v.len()));
+            }
+        }
         let mut vals = s.pending.remove(&k).unwrap_or_default();
         if s.build_time.contains(&key.owner) {
             if let Some(v) = s.statics.get(&k) {

@@ -1774,3 +1774,18 @@ owner = "无 GC 内存模型（nogc-escape）；诊断守卫，尚无实例"
 diagnose = "rava build <Test.java> --stop-after emit --escape-trace：看该方法各区域判定与摘要调用链，核对 panic 类型在区域内的去向；先修分析器建模或 [escape] 登记（宁可拒绝区域），不放宽运行时断言"
 doc = "docs/plans/2026-10-07-no-gc-memory-model.md §4.5、§六"
 since = "2026-10-11"
+
+[[pattern]]
+id = "seed-order-osc-newinstance-domains"
+stage = "unit"
+symptom = "closure_independent_of_hash_seed 在 TestSerialLookupPairing 上失败：种子 0 闭包比种子 1/2 多 java/security/ProtectionDomain$JavaSecurityAccessImpl 与 jdk/internal/access/JavaSecurityAccess 两类（2711 vs 2709），--why 溯源经 [dispatch] java/io/ObjectStreamClass.newInstance:()Ljava/lang/Object;@65"
+match = []
+tests = ["closure_independent_of_hash_seed（TestSerialLookupPairing）"]
+cause = "hash-seed 换内部表迭代序 → ObjectStreamClass.newInstance 的失效/重分析轮数两子不同（种子 0 三轮、种子 1 一轮）：某轮里 @15 ifnull domains 未折 null，@38 getJavaSecurityAccess 入事件集 → SharedSecrets.javaSecurityAccess 字段节点首次出现、引导映像值 Image(impl) 并入 → @65 分派牵出 impl 与接口。终局根因（seedfix-diag1 插桩观测）：ObjectStreamClass$2.run@336 的 putfield domains 写入 @333 getProtectionDomains(cons, cl) 的返回值，而 getProtectionDomains 的 @13 System.getSecurityManager / @16 ifnull 守卫无返回事实不折，rvals 在两种子下于 Const(Null)/Top 分叉，种子 0 某轮 Unknown 答复经 putfield 以 PV::Top 并入全局 fvals[domains]（格只升不降），ifnull 随之展开；domains 真程序恒 null（原生二进制无启动器、无人调 setSecurityManager），种子 1（2709）是正确侧。已排除：ctor_reqs / init 触发 / 引导映像差异；deser 放开（serialPersistentFields 空）；按对象 ⊥ 读（两子均 0 次）。二分：9e253ee0、fe923a2f 仍失败，74919e58 经 nogc-escape 手写层扰动掩盖非根治"
+introduced = "batch-1011i 区间（c1d-a54-reflect 等；首报 0b91182b）"
+fixed = ["b898b399（清单 [facts.returns] 增 System.getSecurityManager 恒 null：调用点事实先于汇合格答复，@16 守卫恒折、getProtectionDomains 恒返 Null、domains 恒写 Null，折叠与种子及轮次无关）"]
+status = "fixed"
+owner = "fix-seed-reg"
+diagnose = "RAVA_DBG_METH + RAVA_DBG_FIELD（支持逗号多键）跑种子 0/1 对照 [field-put]（首个 <- Top 的写点）与通配未知原因行；RAVA_DBG_RET 打印被调成员汇合格 / per / site 答复来源"
+doc = "docs/plans/2026-10-11-seed-regression-fix.md"
+since = "2026-10-12"

@@ -48,7 +48,7 @@ impl<'a> Engine<'a> {
             }
             None => {
                 if !self.ctx.fopen_all.replace(true) {
-                    self.open_fields_all(false, self.ctx.deser.get());
+                    self.open_fields_all(false, self.ctx.deser.get(), "class-none（枚举推不出类→全部放开）");
                 }
             }
         }
@@ -69,7 +69,7 @@ impl<'a> Engine<'a> {
     fn open_serial_fields(&mut self, cls: Option<String>) {
         let Some(c) = cls else {
             if !self.ctx.deser.replace(true) {
-                self.open_fields_all(self.ctx.fopen_all.get(), false);
+                self.open_fields_all(self.ctx.fopen_all.get(), false, "serial-none（可序列化字段枚举推不出类）");
             }
             return;
         };

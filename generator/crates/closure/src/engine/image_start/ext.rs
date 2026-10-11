@@ -14,11 +14,22 @@ impl<'a> Engine<'a> {
             return true;
         }
         if !s.tried.insert(cls.to_string()) {
+            if std::env::var("RAVA_DBG_EXT").is_ok() {
+                eprintln!("[ext] {cls} 已尝试过，跳过");
+            }
             return false;
         }
         let d = Rc::make_mut(&mut s.data);
         let (n0, s0) = (d.objs.len(), d.statics.len());
-        let Some(classes) = x.attempt(&self.ctx, self.cp, cls, d) else { return false };
+        let Some(classes) = x.attempt(&self.ctx, self.cp, cls, d) else {
+            if std::env::var("RAVA_DBG_EXT").is_ok() {
+                eprintln!("[ext] {cls} 尝试失败：{}", x.report()["failed"][cls].as_str().unwrap_or("?"));
+            }
+            return false;
+        };
+        if std::env::var("RAVA_DBG_EXT").is_ok() {
+            eprintln!("[ext] {cls} 成功：+{classes:?}（statics +{}，objs +{}）", d.statics.len() - s0, d.objs.len() - n0);
+        }
         let fresh: Vec<(String, String, IVal)> = d.statics[s0..].to_vec();
         for (c, n, v) in &fresh {
             s.statics.insert((c.clone(), n.clone()), *v);

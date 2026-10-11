@@ -5,6 +5,13 @@ use super::*;
 impl<'a> Engine<'a> {
     /// JVMS §5.5 初始化：超类链、声明非抽象实例方法的超接口、`<clinit>`
     pub fn init(&mut self, cls: &str, via: Via) {
+        // 临时诊断（RAVA_DBG_INIT）：类名匹配时打印初始化触发来源
+        if let Ok(want) = std::env::var("RAVA_DBG_INIT") {
+            if cls == want {
+                let site = self.cur_site.map(|(m, o)| format!("{}@{o}", self.methods[m].key)).unwrap_or_else(|| "?".into());
+                eprintln!("[init] {cls} via {via:?} @ {site}");
+            }
+        }
         if cut::edges_on() && !cls.starts_with('[') {
             let from = self.via_node(&via);
             cut::edge(&from, &format!("I:{cls}"));

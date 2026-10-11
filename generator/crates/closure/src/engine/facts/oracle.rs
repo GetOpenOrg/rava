@@ -5,8 +5,14 @@ use super::super::obj_fields::ObjAns;
 use super::super::site_rets::SiteAns;
 
 /// 值带空集合标签（接收者为空的不可修改集合）
+/// is_empty_tag 的共用位置（模块顶部）
 fn is_empty_tag(v: Option<&V>) -> bool {
     v.and_then(|v| v.obj()).is_some_and(|o| **o == crate::absint::Obj::Empty)
+}
+
+/// 临时诊断（RAVA_DBG_FIELD，逗号分隔多键）：字段键匹配时开打印
+fn dbg_field_on(f: &MemberRef) -> bool {
+    std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w.split(',').any(|k| k == f.to_string()))
 }
 
 impl Oracle for Facts<'_, '_> {
@@ -94,8 +100,8 @@ impl Oracle for Facts<'_, '_> {
         let Some(me) = self.m else { return eval() };
         // 静态调用点接克隆节点：取节点返回值（`site_rets.rs`，依赖由引擎登记）
         let site = if opcode == classfile::op::INVOKESTATIC { self.sites.iter().find(|(o, _)| *o == off).map(|(_, a)| a) } else { None };
-        let r = match (per, site) {
-            (Some(p), _) => Some(p),
+        let r = match (&per, site) {
+            (Some(p), _) => Some(p.clone()),
             (None, Some(SiteAns::Never)) => {
                 self.ctx.dep(me, Dep::Never);
                 return Ret::Never;
@@ -106,6 +112,17 @@ impl Oracle for Facts<'_, '_> {
                 self.ctx.rvals.borrow().get(t).cloned()
             }
         };
+        // 临时诊断（RAVA_DBG_RET，逗号分隔多键）：被调成员键匹配时打印汇合格与答复来源
+        if let Ok(want) = std::env::var("RAVA_DBG_RET") {
+            if want.split(',').any(|k| t.to_string().contains(k)) {
+                let ans = match &r {
+                    Some(PV::Const(v)) => format!("汇合Const({v:?})"),
+                    Some(PV::Top) => "汇合Top".to_string(),
+                    None => format!("汇合缺席（Never={}）", self.ctx.noreturn.borrow().answer_never(t)),
+                };
+                eprintln!("[invoke] {t} @{off} per={per:?} site={site:?} {ans} @ 方法#{me}");
+            }
+        }
         match r {
             // 汇合格是常量（含小集合 / 非空引用 / 映像对象）：先按本调用点的常量实参求值，求不出时取汇合格。
             // 求值结果只取决于本调用点实参与被调方法的字节码，是本调用点的精确值；汇合格在不动点途中只是部分
@@ -138,13 +155,28 @@ impl Oracle for Facts<'_, '_> {
     }
     fn getfield(&self, f: &MemberRef, recv: Option<&V>) -> Ret {
         let op = classfile::op::GETFIELD;
+        let dbg = dbg_field_on(f);
+        if dbg {
+            eprintln!("[getfield] {f} @ 方法#{:?} recv={recv:?}", self.m);
+        }
         if let Some(v) = self.ctx.mirror_hook_field(op, f, recv).or_else(|| self.ctx.object_field(self.m, op, f, recv)) {
+            if dbg {
+                eprintln!("[getfield] {f} 按对象答复 {v:?}");
+            }
             return Ret::Value(v);
         }
         // 按对象读（`obj_fields.rs`）：⊥ 按读取之后暂不可达，排空时重算
         match self.obj_field(f, recv) {
-            Some(ObjAns::Value(v)) => return Ret::Value(v),
+            Some(ObjAns::Value(v)) => {
+                if dbg {
+                    eprintln!("[getfield] {f} 按对象值 {v:?}");
+                }
+                return Ret::Value(v);
+            }
             Some(ObjAns::Never) => {
+                if dbg {
+                    eprintln!("[getfield] {f} 按对象 ⊥（Never）@ 方法#{:?}", self.m);
+                }
                 if let Some(me) = self.m {
                     self.ctx.dep(me, Dep::Never);
                 }
@@ -152,7 +184,29 @@ impl Oracle for Facts<'_, '_> {
             }
             None => {}
         }
-        self.ctx.field_value(self.reader(), f).map_or(Ret::Unknown, Ret::Value)
+        let r = self.ctx.field_value(self.reader(), f).map_or(Ret::Unknown, Ret::Value);
+        if dbg {
+            match &r {
+                Ret::Value(v) => eprintln!("[getfield] {f} 通配值 {v:?}"),
+                _ => {
+                    // 临时诊断（RAVA_DBG_FIELD）：通配未知的原因（值集 Top 或开放判定）
+                    let c = &self.ctx;
+                    eprintln!(
+                        "[getfield] {f} 通配未知 fvals={:?} open={} fopen={} fopen_names={} all={} deser={} hw={} hw_names={} @ 方法#{:?}",
+                        c.fvals.borrow().get(f),
+                        c.field_info(f).map(|fi| fi.open).unwrap_or(false),
+                        c.fopen.borrow().contains(f),
+                        c.fopen_names.borrow().contains(&f.name),
+                        c.fopen_all.get(),
+                        c.deser.get(),
+                        c.fhw.borrow().contains(f),
+                        c.fhw_names.borrow().contains(&f.name),
+                        self.m
+                    );
+                }
+            }
+        }
+        r
     }
     fn construct(&self, init: &MemberRef, args: &[V]) -> Option<Rc<Obj>> {
         self.ctx.construct(self.m, init, args)
