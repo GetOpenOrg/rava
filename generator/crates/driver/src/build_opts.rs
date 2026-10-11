@@ -4,7 +4,7 @@
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]…
 //!   [--deps deps.lock.toml] [--cp 锁条目名[,…]] [--launch "<启动选项>"] [--seed-class FQN[,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--strict] [--debug]
-//!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS] [--release | --release-small | --dev-opt] [--target-dir D]
+//!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS] [--build-mem-mb MB] [--release | --release-max | --release-small | --dev-opt] [--target-dir D]
 //!   [--keep-artifacts]
 //!   [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
 //!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
@@ -101,7 +101,9 @@ pub struct BuildOpts {
     pub stop_after: Stage,
     /// cargo build 超时（秒；超时终止整个 cargo 进程组；缺省按重型判定，见 `cargo::Heavy::default_timeout`）
     pub build_timeout: Option<u64>,
-    /// cargo 构建档位（`--release` / `--release-small` / `--dev-opt`，缺省 dev）
+    /// 编译可用内存（MB）：显式给定时代替探测（内存感知作业数，见 `mem_budget`）
+    pub build_mem_mb: Option<u64>,
+    /// cargo 构建档位（`--release` / `--release-max` / `--release-small` / `--dev-opt`，缺省 dev）
     pub build_profile: crate::cargo::BuildProfile,
     /// 保留本例编译产物（缺省链接后删中间产物、运行后删可执行文件，见 [`crate::artifacts`]）
     pub keep_artifacts: bool,
@@ -134,12 +136,13 @@ pub struct BuildOpts {
     pub train_predefined: bool,
 }
 
-const VALUED: [&str; 29] = [
+const VALUED: [&str; 30] = [
     "--profile",
     "--predefined",
     "--stop-after",
     "--target-dir",
     "--build-timeout",
+    "--build-mem-mb",
     "--closure-cache",
     "--closure-cache-max-mb",
     "--jdk",
@@ -165,7 +168,7 @@ const VALUED: [&str; 29] = [
     "--cut-file",
     "--dump-edges",
 ];
-const FLAGS: [&str; 13] = [
+const FLAGS: [&str; 14] = [
     "--train-predefined",
     "--clean",
     "--strict",
@@ -176,14 +179,17 @@ const FLAGS: [&str; 13] = [
     "--perf",
     "--closure-json",
     "--release",
+    "--release-max",
     "--release-small",
     "--dev-opt",
     "--keep-artifacts",
 ];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 26] = [
+const BUILD_ONLY: [&str; 28] = [
     "--train-predefined",
+    "--build-mem-mb",
     "--release",
+    "--release-max",
     "--release-small",
     "--dev-opt",
     "--keep-artifacts",
@@ -258,6 +264,7 @@ impl BuildOpts {
                 "--build-timeout" => {
                     o.build_timeout = Some(v.parse().map_err(|_| format!("--build-timeout 需为秒数：{v}"))?)
                 }
+                "--build-mem-mb" => o.build_mem_mb = Some(v.parse().map_err(|_| format!("--build-mem-mb 需为 MB 数：{v}"))?),
                 "--emit-jobs" => o.emit_jobs = v.parse().map_err(|_| format!("--emit-jobs 需为数字：{v}"))?,
                 "--java-home" => o.java_home = Some(PathBuf::from(v)),
                 "--runtime" => o.runtime = Some(PathBuf::from(v)),
@@ -309,6 +316,9 @@ impl BuildOpts {
         }
         if self.build_timeout.is_some() && self.stop_after < Stage::Compile {
             return Err("--build-timeout 只对 compile / run 阶段有效".into());
+        }
+        if self.build_mem_mb.is_some() && self.stop_after < Stage::Compile {
+            return Err("--build-mem-mb 只对 compile / run 阶段有效".into());
         }
         match (&self.deps, self.cp.is_empty(), mode) {
             (Some(_), true, _) => return Err("--deps 须配合 --cp 给出入口类路径（锁条目名）".into()),
@@ -428,6 +438,9 @@ mod tests {
         assert!(BuildOpts::parse(Mode::Build, &args("A.java --stop-after emit --build-timeout 60")).is_err());
         let o = BuildOpts::parse(Mode::Build, &args("A.java --stop-after compile --build-timeout 60")).unwrap();
         assert_eq!((o.stop_after, o.build_timeout), (Stage::Compile, Some(60)));
+        assert_eq!(BuildOpts::parse(Mode::Build, &args("A.java --build-mem-mb 8000")).unwrap().build_mem_mb, Some(8000));
+        assert!(BuildOpts::parse(Mode::Build, &args("A.java --stop-after emit --build-mem-mb 8000")).is_err());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --build-mem-mb 8000")).is_err());
         assert!(BuildOpts::parse(Mode::Build, &args("A.class")).is_err());
         assert!(BuildOpts::parse(Mode::Build, &args("A.java --jdk x")).is_err());
         assert!(BuildOpts::parse(Mode::Build, &args("A.java --jdk")).is_err());
@@ -505,6 +518,10 @@ mod tests {
         let o = BuildOpts::parse(Mode::Build, &args("E.java --release-small")).unwrap();
         assert_eq!(o.build_profile, crate::cargo::BuildProfile::ReleaseSmall);
         assert!(BuildOpts::parse(Mode::Build, &args("E.java --release --release-small")).is_err());
+        let o = BuildOpts::parse(Mode::Build, &args("E.java --release-max")).unwrap();
+        assert_eq!(o.build_profile, crate::cargo::BuildProfile::ReleaseMax);
+        assert!(BuildOpts::parse(Mode::Build, &args("E.java --release --release-max")).is_err());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --release-max")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --release-small")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --dev-opt")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --release")).is_err());

@@ -133,7 +133,7 @@
 - **10-11 用户裁决与派发**：S7-4 类型标记 crate 选路线 A（每类方法 trait 属生成层内部细节，同 `ObjectVTable`；接受常数级分派开销；标记 crate 按档案生成；语料档案目标 ⑤），实施由 s7-marker 推进（S7 计划 §9.8.3 / §9.9）；reflect-marker 耗时回归改名后派出（reflect-perf，先复测）；G1 续作（枢纽建立口径，性能计划 §4.10）待 batch-1011b 放行后派。巡检 cron 保留；迁往 dev 的切换窗口定在「在跑代理全部交回、无在测批次」的第一个空档（交接文档 /data/workspace/handoff）。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
 - **暂缓**：
-  - build-memsafe；纯优化线（10-06 分级）；U1 重议；
+  - 纯优化线（10-06 分级）；U1 重议；
   - 引用类语义（无 GC，C4 之后）；声明层底段收窄（C4 之后）；
   - 等 dev 恢复：确定性单测（`closure_independent_of_*`）、重例。S0 Spring Boot 闭包已于 10-10 在 dev 复算，仍未产出，转为闸门 G1（分析器任务，见上方框架推进顺序）。
 - **fix-domstack（b4da5107，2026-10-10）**：C4 全量新失败 TestDomResultNode 与 main 上同样失败的 TestResourceBundleFaces 同源（转译期主线程栈溢出）。根因：常量实参求值（`consteval.rs`）穿过静态分派转发方法不计深度（ef6a1249 引入），`ResourceBundle.findBundle` 自递归且整数实参逐层变化，每层求值键不同、`memo_enter` 同键截断失效，`const_eval → aux_analyze → invoke_result` 嵌套约 1200 层。修法：嵌套位置改为 `EvalDepth { nest, pass }`，穿过次数上限 `MAX_PASS = 8`，超出按普通调用计深度，两者都进记忆键（记忆仍与处理次序无关）。验证：dev 抽查 TestDomResultNode、TestResourceBundleFaces / GetKeys、71_xml 其余 9 例、HelloWorld、DeepCopy 共 14 例通过；TestXmlTransform 在 main 上转译 30 min 超时，本修复后转译 2m49s、编译通过，运行期止于 XSLTC translet 实例化（已改 known_failures 签名、登记 failure_patterns `xsltc-translet-create`）；单测 A（closure_cli 11/11）、B 全过（`param_string_constants_fold_switch` 本次通过）。诊断法：栈溢出无 RUST_BACKTRACE 输出，dev 上用 `gdb -batch -ex run -ex 'bt 80' -ex 'bt -60'` 取栈。
@@ -202,7 +202,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   └─ ⏳ JDK 25 适配轮
 │
 ├─ 【暂缓】
-│   ├─ ⏸ build-memsafe 内存友好缺省构建档（10-08 暂缓）
+│   ├─ ✅ build-memsafe 内存友好缺省构建档（10-11 交付，待合入；2026-10-11-build-memsafe.md）
 │   ├─ ⏸ 纯优化线（10-06 分级）：二进制 ≤3 MB、S7-4 / S7-5、D2 / D3 引擎结构改造、IR 收敛 / TypeIR G4
 │   ├─ ◐ 声明层底段收窄：模拟分析完成（S7 计划 §9.8）；10-11 用户裁决类型标记 crate 路线 A（每类方法 trait，属内部细节，同 `ObjectVTable`；常数级分派开销；标记 crate 按档案生成；语料档案目标 ⑤），实施分解 K1–K8 见 §9.9（分支 s7-marker；K1 wrapper 只持句柄 10-11 完成，单测与抽查 12/12 过）；D8 上段已改按上游感知峰值预算切分（d8-mb，§9.8.4，待攒批合入）；目标所有声明 crate ≤1.3 GB
 │   ├─ ⏸ 等 dev 恢复（换内存条，数天）：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例
@@ -243,7 +243,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | C 闭包精度与规模 | 共享汇点（c1d-sink） | 已收口（§28.10），≤569 由引导映像达成 |
 | D 分析性能 | D1 处理顺序无关（分支 closure-order-free，定性为正确性） | 继续 |
 | D 分析性能 | D2 枢纽翻新 / 延迟站点重跑等结构改造、D3 在线节点合并 | 暂停（V12 后提速线暂停） |
-| E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 暂缓（2026-10-08） |
+| E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 10-11 交付：15 GB 云服务器缺省档四例无 OOM（`2026-10-11-build-memsafe.md` §四） |
 | E 编译资源 | E2 D8 声明层分段 | 机制已合入（b51f9531 / b093069f）。10-11 段上限由 650 类改为按源码体量（分支 d8-mb，a1771258，待攒批合入）：不分段判定 5.5 MB；上段按上游感知峰值预算（−9 + 240×本段 MB + 13×上游 MB ≤ 1236 MB）逐段装满。HelloWorld / CollectorsDemo / DeepCopy / FWord 全部上段实测 ≤ 1221 MB；探针压力（DeepCopy 5.52 MB 上段原 1597 MB）切为 1221 + 725 MB。抽查 5/5、emit 单测 93 通过。遗留：上游系数在档案量级（40–50 MB）待复测（S7 计划 §9.8.4）。底段收窄随 S7-4 / S7-5（见活跃任务「声明层底段收窄」） |
 | B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
 | F 纯优化 | 二进制 ≤3 MB、S7-5（S7-3 已合入，S7-4 10-10 提前开工）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4、PGO（前置：perf 剖析拆分开销，含 volatile 读 SeqCst 排队） | 暂停 |
@@ -267,7 +267,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | C4 收官 · 全量 e2e | 🔄 10-09 dev 上开跑 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
 | JUnit 依赖包测试 | ✅ J3 / J4 已合入（batch-1010p，2226e47f） | J0–J2 ✅（f9298933 / ea2627ec）；J3 ✅、J4 ✅（身份哈希 2 例经批准改测试源）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` §七 14–16 |
 | 框架驱动 API 覆盖 | 🔄 dev 上复算 S0 闭包面（10-10） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
-| build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
+| build-memsafe | ✅ 10-11 交付，待合入 | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
 | 声明层底段收窄 | 🔄 S7-4 10-10 提前开工（用户定） | **10-11 用户裁决路线 A**（类型标记 crate；每类方法 trait 属生成层内部细节，同 `ObjectVTable`；按 §3.1 取法 A 接受常数级分派开销；标记 crate 按档案生成；语料档案目标形态 ⑤），实施分解 K1–K8 见 S7 计划 §9.9，s7-marker 分支推进。先做依赖图模拟验证「最大 SCC 降到 22%」，且 22% 段本身 ≤1.3 GB；模拟同时对比底段可达集 / 全集、逐入口统计扇出咽喉、在现形态底段实测阶段剖析（time-passes / timings），类型标记 crate 评估纳入预编译 java.base 维度；结论汇总进 S7 计划 §9.8。D8 分段已合入：上段每段约 330 类、约 1.27 GB（10-11 起上段按上游感知峰值预算切段，§9.8.4）；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
 | 并发小步 A | ✅ 已合入（batch-1010l，583edccd） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |

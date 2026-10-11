@@ -383,7 +383,7 @@ fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)], 
     }
     if let Some(n) = jdk_classes {
         let h = cargo::Heavy::decide(n);
-        let verdict = h.jobs.map_or_else(|| "不干预作业数".to_string(), |j| format!("强制 {j} 作业"));
+        let verdict = format!("缺省编译超时 {} s", h.default_timeout().as_secs());
         println!("[perf] 重型判定：{} {n} 类（阈值 {}）→ {verdict}", cargo::PEAK_CRATE, cargo::HEAVY_CLASSES);
     }
 }
@@ -500,6 +500,7 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
         target_dir: o.target_dir.clone(),
         build_timeout: o.build_timeout,
         build_timeout_scale: None,
+        build_mem_mb: o.build_mem_mb,
         keep_artifacts: o.keep_artifacts,
     };
     let exe = compile_stage(out, repo, &emit, &c, st)?;
