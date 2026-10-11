@@ -15,15 +15,6 @@ fn dbg_field_on(f: &MemberRef) -> bool {
     std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w.split(',').any(|k| k == f.to_string()))
 }
 
-/// 临时诊断：答复的种类名（`Ret` 无 Debug）
-fn ret_kind(r: &Ret) -> &'static str {
-    match r {
-        Ret::Value(_) => "Value",
-        Ret::Never => "Never",
-        Ret::Unknown => "Unknown",
-    }
-}
-
 impl Oracle for Facts<'_, '_> {
     fn invoke_result(&self, opcode: u8, off: u32, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
         if let Some(l) = self.level {
@@ -125,8 +116,8 @@ impl Oracle for Facts<'_, '_> {
         if let Ok(want) = std::env::var("RAVA_DBG_RET") {
             if want.split(',').any(|k| t.to_string().contains(k)) {
                 let ans = match &r {
-                    Some(PV::Const(v)) => format!("汇合Const({v:?})→求值{}", ret_kind(&eval())),
-                    Some(PV::Top) => format!("汇合Top→求值{}", ret_kind(&eval())),
+                    Some(PV::Const(v)) => format!("汇合Const({v:?})"),
+                    Some(PV::Top) => "汇合Top".to_string(),
                     None => format!("汇合缺席（Never={}）", self.ctx.noreturn.borrow().answer_never(t)),
                 };
                 eprintln!("[invoke] {t} @{off} per={per:?} site={site:?} {ans} @ 方法#{me}");
