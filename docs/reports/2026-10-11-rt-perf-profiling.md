@@ -5,6 +5,20 @@
 > 到行 + 占比数字」为验收；本报告给出同机（kr1）rava 与 JVM 对照、热点函数与行号、占比，
 > 以及随附微修复与 unbox 承载方案评估。基线提交 7b0bf81a（batch-1011k + 剖析脚本），
 > 修复链 9157a73e → fc68236d → 57eda4ee（P-B 收窄定稿）。作业索引见 §八。
+
+## 〇、交接（6 小时到点，2026-10-12）
+
+- **收尾在途**：rtpp-verify4（57eda4ee 的 7 例回归复跑）在云服务器排队/执行中，结果落
+  `cluster_results/job/rtpp-verify4/01_*.log`（grep `\[PASS|\[FAIL`）。预期 7/7：上一档
+  fc68236d 已 5/7 通过，两个失败各自的修因都已落地——TestReflectBoxCast 的 Float 行经
+  P-B 收窄回文本路径；TestUnboxWrapperFaces 的 expected 已入库（上轮 SKIP 仅因 expected
+  缺席）。若仍有失败，按差分定位，回滚面 = 单文件 `runtime/java_runtime/src/reflect_dispatch.rs`
+  的 unbox_i32 包装类臂（revert 到 `_ => None` 即回到纯文本路径）。
+- **已交付**：基线剖析与三对象结论（§二–§四）、微修复两处（§六，generator / runtime
+  子 crate 本机 check 过、发射构建经 rtpp 作业验证）、A/B 与收窄依据（§三.4/§三.5）、
+  下一步建议与遗留（§七）。分支已推 origin 与 github（3f969d41）。
+- **未做**（超时让位）：43 µs ↔ 4.3 µs 差异的 43f37f63 同机对照；翻译 Float.hashCode
+  应答 0 的根因（独立缺陷嫌疑，§七.0）；jackson jc1 的 String 跨 crate 4% 复测（S7 线）。
 >
 > 注：jackson jc1 分派视图约 19% 已归 S7 线（tasks.md 第 4 条），不在本报告范围。
 
