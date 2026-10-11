@@ -70,6 +70,10 @@ fn mangle_uncached(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -
     if is_runtime_short(simple(target.name())) {
         return Ok(mname.to_string());
     }
+    // 接口重声明的根类公开方法：命名同根类（接口不发射该成员，其同名重载不改变它）
+    if desc.is_some_and(|d| owner::is_iface_root_member(ctx, target, mname, d)) {
+        return mangle_uncached(ctx, ty::consts::OBJECT, mname, desc);
+    }
     let recv = target;
     let mut call_desc = desc.unwrap_or("").to_string();
     let mut bridged_iface_desc: Option<String> = None;
@@ -126,4 +130,98 @@ fn mangle_uncached(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -
 pub fn lambda_impl_rust_name(ctx: &InstrCtx, impl_cls: &str, impl_mname: &str, impl_desc: &str) -> InstrResult<String> {
     let mangled = mangle_if_overloaded(ctx, impl_cls, impl_mname, Some(impl_desc))?;
     Ok(ty::ident::safe_ident(&mangled.replace("<init>", "new")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use classfile::{acc, ClassFile, Method};
+    use input::RuntimeManifest;
+    use ty::consts::OBJECT;
+    use ty::{Registry, ShortNames, TyCtx};
+
+    use super::mangle_if_overloaded;
+    use crate::ctx::{InstrCtx, InstrFacts, NoHooks};
+
+    fn method(access: u16, name: &str, desc: &str) -> Method {
+        Method {
+            access,
+            name: name.to_string(),
+            desc: desc.to_string(),
+            signature: None,
+            code: None,
+            exceptions: vec![],
+            annotations: vec![],
+            annotation_default: None,
+            parameters: vec![],
+            synthetic_attr: false,
+        }
+    }
+
+    fn class(name: &str, ifaces: &[&str], iface: bool, methods: Vec<Method>) -> Arc<ClassFile> {
+        Arc::new(ClassFile {
+            minor: 0,
+            major: 65,
+            access: acc::PUBLIC | if iface { acc::INTERFACE | acc::ABSTRACT } else { 0 },
+            name: name.to_string(),
+            super_name: (name != OBJECT).then(|| OBJECT.to_string()),
+            interfaces: ifaces.iter().map(|s| s.to_string()).collect(),
+            fields: vec![],
+            methods,
+            signature: None,
+            source_file: None,
+            bootstrap_methods: vec![],
+            inner_classes: vec![],
+            enclosing_method: None,
+            nest_host: None,
+            nest_members: vec![],
+            permitted_subclasses: vec![],
+            record_components: None,
+            annotations: vec![],
+        })
+    }
+
+    /// 接口重声明根类 equals(Object) 且带 equals(自身) 重载：接口不发射根类成员，
+    /// 经接口接收者调用 equals(Object) / hashCode 取根类名；自身重载与实现类仍按重载态后缀
+    #[test]
+    fn iface_redeclared_root_member_keeps_root_name() {
+        let eq_obj = format!("(L{OBJECT};)Z");
+        let eq_self = "(Lp/Named;)Z".to_string();
+        let pub_abs = acc::PUBLIC | acc::ABSTRACT;
+        let object = class(
+            OBJECT,
+            &[],
+            false,
+            vec![method(acc::PUBLIC, "equals", &eq_obj), method(acc::PUBLIC | acc::NATIVE, "hashCode", "()I")],
+        );
+        let mut reg = Registry::new();
+        reg.insert(object.clone());
+        reg.insert(class(
+            "p/Named",
+            &[],
+            true,
+            vec![method(pub_abs, "equals", &eq_self), method(pub_abs, "equals", &eq_obj), method(pub_abs, "hashCode", "()I")],
+        ));
+        reg.insert(class(
+            "p/Impl",
+            &["p/Named"],
+            false,
+            vec![method(acc::PUBLIC, "equals", &eq_self), method(acc::PUBLIC, "equals", &eq_obj), method(acc::PUBLIC, "hashCode", "()I")],
+        ));
+        let names = ShortNames::build(&reg);
+        let rt = RuntimeManifest::default();
+        let rt_src = std::env::temp_dir().join(format!("rava_naming_iface_root_{}", std::process::id()));
+        let facts = InstrFacts::build(&reg, Some(object.as_ref()), &rt_src);
+        let tctx = TyCtx::new(&reg, &names, &rt.ty);
+        let ctx = InstrCtx::new(tctx, &rt, &facts, &NoHooks, "p/Caller");
+        let mangled = |d: &str| ty::type_map::mangle_name(&rt.ty, "equals", d);
+
+        assert_eq!(mangle_if_overloaded(&ctx, "p/Named", "equals", Some(&eq_obj)).unwrap(), "equals");
+        assert_eq!(mangle_if_overloaded(&ctx, "p/Named", "hashCode", Some("()I")).unwrap(), "hashCode");
+        assert_eq!(mangle_if_overloaded(&ctx, "p/Named", "equals", Some(&eq_self)).unwrap(), mangled(&eq_self));
+        assert_ne!(mangled(&eq_self), "equals");
+        assert_eq!(mangle_if_overloaded(&ctx, "p/Impl", "equals", Some(&eq_obj)).unwrap(), mangled(&eq_obj));
+        assert_eq!(mangle_if_overloaded(&ctx, "p/Impl", "equals", Some(&eq_self)).unwrap(), mangled(&eq_self));
+    }
 }
