@@ -377,6 +377,7 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   2. 方法解析变成 trait 探测：同名方法（`toString` 等）有成千个 trait 提供，每个调用点的候选集合都很大。须按文件精确导入，否则实现层类型检查会退化。
   3. 编译错误与 rustdoc 的可读性下降。
 - **不推荐**：拆分收益 A 已经拿到大半（见 9.4），B 的代价落在可读层与命名原则上。
+- **10-11 更新**：§9.8 的模拟表明，语料档案只有删掉签名边与字段边（⑤）才能 ≤ 1.3 GB。用户裁决采纳 B 的方法 trait 出路（类型标记 crate 路线 A），方法 trait 属生成层内部细节，与 `ObjectVTable` 同等，见 §9.8.3 / §9.9。
 
 ### 9.4 结论与峰值估算
 
@@ -740,7 +741,16 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
 
 **分阶段实测**（第 3 项）：见 `docs/plans/2026-10-01-rustc-memory-and-crate-split.md` §7.8。
 
-#### 9.8.3 推荐方案（待用户确认后实施）
+#### 9.8.3 推荐方案（2026-10-11 用户裁决：路线 A，已定）
+
+> **用户裁决（2026-10-11）**：类型标记 crate 路线，**用户选路线 A**。
+> - 第 3 问取出路 (i)：每个类一个方法 trait，定义并实现在声明 crate。这个 trait 和 `ObjectVTable` 一样只是生成层的内部实现细节：不作为公开 API，不出现在可读层的方法体文本里（调用仍写 `animal.speak()`），命名不带 `Jvm` 前缀。
+> - 接受常数级的分派开销（按 §3.1 取法 A，经 `ObjectVTable` 槽位按类 id 取视图）。
+> - 标记 crate 按档案生成（第六问做法 A），不固定为 java.base 全集。
+> - 语料档案的目标形态是 ⑤：删掉签名边和字段边，档案共享一个 java.base 底段。
+>
+> 实施分解见 §9.9。下文第 3 条中「须用户裁决」各项均已按上述裁决定案。
+
 
 1. **D8 的段上限从「650 类」改为「源码体量」，立即需要，与路线选择无关。**（10-11 已实施，分支 d8-mb：先按 5.5 MB 常量，同日改为上游感知预算，实测见 §9.8.4）
    - 现状就已越线：CollectorsDemo 的 `java_base_decl` 617 类低于 650，所以不分段；源码 7.39 MB，实测 1.46 GB，超过 1.3 GB。
@@ -851,3 +861,34 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   - 13 × 上游的系数只在上游 ≤ 26 MB 内实测，档案量级（40–50 MB）待 S7-4 档案构建时复测。上游 ≥ 95.8 MB 时镜像链本身越线，需改为按实际依赖连段。
   - DeepCopy 底段 4.4 GB 归底段收窄。
 
+
+### 9.9 路线 A 的实施分解（2026-10-11，分支 s7-marker）
+
+裁决见 §9.8.3。终态（⑤/placed）：
+- **标记 crate `java_marker`**：按档案生成，覆盖档案内全部 JDK 模块的类。每类只有与签名无关的部分：`#[repr(transparent)]` wrapper `X { __r: __Handle, _p }`、身份类 std impl（`Default` / `Clone` / `PartialEq` / `Debug`）、`BINARY_NAME`、描述符 `X__DESC` 与 `X::__DESC`、`From<Object>`（描述符判定后包句柄）、`From<X> for Object`、`From<X> for Anc`（句柄搬移）、分配 / 偏移钩子的外部声明，以及标记层基础设施（K4）。
+- **声明 crate**（D8 各段）：vtable trait `X__VTable`（签名里的类类型全部来自标记 crate）、方法 trait `X__Methods` 及其对 wrapper 的实现、静态存储与类初始化。方法 trait 的地位与 `ObjectVTable` 相同：生成层内部细节，可读层方法体文本不出现（调用仍写 `animal.speak()` / `Dog::new()`），名字不带 `Jvm` 前缀。
+- 声明 crate 之间只剩继承边（`X__VTable: Super__VTable`，以及继承转发外壳调用祖先 vtable）与隐藏字段边。D8 机制不变，底段即「INFRA 直连类及其祖先」（模拟：档案 120 类、约 944 MB）。
+
+**分派形态（§3.1 取法 A）**：wrapper 只持句柄。分派入口 `__vt()` 以本类的 display 深度（宏展开期已知的常数）问句柄所持运行时类存储：`ObjectVTable::__erased_vtable(&self, depth, slot)`，存储按 `depth` 走 `match`，只比较一次槽类型，再把自身经 supertrait 上转后的视图指针填入。开销是一次间接调用加一次类型 id 比较，常数级，与类层次深度无关。
+
+每步可单独合入，都要通过宏单测、生成器单测（emit / instr / driver 相关）与 dev 抽查。抽查集：HelloWorld、CollectorsDemo、DeepCopy、TestDynamicProxy、TestAnnoReflect、TestSerialLookupPairing、TestXmlTransform，加各步注明的相关例。
+
+| 步 | 内容 | 文件归属 | 退出条件 |
+|---|---|---|---|
+| **K1** 类 wrapper 去视图指针 | wrapper `{ __r: __Ref<dyn X__VTable> }` 改为 `{ __r: __Handle }`，删 `__Ref`。分派入口改为 wrapper 固有 `__vt()`，即上文的按深度取视图。上转改为句柄搬移（`Anc::__from_parts(child.__r)`）。`From<Object>` / `__virtual_view` 在描述符判定后直接包句柄，不再取视图。分配钩子返回 `__Handle`。引导映像常量改为 `__from_image(__Handle::image(..))`。invokespecial 的 `(x).__r.vt()` 改为 `(x).__vt()`。 | runtime `handle.rs`、`java/lang/object.rs` / `object_ext.rs`、`array/vtable.rs`；宏 `gen/wrapper/*`、`type_conversions.rs`、`storage_hooks.rs`、`struct_layout.rs`、`virtual_dispatch/*`、`interface.rs`、`rewrite.rs`；生成器 `instr/invoke/special.rs`、`emit/project/boot_image/values.rs` | wrapper struct、身份 impl、转换 impl 的展开文本不含 `__VTable`（宏单测守护）；单测与抽查全过，相关例加 InheritanceChain、InterfaceDispatch、TestCollections；§4.3 热循环 release 中位数报数（用户已接受常数开销，只报数不设门槛） |
+| **K2** 接口载体去视图指针 | 接口载体只持 `Object`（`__IfaceRef` 删去 `vt`）。invokeinterface 入口每次经 `ObjectVTable::__interface` 现取视图：每次分派的开销等于原来建立载体时那一次查询，按运行时类实现的接口数有界，属常数级。引导映像的 `__IfaceRef::image` 随之去掉视图参数。 | runtime `handle.rs`；宏 `interface.rs`；生成器 `emit/phase2/sam_objects.rs`、`boot_image/values.rs` | 接口载体展开文本不含 `__VTable`；单测与抽查全过，相关例加 InterfaceDispatch、LambdaBasic、StreamDemo |
+| **K3** 方法 trait（单 crate 内，struct 不动） | wrapper 固有 impl 中的可读层成员移入每类方法 trait `X__Methods`（与 wrapper 同类型形参），由 wrapper 实现。成员包括：Java 方法外壳、继承转发外壳、构造器 `new` / `__init_on`、静态方法、实例与静态字段访问器、`__class_init`、`_init_not_null`。生成器为每个文件精确导入用到的方法 trait（`use … as _;`）：调用点所属类取自字节码 invoke / 字段指令的 owner，也就是生成器已知的接收者静态类型，不做全量 glob。手写文件显式导入。 | 宏 `gen/wrapper/methods.rs` 及新子模块；生成器 `emit/imports`、`instr`（owner 记录）；手写 `runtime/**/_impl.rs` 的 `use` | 生成树对照（`compare_trees.sh`）：方法体文本逐字节不变，只有文件头 `use` 增加；静态调用点的形参推断与固有 impl 一致（宏单测）；声明层与方法体 crate 峰值不升（同机 ±5%）；`no_jdk_literals` 通过；单测与抽查全过 |
+| **K4** 运行时基础设施分层 | 手写 INFRA 拆为两层。**标记层基础**新建手写真源 `runtime/java_marker/`，overlay 进标记 crate，包括 `__Handle`、`Object`、`ObjectVTable`（签名中的类类型为标记类型；缺省方法体中依赖行为的部分经 `unsafe extern "Rust"` 链接期声明转交行为层，与 `rava_layer` 拆层同一机制）、`__ClassDesc` / `__FieldDesc` / `__TypedNull`、`JvmError` / `Result`、`sync_model` / `obj_ref`、`JArray` 句柄。**行为层**留在 `java_runtime`。 | runtime 文件迁移、`overlay.rs`、`decl_side.rs`（crate 依赖）、`closure.toml` 等清单路径 | 标记层基础单独成 crate 并通过编译，`java_runtime` 依赖它，此时标记 crate 尚不含类；手写守护单测（`handwritten_vtable_impls` 等）改为扫两处；单测与抽查全过 |
+| **K5** 类初始化骨架去按类展开（S7-4 路线一，即 ②） | 去掉声明层 body / nest / exc / macro / top 五类按类展开边（§9.8.1 边分类）。 | 宏 `class_init.rs` 等；生成器声明层发射 | 模拟器（`decl_scc_sim.py`）② 口径与发射一致；声明层展开不增；单测与抽查全过 |
+| **K6** 标记 crate 生成 | `rava_layer` 增加 `marker` 层：同一 `java_class!` 块在标记 crate 只展开标记部分（见本节开头），`decl` 层不再展开这些。生成器按档案发射 `java_marker` crate。声明文件中只用作类型的引用写 `java_marker::` 路径；声明 crate 各包 `pub use` 标记类型，可读层与方法体文件的 `use` 文本不变。用户 crate、lib crate 仍按 `full` 单 crate 展开，形态相同。 | 宏 `gen/layer.rs`、`gen/mod.rs`；生成器 `emit/project/{decl_side,layout,module_side,lib_crates}.rs` 与新 `marker_side.rs` | 标记 crate 的展开文本不含 `__VTable` / `__Methods`；D8 图（只计 `crate::` 边）的底段 = 模拟 ⑤；HelloWorld / DeepCopy 声明 crate 全部 ≤ 1.3 GB；单测与抽查全过 |
+| **K7** D8 共置手写随宿主（placed） | `<x>_impl.rs` / `_ext` 随宿主类进入其所在段，钉底只留 K4 后的行为层 INFRA 直连类。 | `decl_segments.rs`、`decl_side.rs`、`overlay.rs` | 模拟器 placed 口径与发射一致；单测与抽查全过 |
+| **K8** 档案验收 | 语料档案（并集）构建，复测底段与全部上段峰值，对照 §9.8.1 预测（⑤/placed 底段约 944 MB），用新实测点更新标定与 D8 上游系数（§9.8.4 遗留）。 | 文档、`scripts/decl_scc_sim.py` | 所有声明 crate ≤ 1.3 GB（档案与 HelloWorld / DeepCopy 单程序）；§4.3 热循环报数 |
+
+**依赖顺序**：
+- K1 → K2 → K4 → K6 → K8；
+- K3、K5、K7 与 K1、K2 互不依赖，K6 以 K3、K5 为前提，K8 以 K7 为前提。
+
+**说明**：
+- K1 不是过渡形态。wrapper 只持句柄就是终态 wrapper 的数据形态，K6 只把它整体挪进标记 crate。
+- K3 同理：方法 trait 在单 crate 内先成形，K6 只改它所在的 crate。
+- 任务说明里举的首步例子是「先建标记 crate、搬入句柄与上转」。它做不成独立首步：固有 impl 必须与 struct 同 crate（§9.2），struct 一旦搬走，声明 crate 的固有方法立即失效。所以先在单 crate 内去掉 wrapper 的签名依赖（K1、K2）、把方法面改为 trait（K3），再一次挪 crate（K6）。

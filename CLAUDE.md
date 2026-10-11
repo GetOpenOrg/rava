@@ -189,7 +189,8 @@ scripts/lib_pilot_golden.sh m1..m5              # JUnit/hamcrest crate golden �
 
 1. **禁止在 `java_runtime` 中引入游离于 Java 命名空间之外的自造 trait 名称。**  
    例如：不得新增 `JvmObject`、`JvmIterable` 等带 `Jvm` 前缀或无对应 Java 类的 trait。  
-   判断标准：如果 Java 标准库中不存在对应的 `java.lang.Xxx` 接口，就不应在 `java_runtime` 里手写同语义的 Rust trait。
+   判断标准：如果 Java 标准库中不存在对应的 `java.lang.Xxx` 接口，就不应在 `java_runtime` 里手写同语义的 Rust trait。  
+   例外（2026-10-11 用户裁决）：宏按类生成的 `X__VTable` 与每类方法 trait `X__Methods`（类型标记 crate 路线，S7 计划 §9.9）同 `ObjectVTable`，属生成层内部细节，不作公开 API，不出现在可读层方法体文本中。
 
 2. **动态派发机制必须从 `java/lang/Object.class` 字节码翻译得到，方法名与 Java 完全一致。**  
    `Object = Rc<dyn ObjectVTable>` 的内部 vtable trait 名为 `ObjectVTable`，其方法名为 `hashCode`、`equals`、`toString`、`getClass`（与 Java 字节码中的 method name 一致），而非 `jvm_hash_code` 等带前缀的自造名称。  
