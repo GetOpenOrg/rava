@@ -1,7 +1,7 @@
 # 2026-10-11 代码审查分诊
 
 > 对象：[第一轮](2026-10-11-code-review.md) · [第二轮](2026-10-11-code-review-round2.md) · [动态验证](2026-10-11-code-review-verification.md)。
-> 核实基线 dcc1e8e1（只读核对代码）。分诊口径：10-11 主线是框架编译测试与 JDK API 翻译，审查项只即派**影响测试可信度**与 **Java API 语义正确性**两类，其余记待办。
+> 核实基线 dcc1e8e1（只读核对代码）。分诊口径：10-11 主线是框架编译测试与 JDK API 翻译，审查项只即派**影响测试可信度**、**Java API 语义正确性**与**运行时性能**三类（性能为用户 10-11 追加要求），其余记待办。
 
 ## 一、即派
 
@@ -31,10 +31,13 @@
 | 监视器 / Parker 侧表永不回收，地址复用后新对象继承旧监视器 | `monitor.rs:304,460`、`obj_ref.rs:364-378` | `drop_slow` 按 `has_monitor` 摘表；线程结束摘 Parker |
 | `fix_bool_returns` 文本替换误改字面量 | `generator/crates/method/src/postprocess.rs:28-34` | 发射层按返回类型 Z 直接出 `Ok(true/false)`，删文本后处理 |
 
+### C. 运行时性能（分支 `review-runtime-perf`）
+
+`Class.for_class` 每次 `format!`（`class_impl.rs:55-83`）；反射分派全局锁 + 闭包 clone（`reflect_dispatch.rs:46-88`）；ldc 字面量每次重新驻留（`string_ext.rs:141`）；`vm_throw` 每次读 `RUST_BACKTRACE`（`error.rs:34-38`）。验收以三测点（运行 / 构建 / 体积）前后对照。
+
 ## 二、待办（不派，主线空档或相关改动顺手做）
 
 - 健全性：`Handoff<T>` 无界 Send（`gil.rs:158`）；`native_memory` 批量拷贝与 CAS 混访、未对齐 CAS 退化、`fill` 负数（`native_memory.rs:83-162`）；`rava_coro` Drop 中 `expect`（`stack.rs:393,409`）。
-- 性能：`Class.for_class` 每次 `format!`（`class_impl.rs:55-83`）；反射分派全局锁（`reflect_dispatch.rs:46-88`）；ldc 字面量每次重新驻留（`string_ext.rs:141`）；`vm_throw` 每次读 `RUST_BACKTRACE`（`error.rs:34-38`）。
 - 生成器 / 宏：宏分类两份实现且已分歧（`classify.rs:18-46` / `base_fns.rs:41`）；`java_try!` 全局计数器致展开不确定（`try_macro.rs:55`）；清单两套解析、IndyKind 两份枚举（`closure/src/manifest.rs` / `input/src/manifest.rs`）；class 名路径分量未校验（`emit/src/project/layout.rs`、`fs.rs`、`input/src/build.rs`）；描述符 / 注解递归无深度上限；`Audit::FieldNpe` 无发射点；`resolve/src/jdk.rs:236-284` 测试在 `mod tests` 外且改进程环境；产物以绝对路径依赖 rava 仓库（`emit/src/ctx.rs:132`、`overlay.rs:137-141`）。
 - 运行时其他：`runtime_impl.rs:44-50` 无条件读 `/proc`（macOS 恒 0）。
 - 工具：`ssh_client.py:47` AutoAddPolicy（报告所列 :77 不存在）。
