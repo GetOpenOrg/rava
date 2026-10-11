@@ -1,0 +1,11 @@
+cls-short java.lang.Short
+cls-byte java.lang.Byte
+cls-char java.lang.Character
+exact-int 8
+widen-short -299
+widen-byte 101
+widen-char 66
+widen-local-short -299
+widen-local-char 66
+reject-long IAE
+reject-float IAE
