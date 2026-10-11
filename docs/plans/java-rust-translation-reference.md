@@ -737,6 +737,7 @@ codegen 通过 registry 中 `ClassInfo.is_interface` 动态识别接口类型，
 | 一致性 | 方法的 Rust 名是（声明接口, 名字, 描述符）的函数：声明处、子接口继承成员声明、实现类的接口 impl、调用点同名；子接口、实现类、调用点、处理顺序都不改变它（超接口不受子接口影响，档案内 JDK 接口名与用户代码无关） |
 | 子接口视图 | 接口接收者经继承看到的超接口成员沿用声明名；只有来自不同声明者、声明名相同而参数段不同、互不覆盖的成员（兄弟超接口各自声明的同名异参方法）在该接收者视图里带描述符后缀，载体方法以 `target` 转调声明名。被更具体超接口同槽覆盖的成员在视图中不可见，不参与冲突 |
 | 静态 | 接口自有 static 方法与超接口同名实例成员异参 → 同样带后缀（同在载体 impl 上） |
+| 根类成员 | 接口重声明的根类公开方法（`equals(Object)` / `hashCode()` / `toString()`）不在接口上发射，经根类 vtable 分派；接口接收者上的调用取根类名，接口自身的同名重载（如 `equals(Self)`）不使它带后缀（`instr/src/owner.rs` `is_iface_root_member`）。该重声明仍计入接口重载判定，故 `equals(Self)` 带后缀、不与根类 `equals` 同名 |
 
 ```java
 interface ContentHandler { void endElement(String uri, String local, String q); }
