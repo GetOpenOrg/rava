@@ -5,8 +5,14 @@ use super::super::obj_fields::ObjAns;
 use super::super::site_rets::SiteAns;
 
 /// 值带空集合标签（接收者为空的不可修改集合）
+/// is_empty_tag 的共用位置（模块顶部）
 fn is_empty_tag(v: Option<&V>) -> bool {
     v.and_then(|v| v.obj()).is_some_and(|o| **o == crate::absint::Obj::Empty)
+}
+
+/// 临时诊断（RAVA_DBG_FIELD，逗号分隔多键）：字段键匹配时开打印
+fn dbg_field_on(f: &MemberRef) -> bool {
+    std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w.split(',').any(|k| k == f.to_string()))
 }
 
 impl Oracle for Facts<'_, '_> {
@@ -94,6 +100,15 @@ impl Oracle for Facts<'_, '_> {
         let Some(me) = self.m else { return eval() };
         // 静态调用点接克隆节点：取节点返回值（`site_rets.rs`，依赖由引擎登记）
         let site = if opcode == classfile::op::INVOKESTATIC { self.sites.iter().find(|(o, _)| *o == off).map(|(_, a)| a) } else { None };
+        // 临时诊断（RAVA_DBG_RET，逗号分隔多键）：被调成员键匹配时打印答复
+        if let Ok(want) = std::env::var("RAVA_DBG_RET") {
+            if want.split(',').any(|k| t.to_string().contains(k)) {
+                eprintln!(
+                    "[invoke] {t} @{off} rvals={:?} per={per:?} @ 方法#{me}",
+                    self.ctx.rvals.borrow().get(t)
+                );
+            }
+        }
         let r = match (per, site) {
             (Some(p), _) => Some(p),
             (None, Some(SiteAns::Never)) => {
@@ -138,7 +153,7 @@ impl Oracle for Facts<'_, '_> {
     }
     fn getfield(&self, f: &MemberRef, recv: Option<&V>) -> Ret {
         let op = classfile::op::GETFIELD;
-        let dbg = std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w == f.to_string());
+        let dbg = dbg_field_on(f);
         if dbg {
             eprintln!("[getfield] {f} @ 方法#{:?} recv={recv:?}", self.m);
         }

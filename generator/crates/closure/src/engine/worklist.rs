@@ -172,9 +172,10 @@ impl<'a> Engine<'a> {
     /// 静态字段的缺省值总可观察（初始化前 / 初始化中读）；实例字段的缺省值只在有对象处于该状态时并入：
     /// 抽象分配（`alloc_defaults`）或物化快照中未写的字段。值集为空（尚无对象）时读者按缺省值读
     pub(super) fn field_put(&mut self, key: &MemberRef, v: PV) {
-        // 临时诊断（RAVA_DBG_FIELD）：字段键匹配时打印写入值
+        // 临时诊断（RAVA_DBG_FIELD，逗号分隔多键）：字段键匹配时打印写入值
         if let Ok(want) = std::env::var("RAVA_DBG_FIELD") {
-            if key.to_string() == want {
+            if want.split(',').any(|k| k == key.to_string()) {
+                let want = key.to_string();
                 let site = self.cur_site.map(|(m, o)| format!("{}@{o}", self.methods[m].key)).unwrap_or_else(|| "?".into());
                 eprintln!("[field-put] {want} <- {v:?} @ {site}");
             }
@@ -214,10 +215,10 @@ impl<'a> Engine<'a> {
     /// 字段的写入来源超出字节码：不折叠，读者失效
     pub(super) fn open_field(&mut self, key: MemberRef) {
         if self.ctx.fopen.borrow_mut().insert(key.clone()) {
-            // 临时诊断（RAVA_DBG_FIELD）：字段键匹配时打印放开
+            // 临时诊断（RAVA_DBG_FIELD，逗号分隔多键）：字段键匹配时打印放开
             if let Ok(want) = std::env::var("RAVA_DBG_FIELD") {
-                if key.to_string() == want {
-                    eprintln!("[open-field] {want} 放开（fopen 精确键）");
+                if want.split(',').any(|k| k == key.to_string()) {
+                    eprintln!("[open-field] {} 放开（fopen 精确键）", key);
                 }
             }
             let mut deps = self.ctx.ceval_drop_field(&key);

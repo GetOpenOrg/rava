@@ -95,8 +95,8 @@ impl Ctx<'_> {
             return Some(if fi.key.desc == "J" { V::Long(x) } else { V::Int(x as i32) });
         }
         if self.field_open(&fi) {
-            // 临时诊断（RAVA_DBG_FIELD）：字段键匹配时打印不折叠原因（覆盖非 oracle 调用方）
-            if std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w == fi.key.to_string()) {
+            // 临时诊断（RAVA_DBG_FIELD，逗号分隔多键）：字段键匹配时打印不折叠原因（覆盖非 oracle 调用方）
+            if std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w.split(',').any(|k| k == fi.key.to_string())) {
                 eprintln!(
                     "[field-value] {} 不折叠 open={} fopen={} fopen_names={} all={} deser={} hw={} hw_names={}",
                     fi.key,
