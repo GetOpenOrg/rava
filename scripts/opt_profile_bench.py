@@ -42,6 +42,8 @@ def _cand(opt: str, lto: str, cgu: int) -> tuple:
 # 档位名 → (rava 开关, 覆盖 release 档的环境变量)。lto "false" 即 cargo 缺省：只做 crate 内 thin-local LTO
 CANDIDATES = {
     "dev": ("", {}),
+    # 旧缺省 dev（B4 之前）：重型闭包（声明层 ≥1700 类）一律单作业编译，作对照基线
+    "dev-j1": ("", {"CARGO_BUILD_JOBS": "1"}),
     "release": ("--release", {}),
     "release-small": ("--release-small", {}),
     "release-max": ("--release-max", {}),

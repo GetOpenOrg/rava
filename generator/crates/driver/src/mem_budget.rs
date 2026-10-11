@@ -7,7 +7,9 @@
 //!    [`Model::of`]，取自服务器逐 crate 实测的上包络）。可执行文件所在的 user crate 在 LTO 档位下
 //!    承担全程序链接期优化，另按全工作区源码总量估计（[`Model::link_est`]）。
 //! 4. 作业数 J = 满足「最大的 J 个 E 之和 ≤ B」的最大 J（并行时最坏是最大的几个 crate 同时编译），
-//!    取值区间 [1, 上限]，上限 = 调用方 `CARGO_BUILD_JOBS`（若设）否则 CPU 核数。
+//!    取值区间 [1, 上限]，上限 = 调用方 `CARGO_BUILD_JOBS`（若设）、否则自工作区向上最近的 cargo 配置
+//!    `[build] jobs`（多槽跑批按槽写入）、否则 CPU 核数——rava 总是显式设置 `CARGO_BUILD_JOBS`，
+//!    它优先于 cargo 配置，故配置值须在此并入上限，不能被覆盖掉。
 //! 5. 单个 crate（含全程序链接）的估计已超出 B 时 J = 1，并提示该档位超出本机内存——
 //!    作业数救不了单进程峰值，应换更省内存的档位（缺省 release 即为此而定）或更大的机器。
 //! 6. 探测不到内存时不按内存收紧（J = 上限）。
@@ -177,16 +179,30 @@ pub fn decide(scratch: &Path, profile: BuildProfile, given_mb: Option<u64>) -> M
         Some(mb) => Some(MemProbe { avail_mb: mb, source: "--build-mem-mb".into() }),
         None => crate::mem_probe::probe(),
     };
-    plan(&crate_sizes(scratch), emit::ctx::USER_CRATE, Model::of(profile), probe, job_cap())
+    plan(&crate_sizes(scratch), emit::ctx::USER_CRATE, Model::of(profile), probe, job_cap(scratch))
 }
 
-/// 作业数上限：调用方 CARGO_BUILD_JOBS（正整数）否则 CPU 核数
-pub fn job_cap() -> u32 {
+/// 作业数上限：调用方 CARGO_BUILD_JOBS（正整数）、否则自 `scratch` 向上最近的 cargo 配置 `[build] jobs`、否则 CPU 核数
+pub fn job_cap(scratch: &Path) -> u32 {
     std::env::var("CARGO_BUILD_JOBS")
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|j| *j > 0)
+        .or_else(|| config_jobs(scratch))
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get() as u32))
+}
+
+/// 自 `dir` 向上逐级找 `.cargo/config.toml`（或无扩展名的 `.cargo/config`），取首个给出正整数 `[build] jobs` 的值
+/// （cargo 配置合并时内层优先；负数 jobs 表示「核数减 N」，不作上限）
+fn config_jobs(dir: &Path) -> Option<u32> {
+    let abs = std::path::absolute(dir).ok()?;
+    abs.ancestors().find_map(|d| {
+        ["config.toml", "config"].iter().find_map(|f| {
+            let t = std::fs::read_to_string(d.join(".cargo").join(f)).ok()?;
+            let v: toml::Value = toml::from_str(&t).ok()?;
+            v.get("build")?.get("jobs")?.as_integer().filter(|j| *j > 0).map(|j| j as u32)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -230,6 +246,23 @@ mod tests {
     fn few_crates_leave_cap_for_dependencies() {
         let sizes = vec![("decl".into(), M), ("user".into(), 0)];
         assert_eq!(plan(&sizes, "user", model(), probe(64_000), 8).jobs, 8);
+    }
+
+    #[test]
+    fn cargo_config_jobs_found_upwards() {
+        let root = std::env::temp_dir().join(format!("rava_cfg_jobs_{}", std::process::id()));
+        let scratch = root.join("slot").join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::create_dir_all(root.join(".cargo")).unwrap();
+        std::fs::write(root.join(".cargo").join("config.toml"), "[build]\njobs = 3\n").unwrap();
+        assert_eq!(config_jobs(&scratch), Some(3));
+        // 内层配置优先；负数不作上限，继续向外找
+        std::fs::create_dir_all(root.join("slot").join(".cargo")).unwrap();
+        std::fs::write(root.join("slot").join(".cargo").join("config.toml"), "[build]\njobs = -1\n").unwrap();
+        assert_eq!(config_jobs(&scratch), Some(3));
+        std::fs::write(root.join("slot").join(".cargo").join("config.toml"), "[build]\njobs = 2\n").unwrap();
+        assert_eq!(config_jobs(&scratch), Some(2));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

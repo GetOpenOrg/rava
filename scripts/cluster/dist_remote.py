@@ -227,9 +227,8 @@ def mem_limited(cmd: str, server: dict) -> str:
 def slot_cargo_config(server: dict, out_root: str) -> str:
     """shell 片段（多槽 e2e）：在槽输出根 out_root 写 .cargo/config.toml，[build] jobs = 核数 / 槽数（至少 1）。
     cargo 从工作目录（scratch 在 out_root 之下）向上找配置，故只作用于本槽的 rava compile。
-    用配置而非导出 CARGO_BUILD_JOBS：环境变量优先于配置，rava 对重型闭包（声明层 ≥1700 类）强制的
-    CARGO_BUILD_JOBS=1 内存保护照常生效；导出环境变量则会让 rava 视为调用方指定而跳过该保护。
-    各槽的 rustc 并行度之和因此不超过核数。"""
+    rava 编译段按内存感知规则定作业数（driver mem_budget：槽 scope 内存上限 × 85% 容纳最大几个 crate 的峰值估计），
+    此配置值与 CARGO_BUILD_JOBS 一样只作上限（rava 自工作区向上读取）。各槽的 rustc 并行度之和因此不超过核数。"""
     q = shlex.quote(f"{out_root}/.cargo")
     n = server.get("slots", 1)
     return (
