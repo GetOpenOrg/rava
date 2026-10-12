@@ -21,6 +21,122 @@ enum Repr {
     Dense(Box<Dense>),
 }
 
+/// 表征画像累加器（`--lambda-prof` 的 census uniq 行，只读诊断；性能计划 §4.16 表征压缩画像）。
+///
+/// 关键量：稠密形态的 `words` 按**最大 id** 分配（与元素数无关），画像给出
+/// 真实驻留字节（capacity 口径，与计数分配器的活跃字节同口径）、非零字占比（fill）
+/// 与按块压缩（4096 id = 64 字为一块，非零块存位图或有序 u16 低 12 位数组）的估计字节
+/// ——`est_blocks` 为全部换块式、`est_adaptive` 为逐集合取两形态较小者。
+#[derive(Default)]
+pub(super) struct ReprProfile {
+    /// 集合数
+    pub(super) sets: u64,
+    /// 深堆字节（capacity 口径）
+    pub(super) bytes: u64,
+    pub(super) sparse_n: u64,
+    pub(super) sparse_bytes: u64,
+    pub(super) dense_n: u64,
+    /// words.len() 计 / capacity 字节 / sum 字节 / Box 头字节
+    pub(super) words: u64,
+    pub(super) words_cap: u64,
+    pub(super) sum_cap: u64,
+    pub(super) box_hdr: u64,
+    /// 非零字数 / 非零块数（sum 的置位数；一位 = 64 字 = 4096 id）
+    pub(super) nz_words: u64,
+    pub(super) nz_blocks: u64,
+    /// 元素数直方图：<8 / <32 / <64 / <256 / <1k / <8k / ≥8k（稀疏止于 63）
+    pub(super) len_hist: [u64; 7],
+    /// fill 直方图（非零字 / 字数）：<5% / <20% / <50% / <80% / ≥80%
+    pub(super) fill_hist: [u64; 5],
+    /// 块式估计 / 逐集合自适应估计（字节）
+    pub(super) est_blocks: u64,
+    pub(super) est_adaptive: u64,
+}
+
+impl IdSet {
+    /// 并入画像（只读；稠密集合按块统计非零块数与块内元素数）
+    pub(super) fn profile(&self, p: &mut ReprProfile) {
+        p.sets += 1;
+        match &self.0 {
+            Repr::Sparse(v) => {
+                p.sparse_n += 1;
+                let b = v.capacity() as u64 * 4;
+                p.sparse_bytes += b;
+                p.bytes += b;
+                let n = v.len();
+                p.len_hist[if n < 8 {
+                    0
+                } else if n < 32 {
+                    1
+                } else if n < 64 {
+                    2
+                } else {
+                    3
+                }] += 1;
+            }
+            Repr::Dense(d) => {
+                p.dense_n += 1;
+                let (wb, sb) = (d.words.capacity() as u64 * 8, d.sum.capacity() as u64 * 8);
+                let hdr = std::mem::size_of::<Dense>() as u64;
+                let cur = wb + sb + hdr + std::mem::size_of::<Box<Dense>>() as u64;
+                p.words += d.words.len() as u64;
+                p.words_cap += wb;
+                p.sum_cap += sb;
+                p.box_hdr += hdr + std::mem::size_of::<Box<Dense>>() as u64;
+                p.bytes += cur;
+                let wl = d.words.len();
+                let n = d.n;
+                p.len_hist[if n < 256 {
+                    3
+                } else if n < 1024 {
+                    4
+                } else if n < 8192 {
+                    5
+                } else {
+                    6
+                }] += 1;
+                // 逐 sum 字统计：sum 的每位 = 一个非零字；一个非零 sum 字 = 一个非零块（64 字）
+                let mut est: u64 = 16 + 2; // 块索引（按非零块 ×2 字累计）+ 头
+                for (si, &s) in d.sum.iter().enumerate() {
+                    if s == 0 {
+                        continue;
+                    }
+                    p.nz_blocks += 1;
+                    p.nz_words += u64::from(s.count_ones());
+                    let mut bits = s;
+                    while bits != 0 {
+                        let b = bits.trailing_zeros() as usize;
+                        bits &= bits - 1;
+                        let w0 = (si * 64 + b) * 64;
+                        let mut e: u32 = 0;
+                        for w in d.words.iter().take((w0 + 64).min(wl)).skip(w0) {
+                            e += w.count_ones();
+                        }
+                        // 块容器：≤64 元素存有序 u16（低 12 位），否则 512B 位图
+                        est += if e <= 64 { u64::from(e) * 2 + 8 } else { 512 + 8 };
+                    }
+                }
+                p.est_blocks += est;
+                p.est_adaptive += est.min(cur);
+                // fill 直方图按本集合的非零字占比
+                let local_nz: u64 = d.sum.iter().map(|s| u64::from(s.count_ones())).sum();
+                let r = if wl == 0 { 0 } else { local_nz * 100 / wl.max(1) as u64 };
+                p.fill_hist[if r < 5 {
+                    0
+                } else if r < 20 {
+                    1
+                } else if r < 50 {
+                    2
+                } else if r < 80 {
+                    3
+                } else {
+                    4
+                }] += 1;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Dense {
     /// 位图

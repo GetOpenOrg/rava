@@ -304,6 +304,43 @@ impl Engine<'_> {
             .map(|(b, i)| format!("{}={:.0}MiB", self.node_str(self.graph.node(i)), b as f64 / 1048576.0))
             .collect();
         eprintln!("{tag} census fwork kinds: {} top: [{}]", kinds.join(" "), tops.join(" "));
+        // uniq 内容表征画像（§4.16 相异内容表征压缩的画像，只读）：驻留表逐内容累计——真实驻留字节
+        // （原始 census 按节点重复计数共享内容）/ 稠密 words 字节与非零占比（fill）/ 块式（4096 id）估计。
+        // lcalls.done 与收窄记忆值未驻留、逐条目持有，同画像并列（bytes 即其真实驻留）
+        let (uc, uo, uovh, un) = self.graph.sets.uniq_profile();
+        let (mut lc, mut lo) = (idset::ReprProfile::default(), idset::ReprProfile::default());
+        for c in &self.lcalls {
+            c.done.classes.profile(&mut lc);
+            c.done.open.profile(&mut lo);
+        }
+        let (mut fc, mut fo) = (idset::ReprProfile::default(), idset::ReprProfile::default());
+        for v in self.graph.fmemo.values() {
+            v.1.classes.profile(&mut fc);
+            v.1.open.profile(&mut fo);
+        }
+        let hp = |p: &idset::ReprProfile| {
+            format!(
+                "n={} dense={} sp={} bytes={:.0}MiB words={:.0}MiB fill={} est_b={:.0}MiB est_a={:.0}MiB",
+                p.sets,
+                p.dense_n,
+                p.sparse_n,
+                p.bytes as f64 / 1048576.0,
+                p.words_cap as f64 / 1048576.0,
+                if p.words == 0 { 0 } else { p.nz_words * 100 / p.words },
+                p.est_blocks as f64 / 1048576.0,
+                p.est_adaptive as f64 / 1048576.0,
+            )
+        };
+        eprintln!(
+            "{tag} census uniq sets n={un} true={:.0}MiB ovh={:.0}MiB cls[{}] open[{}] fillhist={:?} lenhist(cls)={:?}",
+            (uc.bytes + uo.bytes) as f64 / 1048576.0,
+            uovh as f64 / 1048576.0,
+            hp(&uc),
+            hp(&uo),
+            uc.fill_hist,
+            uc.len_hist,
+        );
+        eprintln!("{tag} census uniq lcalls[{}] fmemo[{}]", hp(&lc) + &format!(" open[{}]", hp(&lo)), hp(&fc));
         // 主要驻留表的条目数（字节估计按条目均摊，够归因量级即可）
         let watch_n: usize = self.watch.values().map(|s| s.len()).sum();
         let call_watch_n: usize = self.call_watch.values().map(|s| s.len()).sum();
@@ -344,6 +381,56 @@ impl Engine<'_> {
             self.lambdas.len(),
             self.mref_keys.len(),
             self.site_nodes.len(),
+        );
+        // 大表深字节（§4.16 画像：把活跃字节归因到结构——capacity 口径，与计数分配器同量级即可）：
+        // 图固定列 / ids 表 / 读者与分派表 / 三级 lambda_done / recv_done 内层 / lcalls 列与实参值
+        let (gids, gcols, gedges, _gdelta, gseen, gextra) = self.graph.prof_columns();
+        let hb = |m_cap: usize, slot: usize| m_cap * slot * 9 / 7;
+        let watch_b = hb(self.watch.capacity(), std::mem::size_of::<(Node, HashSet<(usize, u32)>)>())
+            + self.watch.values().map(|s| hb(s.capacity(), 12)).sum::<usize>();
+        let call_watch_b = hb(self.call_watch.capacity(), std::mem::size_of::<(Node, HashSet<u32>)>())
+            + self.call_watch.values().map(|s| hb(s.capacity(), 4)).sum::<usize>();
+        let disp_b = hb(self.dispatched.capacity(), std::mem::size_of::<(usize, HashSet<(u32, u32, u32)>)>())
+            + self.dispatched.values().map(|s| hb(s.capacity(), 12)).sum::<usize>()
+            + hb(self.hub_linked.capacity(), std::mem::size_of::<(usize, HashSet<(u32, u32)>)>())
+            + self.hub_linked.values().map(|s| hb(s.capacity(), 8)).sum::<usize>()
+            + hb(self.hub_lsent.capacity(), std::mem::size_of::<(usize, HashSet<(u32, u32, u32)>)>())
+            + self.hub_lsent.values().map(|s| hb(s.capacity(), 12)).sum::<usize>();
+        let ldone_b = hb(self.lambda_done.capacity(), std::mem::size_of::<(usize, HashMap<u32, HashMap<LambdaKey, u32>>)>())
+            + self.lambda_done.values().map(|m| hb(m.capacity(), std::mem::size_of::<(u32, HashMap<LambdaKey, u32>)>()) + m.values().map(|im| hb(im.capacity(), std::mem::size_of::<(LambdaKey, u32)>())).sum::<usize>()).sum::<usize>();
+        let recv_done_b = hb(self.recv_done.capacity(), std::mem::size_of::<(usize, HashMap<u32, Vec<u32>>)>())
+            + self.recv_done.values().map(|m| hb(m.capacity(), std::mem::size_of::<(u32, Vec<u32>)>()) + m.values().map(|v| v.capacity() * 4).sum::<usize>()).sum::<usize>();
+        // lcalls：列 + 实参值（Feed::S 的 TypeSet 深堆）+ done 画像已在上一行
+        let mut args_b = 0usize;
+        for c in &self.lcalls {
+            args_b += c.call.1.capacity() * 24;
+            for a in &c.call.1 {
+                if let Some(v) = a {
+                    args_b += v.capacity() * std::mem::size_of::<Feed>();
+                    for f in v {
+                        if let Feed::S(s) = f {
+                            args_b += s.classes.heap_bytes() + s.open.heap_bytes();
+                        }
+                    }
+                }
+            }
+        }
+        let lcall_col = self.lcalls.capacity() * std::mem::size_of::<LCall>();
+        eprintln!(
+            "{tag} census deep gcols={:.0}MiB gids={:.0}MiB gedges={:.0}MiB gseen={:.0}MiB gextra={:.0}MiB watch={:.0}MiB call_watch={:.0}MiB disp={:.0}MiB ldone={:.0}MiB recv_done={:.0}MiB lcall_col={:.0}MiB largs={:.0}MiB lcalls_n={}",
+            gcols as f64 / 1048576.0,
+            gids as f64 / 1048576.0,
+            gedges as f64 / 1048576.0,
+            gseen as f64 / 1048576.0,
+            gextra as f64 / 1048576.0,
+            watch_b as f64 / 1048576.0,
+            call_watch_b as f64 / 1048576.0,
+            disp_b as f64 / 1048576.0,
+            ldone_b as f64 / 1048576.0,
+            recv_done_b as f64 / 1048576.0,
+            lcall_col as f64 / 1048576.0,
+            args_b as f64 / 1048576.0,
+            self.lcalls.len(),
         );
         let hub_recvs: usize = self.hubs.iter().map(|h| h.recvs.len()).sum();
         let hub_special: usize = self.hubs.iter().flat_map(|h| h.special.values()).map(|v| v.len()).sum();

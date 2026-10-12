@@ -137,4 +137,17 @@ impl SetStore {
         }
         (b, n)
     }
+    /// uniq 内容的表征画像（census uniq 行）：逐驻留表条目累计，返回（classes, open, Rc 头与表槽字节, uniq 数）。
+    /// 真实驻留字节 = classes.bytes + open.bytes + 头字节（原始 `census` 按节点重复计数共享内容）
+    pub(super) fn uniq_profile(&self) -> (super::idset::ReprProfile, super::idset::ReprProfile, u64, u64) {
+        let (mut pc, mut po) = (super::idset::ReprProfile::default(), super::idset::ReprProfile::default());
+        let mut ovh = 0u64;
+        for e in self.table.iter() {
+            e.1.classes.profile(&mut pc);
+            e.1.open.profile(&mut po);
+            // Rc 头（强弱计数 16B）+ TypeSet 内联 48B + 驻留表槽（(u64, Rc) 16B × 装载因子）
+            ovh += (16 + std::mem::size_of::<TypeSet>() + 18) as u64;
+        }
+        (pc, po, ovh, self.table.len() as u64)
+    }
 }
