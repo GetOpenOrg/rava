@@ -35,7 +35,7 @@ run_sets() {  # <检出目录> <rava> <前缀>
 build_rava "$ROOT"
 run_sets "$ROOT" "$ROOT/build/analyzer-target/release/rava" new
 
-BASE_WT="$ROOT/../s7k6-base-wt"
+BASE_WT="$ROOT/../s7k6-base-wt-$(basename "$ROOT")"  # 每检出目录独立：同服务器多 tag 并行不共用
 git -C "$ROOT" worktree add "$BASE_WT" "$BASE_REF" > /dev/null 2>&1 || git -C "$ROOT" worktree add --force "$BASE_WT" "$BASE_REF" > /dev/null
 build_rava "$BASE_WT"
 run_sets "$BASE_WT" "$BASE_WT/build/analyzer-target/release/rava" base
