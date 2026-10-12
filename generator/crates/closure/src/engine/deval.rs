@@ -38,6 +38,15 @@ pub(super) struct VDisp {
     opaque: bool,
 }
 
+impl VDisp {
+    /// 深堆字节（engine/deep3.rs 的 census 行，只读；`d` 记 MemberRef 键深）
+    pub(super) fn deep_bytes(&self, d: &mut deep3::Deep) -> usize {
+        const BT: usize = 8;
+        self.targets.len() * (std::mem::size_of::<MemberRef>() + BT)
+            + self.targets.iter().map(|m| d.member(m)).sum::<usize>()
+    }
+}
+
 /// 各目标结果汇合：不返回为单位元，未知吸收，常量相同才保留
 fn join(a: Ret, b: Ret) -> Ret {
     match (a, b) {

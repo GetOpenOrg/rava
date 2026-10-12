@@ -130,6 +130,17 @@ pub(super) struct Eqm {
     pub(super) budget_trig_nodes: u64,
 }
 
+impl Eqm {
+    /// 深堆字节（engine/deep3.rs 的 census 行，只读）
+    pub(super) fn deep_bytes(&self) -> usize {
+        self.ids.capacity() * 48 * 9 / 7
+            + self.site.capacity() * 28 * 9 / 7
+            + self.node.capacity() * 40 * 9 / 7 + self.node.values().map(|s| s.heap_bytes()).sum::<usize>()
+            + self.marks.capacity() * 12 * 9 / 7
+            + self.mates.capacity() * 24 * 9 / 7 + self.mates.values().map(|v| v.capacity() * 8).sum::<usize>()
+    }
+}
+
 impl Default for Eqm {
     fn default() -> Self {
         Eqm {

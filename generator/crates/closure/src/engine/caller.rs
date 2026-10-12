@@ -32,6 +32,19 @@ pub(super) struct CallerState {
     pub(super) lambda_site: Option<(u32, String, String)>,
 }
 
+impl CallerState {
+    /// 深堆字节（engine/deep3.rs 的 census 行，只读；`d` 记 MemberRef 键深）
+    pub(super) fn deep_bytes(&self, d: &mut deep3::Deep) -> usize {
+        const BT: usize = 8;
+        self.sensitive.capacity() * 12 * 9 / 7
+            + self.refs.capacity() * 40 * 9 / 7
+            + self.refs.keys().map(|k| d.member(k)).sum::<usize>()
+            + self.unwrapped.len() * (8 + BT)
+            + self.all.classes.heap_bytes()
+            + self.all.open.heap_bytes()
+    }
+}
+
 impl<'a> Engine<'a> {
     /// 方法 t 是否标注 @CallerSensitive（按声明处注解，与生成器包装口径一致）
     pub(super) fn is_caller_sensitive(&mut self, t: usize) -> bool {

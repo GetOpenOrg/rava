@@ -163,6 +163,13 @@ impl Deep {
     pub(super) fn u32s(&mut self, s: &Rc<[u32]>) -> usize {
         self.once(s.as_ptr() as usize, 7).then(|| 16 + s.len() * 4).unwrap_or(0)
     }
+    /// memo::Inputs（reads 共享 Rc；指针去重）
+    pub(super) fn inputs(&mut self, i: &super::memo::Inputs) -> usize {
+        if !self.once(i.reads.as_ptr() as usize, 12) {
+            return 0;
+        }
+        16 + i.reads.len() * std::mem::size_of::<MemberRef>() + i.reads.iter().map(|m| self.member(m)).sum::<usize>()
+    }
     pub(super) fn strings(&mut self, v: &Rc<[String]>) -> usize {
         if !self.once(v.as_ptr() as usize, 9) {
             return 0;
@@ -184,6 +191,15 @@ impl Deep {
     }
 }
 
+/// `HashMap<MemberRef, PV>` 的列宽 + 键深 + 值列（48）
+fn hbm_col(m: &HashMap<MemberRef, PV>) -> usize {
+    m.capacity() * (std::mem::size_of::<MemberRef>() + std::mem::size_of::<PV>()) * 9 / 7
+}
+
+fn leak(s: &'static str) -> &'static str {
+    s
+}
+
 impl Engine<'_> {
     /// 逐表深字节归因：`census deep3`（大表，按字节降序）/ `census deep3b`（小表逐项与合计）。
     /// 字节口径见模块说明
@@ -192,11 +208,23 @@ impl Engine<'_> {
         let mut d = Deep::new();
         let mut rows: Vec<(&'static str, usize, u64)> = Vec::new();
         let mut small: Vec<(&'static str, usize)> = Vec::new();
+        let mut tabs: Vec<(&'static str, usize)> = Vec::new();
         macro_rules! take {
             ($name:expr, $b:expr, $n:expr) => {{
                 let b: usize = $b;
                 if b >= 8 << 20 {
                     rows.push(($name, b, $n));
+                } else {
+                    small.push(($name, b));
+                }
+            }};
+        }
+        /// 逐子表落名（≥1 MiB 才打印；小表并入 small）
+        macro_rules! tab {
+            ($name:expr, $b:expr) => {{
+                let b: usize = $b;
+                if b >= 1 << 20 {
+                    tabs.push(($name, b));
                 } else {
                     small.push(($name, b));
                 }
@@ -307,8 +335,10 @@ impl Engine<'_> {
                 + self.reflect_names.values().map(|t| t.iter().map(|(s, _)| 24 + BT + s_cap(s)).sum::<usize>()).sum::<usize>();
             take!("outstr", b, self.refs.len() as u64);
         }
-        // ── pstr（形参字符串常量集）/ keyed（按键查找闸门）
-        take!("pstr", self.pstr.deep_bytes(), 0);
+        // ── pstr（形参字符串常量集，逐子表）/ keyed（按键查找闸门）
+        for (n, b) in self.pstr.deep_items() {
+            tab!(n, b);
+        }
         take!("keyed", self.keyed.deep_bytes(&mut d), self.keyed.gates.len() as u64);
         // ── lambdas
         {
@@ -348,36 +378,26 @@ impl Engine<'_> {
             }
             take!("pvals_deep", b, 0);
         }
-        // ── 派发与枢纽挂点表
-        {
-            let b = self.dispatch.iter().map(|(_, v)| v.len() * (8 + BT)).sum::<usize>()
-                + self.dispatch.len() * std::mem::size_of::<((usize, u32), BTreeSet<usize>)>()
-                + self.hub_sites.iter().map(|(_, v)| v.len() * (4 + BT)).sum::<usize>()
-                + self.hub_sites.len() * std::mem::size_of::<((usize, u32), BTreeSet<u32>)>()
-                + self.open_methods.values().map(|v| v.len() * (8 + BT)).sum::<usize>()
-                + self.open_sites.values().map(|v| v.len() * (16 + BT)).sum::<usize>()
-                + self.g.len() * (4 + BT)
-                + self.g_sub.capacity() * 24 * 9 / 7
-                + self.g_sub.values().map(|v| v.capacity() * 4).sum::<usize>()
-                + self.gathers.capacity() * std::mem::size_of::<(gather::Slot, u32, bool)>()
-                + self.gather_ids.capacity() * 40 * 9 / 7
-                + self.gather_ids.keys().map(|k| d.u32s(&k.2)).sum::<usize>()
-                + self.callers.capacity() * std::mem::size_of::<(usize, BTreeSet<usize>)>() * 9 / 7
-                + self.callers.values().map(|v| v.len() * (8 + BT)).sum::<usize>()
-                + self.mflows.values().map(|v| v.capacity() * std::mem::size_of::<(Node, MirrorOp)>()).sum::<usize>()
-                + self.mflows.capacity() * std::mem::size_of::<(Node, Vec<(Node, MirrorOp)>)>() * 9 / 7
-                + self.mflow_seen.capacity() * std::mem::size_of::<(Node, Node, MirrorOp)>() * 9 / 7
-                + self.mirror_open.values().map(|v| v.capacity() * 12).sum::<usize>()
-                + self.mirror_open_seen.capacity() * 24 * 9 / 7
-                + self.open_inj.iter().map(|(_, v)| v.len() * (4 + BT)).sum::<usize>()
-                + self.array_of.capacity() * std::mem::size_of::<((usize, u32), ArrayOfSite)>() * 9 / 7
-                + self.array_of.values().map(|s| s.mirrors.len() * (4 + BT) + s.dsts.capacity() * std::mem::size_of::<Node>()).sum::<usize>()
-                + self.gather_last.values().flat_map(|m| m.values()).map(|v| d.u32s(&v.1)).sum::<usize>()
-                + self.hw_gather_last.values().map(|v| d.u32s(&v.1)).sum::<usize>()
-                + self.hw_rgather_last.values().map(|v| d.u32s(&v.1)).sum::<usize>()
-                + self.hw_wgather_last.values().map(|v| d.u32s(&v.1)).sum::<usize>();
-            take!("dispatch2", b, self.dispatch.len() as u64);
-        }
+        // ── 派发与枢纽挂点表（逐子表落名）
+        tab!("dispatch", self.dispatch.iter().map(|(_, v)| v.len() * (8 + BT)).sum::<usize>() + self.dispatch.len() * std::mem::size_of::<((usize, u32), BTreeSet<usize>)>());
+        tab!("hub_sites", self.hub_sites.iter().map(|(_, v)| v.len() * (4 + BT)).sum::<usize>() + self.hub_sites.len() * std::mem::size_of::<((usize, u32), BTreeSet<u32>)>());
+        tab!("open_methods", self.open_methods.values().map(|v| v.len() * (8 + BT)).sum::<usize>() + self.open_methods.len() * std::mem::size_of::<((u32, u32), BTreeSet<usize>)>());
+        tab!("open_sites", self.open_sites.values().map(|v| v.len() * (16 + BT)).sum::<usize>() + self.open_sites.len() * std::mem::size_of::<((u32, u32), BTreeSet<(usize, u32)>)>());
+        tab!("g", self.g.len() * (4 + BT));
+        tab!("g_sub", self.g_sub.capacity() * 24 * 9 / 7 + self.g_sub.values().map(|v| v.capacity() * 4).sum::<usize>());
+        tab!("callers", self.callers.capacity() * std::mem::size_of::<(usize, BTreeSet<usize>)>() * 9 / 7 + self.callers.values().map(|v| v.len() * (8 + BT)).sum::<usize>());
+        tab!("mflows", self.mflows.values().map(|v| v.capacity() * std::mem::size_of::<(Node, MirrorOp)>()).sum::<usize>() + self.mflows.capacity() * std::mem::size_of::<(Node, Vec<(Node, MirrorOp)>)>() * 9 / 7 + self.mflow_seen.capacity() * std::mem::size_of::<(Node, Node, MirrorOp)>() * 9 / 7);
+        tab!("mirror_open", self.mirror_open.values().map(|v| v.capacity() * 12).sum::<usize>() + self.mirror_open.len() * 40 + self.mirror_open_seen.capacity() * 24 * 9 / 7);
+        tab!("open_inj", self.open_inj.iter().map(|(_, v)| v.len() * (4 + BT)).sum::<usize>() + self.open_inj.capacity() * 40 * 9 / 7);
+        tab!("array_of", self.array_of.capacity() * std::mem::size_of::<((usize, u32), ArrayOfSite)>() * 9 / 7 + self.array_of.values().map(|s| s.mirrors.len() * (4 + BT) + s.dsts.capacity() * std::mem::size_of::<Node>()).sum::<usize>());
+        tab!("gathers", self.gathers.capacity() * std::mem::size_of::<(gather::Slot, u32, bool)>() + self.gather_ids.capacity() * 40 * 9 / 7 + self.gather_ids.keys().map(|k| d.u32s(&k.2)).sum::<usize>()
+            + self.gather_last.capacity() * 40 * 9 / 7 + self.gather_last.values().map(|m| m.capacity() * 40 * 9 / 7).sum::<usize>() + self.gather_last.values().flat_map(|m| m.values()).map(|v| d.u32s(&v.1)).sum::<usize>()
+            + self.hw_gather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>() + self.hw_rgather_last.values().map(|v| 24 + d.u32s(&v.1)).sum::<usize>() + self.hw_wgather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>());
+        tab!("vm_hubs", self.vm_targets.capacity() * 8 * 9 / 7 + self.vm_open_hubs.capacity() * 8 * 9 / 7 + self.vm_rcall_hubs.capacity() * 24 * 9 / 7
+            + self.vm_hub_targets.capacity() * 40 * 9 / 7 + self.vm_hub_targets.values().map(|v| v.capacity() * 8).sum::<usize>());
+        tab!("eqm", self.eqm.deep_bytes());
+        tab!("concrete", self.concrete.deep_bytes());
+        tab!("spret", self.spret.deep_bytes(&mut d));
         // ── 站点去重 / 反射调用族 / 按名查找族
         {
             let mut b = self.recv_sites.capacity() * 12 * 9 / 7
@@ -443,6 +463,72 @@ impl Engine<'_> {
             }
             take!("classes", b, self.classes.len() as u64);
         }
+        // ── Ctx 常量 / 事实缓存族（facts.rs；键多带 MemberRef、值多带 PV / Rc）
+        {
+            let c = &self.ctx;
+            let hbm = |m: &HashMap<MemberRef, usize>| m.capacity() * (std::mem::size_of::<MemberRef>() + 8) * 9 / 7;
+            tab!("ctx_consts", c.consts.borrow().capacity() * 80 * 9 / 7
+                + c.consts.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.consts.borrow().values().map(|(v, _)| v.as_ref().map_or(0, |x| d.v(x))).sum::<usize>()
+                + c.consts.borrow().values().map(|(_, i)| d.inputs(i)).sum::<usize>());
+            tab!("ctx_domains", c.domains.borrow().capacity() * 40 * 9 / 7 + c.domains.borrow().keys().map(|k| s_cap(k)).sum::<usize>());
+            tab!("ctx_calls", c.calls.borrow().capacity() * 48 * 9 / 7
+                + c.calls.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.calls.borrow().values().map(|v| v.capacity() * 16 + v.iter().map(|(_, _, i)| 16 + i.target.as_ref().map_or(0, |t| d.member(t)) + i.fact.as_ref().map_or(0, |f| d.v(f)) + i.nonnull_ret.as_ref().map_or(0, |f| d.v(f)) + i.empty_query.as_ref().map_or(0, |f| d.v(f)) + i.shape.as_ref().map_or(0, |f| d.v(f))).sum::<usize>()).sum::<usize>());
+            tab!("ctx_fields", c.fields.borrow().capacity() * 48 * 9 / 7
+                + c.fields.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.fields.borrow().values().flatten().map(|f| 16 + d.member(&f.key) + f.constant.as_ref().map_or(0, |x| d.const_(x))).sum::<usize>());
+            tab!("ctx_selectors", c.selectors.borrow().capacity() * 40 * 9 / 7 + c.selectors.borrow().keys().map(|k| d.member(k)).sum::<usize>());
+            tab!("ctx_site_lits", c.site_lits.borrow().capacity() * 40 * 9 / 7 + c.site_lits.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.site_lits.borrow().values().map(|m| 16 + m.capacity() * 40 * 9 / 7).sum::<usize>());
+            tab!("ctx_fvals", hbm_col(&c.fvals.borrow()));
+            tab!("ctx_owild", hbm_col(&c.owild.borrow()));
+            tab!("ctx_rvals", hbm_col(&c.rvals.borrow()));
+            tab!("ctx_orwild", hbm_col(&c.orwild.borrow()));
+            tab!("ctx_ovals", c.ovals.borrow().capacity() * 48 * 9 / 7 + c.ovals.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.ovals.borrow().values().map(|m| m.capacity() * 36 * 9 / 7).sum::<usize>());
+            tab!("ctx_orvals", c.orvals.borrow().capacity() * 48 * 9 / 7 + c.orvals.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.orvals.borrow().values().map(|m| m.capacity() * 36 * 9 / 7).sum::<usize>());
+            tab!("ctx_cinits", c.cinits.borrow().capacity() * 48 * 9 / 7 + c.cinits.borrow().keys().map(|k| d.member(k)).sum::<usize>());
+            tab!("ctx_fdeps", c.fdeps.borrow().capacity() * 40 * 9 / 7 + c.fdeps.borrow().keys().map(|k| d.member(k)).sum::<usize>() + c.fdeps.borrow().values().map(|v| v.len() * (8 + BT)).sum::<usize>()
+                + c.rdeps.borrow().capacity() * 40 * 9 / 7 + c.rdeps.borrow().keys().map(|k| d.member(k)).sum::<usize>() + c.rdeps.borrow().values().map(|v| v.len() * (8 + BT)).sum::<usize>());
+            tab!("ctx_odeps", c.odeps.borrow().capacity() * 48 * 9 / 7 + c.odeps.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.odeps.borrow().values().map(|m| m.capacity() * 36 * 9 / 7 + m.values().map(|v| v.len() * (8 + BT)).sum::<usize>()).sum::<usize>()
+                + c.owdeps.borrow().capacity() * 40 * 9 / 7 + c.owdeps.borrow().keys().map(|k| d.member(k)).sum::<usize>() + c.owdeps.borrow().values().map(|v| v.len() * (8 + BT)).sum::<usize>());
+            tab!("ctx_ordeps", c.ordeps.borrow().capacity() * 48 * 9 / 7 + c.ordeps.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.ordeps.borrow().values().map(|m| m.capacity() * 36 * 9 / 7 + m.values().map(|v| v.len() * (8 + BT)).sum::<usize>()).sum::<usize>()
+                + c.orwdeps.borrow().capacity() * 40 * 9 / 7 + c.orwdeps.borrow().keys().map(|k| d.member(k)).sum::<usize>() + c.orwdeps.borrow().values().map(|v| v.len() * (8 + BT)).sum::<usize>());
+            tab!("ctx_psums", c.psums.borrow().capacity() * 48 * 9 / 7 + c.psums.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.preadonly.borrow().capacity() * 48 * 9 / 7 + c.preadonly.borrow().keys().map(|k| d.member(&k.0)).sum::<usize>());
+            tab!("ctx_objs", c.objs.borrow().capacity() * 48 * 9 / 7 + c.objs.borrow().keys().map(|k| s_cap(k)).sum::<usize>()
+                + c.objs.borrow().values().map(|(o, _)| o.as_ref().map_or(0, |x| d.obj(x))).sum::<usize>());
+            tab!("ctx_osite", c.osite.borrow().capacity() * 40 * 9 / 7
+                + c.osite.borrow().values().map(|(c1, ms)| d.rc_str(c1) + ms.len() * std::mem::size_of::<MemberRef>() + ms.iter().map(|m| d.member(m)).sum::<usize>()).sum::<usize>()
+                + c.odef.borrow().capacity() * 32 * 9 / 7 + c.odef.borrow().values().map(|v| v.len() * std::mem::size_of::<MemberRef>() + v.iter().map(|m| d.member(m)).sum::<usize>()).sum::<usize>()
+                + c.oret_sel.borrow().capacity() * 48 * 9 / 7 + c.oret_sel.borrow().keys().map(|k| d.member(&k.2)).sum::<usize>()
+                + c.oret_sel.borrow().values().map(|m| m.capacity() * 36 * 9 / 7).sum::<usize>());
+            tab!("ctx_vdisp", c.vdisp.borrow().capacity() * 48 * 9 / 7 + c.vdisp.borrow().keys().map(|k| d.member(&k.0)).sum::<usize>()
+                + c.vdisp.borrow().values().map(|v| v.deep_bytes(&mut d)).sum::<usize>()
+                + c.vwatch.borrow().capacity() * 48 * 9 / 7 + c.vwatch.borrow().keys().map(|k| d.member(&k.0)).sum::<usize>() + c.vwatch.borrow().values().map(|v| v.len() * (8 + BT)).sum::<usize>());
+            tab!("ctx_cevals", c.cevals.borrow().capacity() * 64 * 9 / 7
+                + c.mdeps.borrow().capacity() * 40 * 9 / 7 + c.mdeps.borrow().values().map(|v| v.len() * (8 + BT)).sum::<usize>());
+            tab!("ctx_fopen", c.fopen.borrow().capacity() * std::mem::size_of::<MemberRef>() * 9 / 7 + c.fopen.borrow().iter().map(|m| d.member(m)).sum::<usize>()
+                + c.fopen_names.borrow().capacity() * 24 * 9 / 7 + c.fopen_names.borrow().iter().map(|k| s_cap(k)).sum::<usize>()
+                + c.fhw.borrow().capacity() * std::mem::size_of::<MemberRef>() * 9 / 7 + c.fhw.borrow().iter().map(|m| d.member(m)).sum::<usize>()
+                + c.fhw_names.borrow().capacity() * 24 * 9 / 7 + c.fhw_names.borrow().iter().map(|k| s_cap(k)).sum::<usize>());
+            tab!("ctx_img", c.img_types.borrow().capacity() * 16 + c.img_types.borrow().iter().flatten().map(|s| d.rc_str(s)).sum::<usize>()
+                + c.img_modules.get().map_or(0, |m| m.capacity() * 48 * 9 / 7 + m.keys().map(|k| s_cap(k)).sum::<usize>()));
+            tab!("ctx_misc", c.forwarders.borrow().capacity() * 40 * 9 / 7 + c.forwarders.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.sealed_arrs.borrow().capacity() * 40 * 9 / 7
+                + c.pwsums.borrow().capacity() * 40 * 9 / 7 + c.pwsums.borrow().keys().map(|k| d.member(k)).sum::<usize>()
+                + c.pkeys.borrow().capacity() * 48 * 9 / 7
+                + c.never.borrow().len() * (8 + BT) + c.pdeps.borrow().len() * (8 + BT)
+                + c.cinit_rdeps.borrow().capacity() * 40 * 9 / 7 + c.cinit_rdeps.borrow().values().map(|v| v.capacity() * 8 + v.iter().map(|m| d.member(m)).sum::<usize>()).sum::<usize>()
+                + c.ofull.borrow().capacity() * 8 * 9 / 7 + c.oclass.borrow().capacity() * 32 * 9 / 7 + c.oclass.borrow().values().map(|s| d.rc_str(s)).sum::<usize>());
+            let _ = hbm; // 列宽近似统一，避免未用告警
+        }
+        tab!("narrow_cache", self.narrow_cache.capacity() * 16 * 9 / 7);
+        tab!("cs", self.cs.deep_bytes(&mut d));
         // ── 工作队列与去重挡（瞬态，但对账需要）
         {
             let b = self.mwork.capacity() * 8
@@ -457,7 +543,15 @@ impl Engine<'_> {
             take!("work", b, self.fwork.len() as u64);
         }
 
+        for (n, b) in tabs {
+            if b >= 8 << 20 {
+                rows.push((leak(n), b, 0));
+            } else {
+                small.push((leak(n), b));
+            }
+        }
         rows.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        small.sort_unstable_by(|a, b| b.1.cmp(&a.1));
         let mut line = String::new();
         for (name, b, n) in &rows {
             line.push_str(&format!(" {}={:.0}MiB/{}", name, mib(*b), n));

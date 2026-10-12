@@ -111,6 +111,18 @@ pub(super) struct Concrete {
     pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
 
+impl Concrete {
+    /// 深堆字节（engine/deep3.rs 的 census 行，只读）
+    pub(super) fn deep_bytes(&self) -> usize {
+        const BT: usize = 8;
+        self.traces.capacity() * 48 * 9 / 7
+            + self.traces.values().map(|(o, t)| o.len() * (4 + BT) + t.len() * (24 + BT) + t.values().map(|m| m.len() * (std::mem::size_of::<MemberRef>() + BT + 72)).sum::<usize>()).sum::<usize>()
+            + self.applied.capacity() * 28 * 9 / 7
+            + self.fallback.capacity() * 12 * 9 / 7
+            + self.pobj_types.capacity() * 8 * 9 / 7
+    }
+}
+
 impl<'a> Engine<'a> {
     pub(super) fn concrete_init(&mut self) {
         self.concrete.ctx = self.id(CONCRETE_CTX);
