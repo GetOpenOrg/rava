@@ -33,7 +33,8 @@ pub fn record_insn(ctx: &InstrCtx, ins: &Insn) {
 
 /// 成员引用 `owner.name[desc]`：owner 起沿超类链到声明类（含）登记方法 trait。
 /// `desc` = None 表示字段引用。接口（载体成员在 `I__Methods` 上，K6 前置项）只登记
-/// owner 自身——继承成员的转发外壳由宏在 owner 载体上生成，调用点落在 owner 载体上
+/// owner 自身——继承成员的转发外壳由宏在 owner 载体上生成，调用点落在 owner 载体上。
+/// 手写伴生块（§9.9 K4-2a）按成员名一并登记 `__XHw{N}`（命中声明块即止，同链遍历口径）
 pub fn record_member(ctx: &InstrCtx, owner: &str, name: &str, desc: Option<&str>) {
     let reg = ctx.reg();
     let mut cur = owner;
@@ -43,6 +44,7 @@ pub fn record_member(ctx: &InstrCtx, owner: &str, name: &str, desc: Option<&str>
         }
         ctx.ty.use_methods(cur);
         if ci.is_interface() {
+            ctx.ty.use_hw(cur, name);
             return;
         }
         let declares = match desc {
@@ -50,6 +52,7 @@ pub fn record_member(ctx: &InstrCtx, owner: &str, name: &str, desc: Option<&str>
             None => ci.fields().iter().any(|f| f.name == name),
         };
         if declares {
+            ctx.ty.use_hw(cur, name);
             return;
         }
         cur = ci.super_class();

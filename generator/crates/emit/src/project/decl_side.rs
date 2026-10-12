@@ -130,6 +130,24 @@ fn iface_methods_import_bytes(iface_decls: &BTreeMap<String, ()>, text: &str) ->
         .sum()
 }
 
+/// 手写扩展 trait 匿名导入行（`use …::__XHw{N} as _;`，§9.9 K4-2a）的字节数：同为纯
+/// 名字解析行，同接口方法 trait 口径不计入 D8 体量权重（对无 hw 导入行的树是零操作）
+fn hw_trait_import_bytes(text: &str) -> usize {
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let path = l.strip_prefix("use ")?.strip_suffix(" as _;")?;
+            let stem = path.rsplit("::").next()?;
+            let is_path = path.contains("::");
+            (is_path
+                && stem.starts_with("__")
+                && stem.contains("Hw")
+                && stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .then(|| l.len() + 1)
+        })
+        .sum()
+}
+
 fn segment_with_budget(
     ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path, out_dir: &Path, budget: &SegmentBudget,
 ) -> DeclSegs {
@@ -162,6 +180,7 @@ fn segment_with_budget(
                 if !iface_decls.is_empty() {
                     w = w.saturating_sub(iface_methods_import_bytes(&iface_decls, &ems[*i].text));
                 }
+                w = w.saturating_sub(hw_trait_import_bytes(&ems[*i].text));
                 w
             }
         })
@@ -386,6 +405,10 @@ mod tests {
         // 只扣接口的方法 trait 匿名导入行（57 = 行长 + 换行）；类侧（AbstractList）与普通导入不计
         assert_eq!(iface_methods_import_bytes(&ifaces, t), 57);
         assert_eq!(iface_methods_import_bytes(&BTreeMap::new(), t), 0);
+        // K4-2a：hw 扩展 trait 匿名导入行同样不计权（`__XHw` / `__NetHw2`）
+        let t2 = "use crate::prelude::*;\nuse crate::java::lang::__StringHw as _;\nuse crate::sun::nio::ch::__NetHw2 as _;\nuse crate::java::lang::String;\nlet x = 1;\n";
+        assert_eq!(hw_trait_import_bytes(t2), 80);
+        assert_eq!(hw_trait_import_bytes(t), 0);
     }
 
     #[test]

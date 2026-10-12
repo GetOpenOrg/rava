@@ -48,6 +48,8 @@ pub(super) struct FileScan<'a> {
     pub(super) self_ty: Option<Vec<String>>,
     /// 当前 impl 块的 self 类型是本文件的手写实现对象
     pub(super) cur_obj: Option<String>,
+    /// 当前在 `impl __XHw{N} for X` 块内（K4-2a：条目按手写成员计）
+    pub(super) in_hw_impl: bool,
     /// 本文件 impl 块关联 fn 的返回类型（见 [`local_rets`]）
     pub(super) rets: &'a LocalRets,
     /// 本文件只收标量形参的辅助 fn（见 [`scalar_arg_fns`]）
@@ -216,15 +218,28 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
                 self.supers.push((o.clone(), TypeRef(full)));
             }
         }
+        // K4-2a：`impl __XHw{N} for X` 是伴生固有 impl 的改写形态（条目可见性已剥），成员仍按
+        // 「手写提供」（is_pub）计——闭包 / 种子集合口径与改写前一致
+        let hw_impl = i.trait_.as_ref().is_some_and(|(_, tr, _)| {
+            let last = tr.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
+            let stem = last.strip_prefix("__").unwrap_or(&last);
+            let cls = stem.strip_suffix("Hw").unwrap_or(stem);
+            last.starts_with("__")
+                && !cls.is_empty()
+                && stem[cls.len()..].chars().all(|c| c.is_ascii_digit())
+                && ty.as_ref().is_some_and(|t| t.last().map(String::as_str) == Some(cls))
+        });
         let outer = std::mem::replace(&mut self.self_ty, ty);
         let outer_obj = std::mem::replace(&mut self.cur_obj, obj);
+        let outer_hw = std::mem::replace(&mut self.in_hw_impl, hw_impl);
         syn::visit::visit_item_impl(self, i);
+        self.in_hw_impl = outer_hw;
         self.self_ty = outer;
         self.cur_obj = outer_obj;
     }
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
-        let is_pub = matches!(f.vis, syn::Visibility::Public(_));
+        let is_pub = matches!(f.vis, syn::Visibility::Public(_)) || self.in_hw_impl;
         self.add(&f.sig, is_pub, &f.block);
         syn::visit::visit_impl_item_fn(self, f);
     }
@@ -339,6 +354,7 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
         supers: Vec::new(),
         self_ty: None,
         cur_obj: None,
+        in_hw_impl: false,
     };
     fs.visit_file(file);
     for (name, raw) in fs.fns {

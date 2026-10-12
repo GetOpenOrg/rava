@@ -293,9 +293,110 @@ def rewrite_file(path: str, text: str, local_types: set[str], counters: dict[str
     return "\n".join(lines), reports
 
 
+def scan_hw_items(src: str) -> dict[str, dict[int, set[str]]]:
+    """伴生树里 `impl __XHw{N} for X` 块的条目名：类 → {ordinal: 名集}。"""
+    out: dict[str, dict[int, set[str]]] = {}
+    hwre = re.compile(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)\s+for\s+(\w+)")
+    for rel in walk_sorted(src):
+        if not (rel.endswith("_impl.rs") or rel.endswith("_ext.rs")):
+            continue
+        cur, depth, cls = None, 0, None
+        for line in open(os.path.join(src, rel), encoding="utf-8"):
+            m = hwre.match(line)
+            if m and depth == 0:
+                cls = m.group(1)
+                ordn = int(m.group(2)) if m.group(2) else 1
+                out.setdefault(cls, {}).setdefault(ordn, set())
+                cur = (cls, ordn)
+                depth = 1
+                continue
+            if depth > 0:
+                depth += line.count("{") - line.count("}")
+                if cur:
+                    fm = re.match(r"^\s*(?:unsafe\s+)?fn\s+(\w+)", line)
+                    if fm:
+                        out[cur[0]][cur[1]].add(fm.group(1))
+                if depth <= 0:
+                    cur = None
+    return out
+
+
+KEYWORD_PKGS = {"ref": "r#ref"}
+
+
+def fix_callers(src: str, check: bool) -> int:
+    """非伴生手写文件里的 hw 方法调用面（`Cls::m(` UFCS 与单主 `.m(` 接收者形态）补
+    `use crate::<包>::__ClsHw{N} as _;`。插入在文件头最后一个 `use` 行后，幂等。"""
+    items = scan_hw_items(src)
+    # 伴生文件位置 → 类的包路径（crate::java::lang 一段）
+    pkg_of: dict[str, str] = {}
+    hwre = re.compile(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)\s+for\s")
+    for rel in walk_sorted(src):
+        if not (rel.endswith("_impl.rs") or rel.endswith("_ext.rs")):
+            continue
+        for line in open(os.path.join(src, rel), encoding="utf-8"):
+            m = hwre.match(line)
+            if m:
+                segs = [KEYWORD_PKGS.get(s, s) for s in os.path.dirname(rel).split(os.sep) if s != "."]
+                pkg_of.setdefault(m.group(1), "crate::" + "::".join(segs) if segs else "crate")
+                break
+    # 方法名 → 唯一 (类, ordinal)（多主 / 常用泛型名跳过——按编译错误兜底）
+    skip_names = {"get", "put", "mode", "apply", "prim", "cas", "interpret", "invoke_member", "count", "new"}
+    name_owner: dict[str, tuple[str, int]] = {}
+    for cls, ords in items.items():
+        for ordn, names in ords.items():
+            for n in names:
+                if n in skip_names or n.startswith("__impl_"):
+                    continue
+                cands = [(c, o) for c, os_ in items.items() for o, ns in os_.items() if n in ns]
+                if len(cands) == 1:
+                    name_owner.setdefault(n, cands[0])
+
+    changed = 0
+    for rel in walk_sorted(src):
+        if not rel.endswith(".rs") or rel.endswith("_impl.rs") or rel.endswith("_ext.rs") or rel == "lib.rs":
+            continue
+        p = os.path.join(src, rel)
+        text = open(p, encoding="utf-8").read()
+        need: dict[str, set[int]] = {}
+        for cls, ords in items.items():
+            for ordn, names in ords.items():
+                if any(re.search(rf"\b{cls}::{re.escape(n)}\s*[(<]", text) for n in names):
+                    need.setdefault(cls, set()).add(ordn)
+        for n, (cls, ordn) in name_owner.items():
+            if cls in need:
+                continue
+            if re.search(rf"\.{re.escape(n)}\s*\(", text):
+                need.setdefault(cls, set()).add(ordn)
+        lines: list[str] = []
+        for cls in sorted(need):
+            segs = KEYWORD_PKGS.get(cls, cls)
+            base = pkg_of.get(cls)
+            if not base:
+                continue
+            for ordn in sorted(need[cls]):
+                suffix = "" if ordn == 1 else str(ordn)
+                lines.append(f"use {base}::__{cls}Hw{suffix} as _;")
+        existing = set(l.strip() for l in text.split("\n"))
+        lines = [l for l in lines if l not in existing]
+        if lines:
+            changed += 1
+            print(f"{p}: +{len(lines)} use 行 ({', '.join(l.split('::')[-1] for l in lines)})")
+            if not check:
+                out_lines = text.split("\n")
+                last_use = max((i for i, l in enumerate(out_lines) if l.startswith("use ") and l.endswith(";")), default=-1)
+                out_lines.insert(last_use + 1, "\n".join(lines))
+                with open(p, "w", encoding="utf-8") as fh:
+                    fh.write("\n".join(out_lines))
+    print(f"[{'CHECK ' if check else ''}K4-2a fix-callers] 补导入文件 {changed} 份")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="只报告将要做的改写，不落盘")
+    ap.add_argument("--fix-callers", action="store_true",
+                    help="非伴生手写文件的 hw 调用面补 use 行（改写伴生后的第二步）")
     ap.add_argument("--src", default=None, help="runtime src 根（缺省 <repo>/runtime/java_runtime/src）")
     args = ap.parse_args()
 
@@ -305,6 +406,9 @@ def main() -> int:
     if not os.path.isdir(src):
         print(f"src 不存在：{src}", file=sys.stderr)
         return 2
+
+    if args.fix_callers:
+        return fix_callers(src, args.check)
 
     local_types = defined_types(src)
     counters: dict[str, int] = {}

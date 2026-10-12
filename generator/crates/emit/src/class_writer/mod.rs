@@ -310,5 +310,64 @@ pub fn class_text(
         parts.push(String::new());
     }
 
+    // §9.9 K4-2a：手写扩展 trait 声明（伴生 `impl __XHw{N} for X` 的机械镜像）。块后追加——
+    // 拆层后只在声明层（宏块尾的文本不进实现层），标记文件也不含（marker_text 只取宏块）
+    if let Some(hw) = ctx.input.handwritten.get(ci.name()).filter(|h| !h.hw_blocks.is_empty()) {
+        for (i, blk) in hw.hw_blocks.iter().enumerate() {
+            parts.extend(hw_trait_decl(&sname, i as u32 + 1, blk));
+            parts.push(String::new());
+        }
+    }
+
     Ok(ClassText { text: parts.join("\n"), methods })
+}
+
+/// 手写扩展 trait 声明（§9.9 K4-2a）：`pub trait __XHw{N}<G>: X__Methods<A> where … { 条目; }`。
+/// 泛型组 / 自类型实参 / where / 条目签名由伴生文件的 `impl __XHw{N} for X` 头机械镜像而来
+/// （`input::handwritten::hw_impl_blocks`），条目属性原样保留（cfg 的存在性两侧一致）
+fn hw_trait_decl(sname: &str, ord: u32, blk: &input::handwritten::HwBlock) -> Vec<String> {
+    let suffix = if ord == 1 { String::new() } else { ord.to_string() };
+    let where_c = blk.where_c.trim();
+    let where_part = if where_c.is_empty() { String::new() } else { format!(" {where_c} ") };
+    let mut out = vec![
+        format!("/// 手写伴生扩展 trait（K4-2a）：`_impl.rs`/`_ext.rs` 对 wrapper 的固有 impl 改此承载（第 {ord} 块）。"),
+        format!("/// wrapper struct 挪入 java_marker 后固有 impl E0390；签名是伴生 impl 的机械镜像。"),
+        format!("pub trait __{sname}Hw{suffix}{}: {sname}__Methods{}{where_part}{{", blk.generics, blk.self_args),
+    ];
+    for item in &blk.items {
+        out.extend(item.attrs.iter().map(|a| format!("    {a}")));
+        out.push(format!("    {};", item.sig.trim_end().trim_end_matches(';')));
+    }
+    out.push("}".to_string());
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// K4-2a：hw 扩展 trait 声明 = 伴生 `impl __XHw{N} for X` 头与条目的机械镜像
+    #[test]
+    fn hw_trait_decl_mirrors_companion_block() {
+        let blk = input::handwritten::HwBlock {
+            generics: "<T: Clone>".into(),
+            self_args: "<T>".into(),
+            where_c: " where T: 'static ".into(),
+            items: vec![
+                input::handwritten::HwItem {
+                    name: "intern".into(),
+                    attrs: vec!["#[cfg(jdk_ge_25)]".into()],
+                    sig: "fn intern(&self) -> Result<String>".into(),
+                },
+                input::handwritten::HwItem { name: "K".into(), attrs: vec![], sig: "const K: i32".into() },
+            ],
+        };
+        let out = hw_trait_decl("Reference", 2, &blk).join("\n");
+        assert!(out.contains("pub trait __ReferenceHw2<T: Clone>: Reference__Methods<T> where T: 'static {"), "{out}");
+        assert!(out.contains("    #[cfg(jdk_ge_25)]\n    fn intern(&self) -> Result<String>;"), "{out}");
+        assert!(out.contains("    const K: i32;"), "{out}");
+        // 第 1 块名不带序号
+        let one = hw_trait_decl("String", 1, &input::handwritten::HwBlock::default()).join("\n");
+        assert!(one.contains("pub trait __StringHw: String__Methods {"), "{one}");
+    }
 }

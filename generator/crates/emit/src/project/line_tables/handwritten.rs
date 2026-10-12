@@ -158,7 +158,8 @@ fn companion_fn(ty: &str, attrs: &[syn::Attribute], sig: &syn::Signature, block:
     CompanionFn { ty: ty.to_string(), name: sig.ident.to_string(), start, body, end }
 }
 
-/// 伴生文件中各 fn：`impl` 块的固有方法取块类型名，顶层自由函数类型名为空
+/// 伴生文件中各 fn：`impl` 块的固有方法取块类型名，顶层自由函数类型名为空。
+/// K4-2a：`impl __XHw{N} for X` 是固有 impl 的改写形态，同样按 self 类型收集
 fn companion_fns(text: &str) -> Vec<CompanionFn> {
     let Ok(file) = syn::parse_file(text) else { return Vec::new() };
     let mut out = Vec::new();
@@ -168,7 +169,11 @@ fn companion_fns(text: &str) -> Vec<CompanionFn> {
             continue;
         }
         let syn::Item::Impl(imp) = item else { continue };
-        if imp.trait_.is_some() {
+        let hw_trait = imp.trait_.as_ref().is_some_and(|(_, tr, _)| {
+            let last = tr.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
+            last.starts_with("__") && last.contains("Hw")
+        });
+        if imp.trait_.is_some() && !hw_trait {
             continue;
         }
         let syn::Type::Path(p) = &*imp.self_ty else { continue };
@@ -295,6 +300,19 @@ impl A {
         let text = "impl R {\n    pub fn n(&self) -> Result<()> {\n        if self.0.is_jvm_null() {\n            return Err(npe());\n        }\n        work()\n    }\n}\n";
         let t = companion_table("java_runtime/src/p/r_impl.rs", text, &hws).expect("命中");
         assert_eq!(t.rows, vec![(2, 0, 0), (6, 0, LINE_NATIVE), (8, NO_METHOD, 0)]);
+    }
+
+    #[test]
+    fn hw_trait_impl_blocks_collected() {
+        let hws = vec![HwMethod {
+            self_ty: "S".into(),
+            fn_name: "m".into(),
+            method: Method::new("p/S", "m", "()V", "S.java", "p/S"),
+            native: false,
+        }];
+        let text = "use super::__SHw;\nimpl __SHw for S {\n    fn m(&self) -> Result<()> {\n        Ok(())\n    }\n}\n";
+        let t = companion_table("java_runtime/src/p/s_impl.rs", text, &hws).expect("命中");
+        assert_eq!(t.rows, vec![(3, 0, LINE_UNKNOWN), (5, NO_METHOD, 0)]);
     }
 
     #[test]

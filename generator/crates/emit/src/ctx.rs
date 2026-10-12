@@ -8,7 +8,7 @@ use classfile::extras::{parse_extras, ClassExtras};
 use closure::seeds::SeedCfg;
 use input::{Boundary, EmitInput, Planner, RuntimeManifest};
 use resolve::classpath::ClassPath;
-use ty::{ClassInfo, NameScope, ShortNames, TyCtx};
+use ty::{ClassInfo, HwNames, NameScope, ShortNames, TyCtx};
 
 use crate::error::{EmitError, Result};
 
@@ -45,6 +45,9 @@ pub struct EmitShared<'a> {
     pub cp: &'a ClassPath,
     pub planner: Planner<'a>,
     pub boundary: Boundary<'a>,
+    /// 手写扩展 trait 名单（§9.9 K4-2a；由调用方从输入的手写扫描构建并持有——
+    /// `ty` 按引用携带，生命周期同 `input`）
+    pub hw: &'a HwNames,
     /// `runtime/java_runtime`（手写真源）
     pub runtime_dir: PathBuf,
     pub seeds: SeedCfg,
@@ -123,6 +126,7 @@ impl<'a> EmitShared<'a> {
         names: &'a ShortNames,
         manifest: &'a RuntimeManifest,
         cp: &'a ClassPath,
+        hw: &'a HwNames,
         runtime_dir: &Path,
         opts: EmitOptions,
     ) -> Result<EmitShared<'a>> {
@@ -134,11 +138,12 @@ impl<'a> EmitShared<'a> {
         let runtime_dir = std::path::absolute(runtime_dir).unwrap_or_else(|_| runtime_dir.to_path_buf());
         Ok(EmitShared {
             input,
-            ty: TyCtx::new(&input.registry, names, &manifest.ty),
+            ty: TyCtx::new(&input.registry, names, &manifest.ty).with_hw(hw),
             manifest,
             cp,
             planner: Planner::new(input, names, manifest, cp),
             boundary: Boundary::new(manifest),
+            hw,
             runtime_dir,
             seeds: SeedCfg::from_toml(&table),
             fallback: crate::fallback::FallbackAudit::new(opts.debug),

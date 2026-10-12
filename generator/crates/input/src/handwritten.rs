@@ -40,6 +40,32 @@ pub struct HwEntry {
     /// 手写实现对象为该（非接口）类的 vtable trait 提供的 fn 名（`impl X__VTable for S`）：
     /// 这些槽由手写对象实现，发射层不得按分派结果裁剪
     pub class_vtable_fns: BTreeSet<String>,
+    /// `impl __XHw{N} for X` 扩展 trait 实现块（§9.9 K4-2a，`scripts/diag/k4_2a_rewrite_hw_impls.py`
+    /// 改写后的形态；序号 = 块序）。发射层据此镜像 trait 声明，调用点按名登记导入。
+    pub hw_blocks: Vec<HwBlock>,
+}
+
+/// 一个手写扩展 trait 实现块的机械镜像（声明侧发射用）
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HwBlock {
+    /// impl 头泛型组原文（`<T: Clone + …>`；空 = 非泛型）
+    pub generics: String,
+    /// 自类型实参原文（`<T, K, S>`；空 = 非泛型）——supertrait（`X__Methods`）按它应用
+    pub self_args: String,
+    /// impl 头 where 子句（规范化空白；空 = 无）——trait 声明侧照搬
+    pub where_c: String,
+    /// 条目（发射序）
+    pub items: Vec<HwItem>,
+}
+
+/// 块内一个条目
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HwItem {
+    pub name: String,
+    /// 属性行原样（cfg 等须在声明侧保持一致；文档注释不采）
+    pub attrs: Vec<String>,
+    /// 声明签名（无可见性、无体；`fn f(&self, x: i32) -> R` 或 `const N: T`）
+    pub sig: String,
 }
 
 /// 类 binary name → 手写事实
@@ -153,6 +179,246 @@ fn pub_fns(content: &str) -> BTreeSet<String> {
         if content[j..].starts_with(['(', '<']) {
             out.insert(content[i..end].to_string());
         }
+    }
+    out
+}
+
+// ── §9.9 K4-2a：`impl __XHw{N} for X` 块的机械镜像扫描 ─────────────────────────
+
+/// 平衡尖括号组：`head[i] == '<'` 起，返回组内原文（含尖括号）与结束位置；
+/// 泛型约束可嵌套（`<T: From<Object>>`）
+fn angle_group(head: &str, mut i: usize) -> Option<(String, usize)> {
+    if head[i..].starts_with('<') {
+        let mut depth = 0usize;
+        let start = i;
+        let b = head.as_bytes();
+        while i < b.len() {
+            match b[i] {
+                b'<' => depth += 1,
+                b'>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((head[start..=i].to_string(), i + 1));
+                    }
+                }
+                b';' => break,
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
+fn skip_sp(head: &str, mut i: usize) -> usize {
+    while head[i..].chars().next().is_some_and(char::is_whitespace) {
+        i += head[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    i
+}
+
+fn ident_at(head: &str, i: usize) -> Option<(&str, usize)> {
+    let end = i + head[i..].find(|c: char| !is_word(c)).unwrap_or(head.len() - i);
+    (end > i).then(|| (&head[i..end], end))
+}
+
+/// `impl<GEN> __ClsHw[N] for Cls<APP> [where …] {` 的头解析（改写脚本的产出形态）：
+/// (泛型组, 自类型实参, where 子句（首尾带空格；空 = 无))
+fn hw_head(head: &str) -> Option<(String, String, String)> {
+    let mut i = skip_sp(head, "impl".len());
+    let generics = match angle_group(head, i) {
+        Some((g, j)) => {
+            i = skip_sp(head, j);
+            g
+        }
+        None => String::new(),
+    };
+    let (trait_name, j) = ident_at(head, i)?;
+    let stem = trait_name.strip_prefix("__")?;
+    let cls = stem.strip_suffix("Hw").filter(|s| !s.is_empty())?;
+    let rest = &trait_name["__".len() + cls.len() + "Hw".len()..];
+    if !rest.is_empty() && !rest.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    i = skip_sp(head, j);
+    if !head[i..].starts_with("for") {
+        return None;
+    }
+    i = skip_sp(head, i + "for".len());
+    // 自类型（可路径限定，取末段核对）
+    let (self_ty, j) = ident_at(head, i)?;
+    let last = self_ty.rsplit("::").next().unwrap_or(self_ty);
+    if last != cls {
+        return None;
+    }
+    i = skip_sp(head, j);
+    let self_args = match angle_group(head, i) {
+        Some((a, j)) => {
+            i = skip_sp(head, j);
+            a
+        }
+        None => String::new(),
+    };
+    if !head.ends_with('{') {
+        return None;
+    }
+    // 尾随 where 子句（trait 声明侧照搬）
+    let tail = &head[i..].trim_end()[..head[i..].trim_end().len().saturating_sub(1)];
+    let where_c = match tail.trim().strip_prefix("where ") {
+        Some(w) => format!(" {} ", w.split_whitespace().collect::<Vec<_>>().join(" ")),
+        None if tail.trim().is_empty() => String::new(),
+        None => return None,
+    };
+    Some((generics, self_args, where_c))
+}
+
+/// 形参文本规范化（trait 无体声明不接受模式）：接收者 `mut self` → `self`（引用接收者
+/// `&mut self` 保持）、`mut x: T` → `x: T`、复合模式 → `_`
+fn decl_params(params: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for c in params.chars() {
+        match c {
+            '(' | '[' | '<' => {
+                depth += 1;
+                cur.push(c)
+            }
+            ')' | ']' | '>' => {
+                depth -= 1;
+                cur.push(c)
+            }
+            ',' if depth == 0 => {
+                out.push(cur.clone());
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out.iter()
+        .map(|p| {
+            let t = p.trim();
+            if t == "mut self" {
+                return "self".to_string();
+            }
+            match t.split_once(':') {
+                Some((pat, ty)) => {
+                    let pat = pat.trim().strip_prefix("mut ").unwrap_or(pat.trim());
+                    let name = if !pat.is_empty() && pat.chars().all(|c| is_word(c)) { pat } else { "_" };
+                    format!("{name}: {}", ty.trim())
+                }
+                None => t.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `fn 名(参数) [-> 返回]` 的声明签名：参数规范化（无体声明不接受模式），其余原样
+fn decl_sig(sig: &str) -> String {
+    let Some(open) = sig.find('(') else { return sig.trim().to_string() };
+    let close = balanced(sig, open, '(', ')');
+    let params = decl_params(&sig[open + 1..close.saturating_sub(1).max(open + 1)]);
+    let head = sig[..open].trim().to_string();
+    let tail = sig[close..].trim().to_string();
+    format!("{head}({params}) {tail}")
+}
+
+/// 单个手写文件的 `impl __XHw{N} for X` 块（发射序；行级扫描——改写脚本保证第 0 列头、
+/// 条目缩进 4 列，属性单行）
+fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < lines.len() {
+        let l = lines[i].trim_end();
+        if !l.starts_with("impl") || !starts_word(l, 0) {
+            i += 1;
+            continue;
+        }
+        // 头累积到 `{` 结尾的行（where 跨行形态）
+        let mut head = l.to_string();
+        let mut j = i;
+        while !head.ends_with('{') && j + 1 < lines.len() {
+            j += 1;
+            head.push(' ');
+            head.push_str(lines[j].trim());
+        }
+        let Some((generics, self_args, where_c)) = hw_head(&head) else {
+            // 其余 impl（trait impl / 本地类型固有 impl）：跳过整个块
+            let mut depth = head.chars().filter(|&c| c == '{').count() as i32
+                - head.chars().filter(|&c| c == '}').count() as i32;
+            let mut k = j + 1;
+            while k < lines.len() && depth > 0 {
+                depth += lines[k].matches('{').count() as i32 - lines[k].matches('}').count() as i32;
+                k += 1;
+            }
+            i = k;
+            continue;
+        };
+        // 体内顶层条目
+        let mut items: Vec<HwItem> = Vec::new();
+        let mut attrs: Vec<String> = Vec::new();
+        let mut depth = 1i32;
+        let mut k = j + 1;
+        while k < lines.len() && depth > 0 {
+            let t = lines[k].trim();
+            let line_depth = depth;
+            depth += lines[k].matches('{').count() as i32 - lines[k].matches('}').count() as i32;
+            k += 1;
+            if line_depth != 1 || depth == 0 {
+                continue;
+            }
+            if t.is_empty() || t.starts_with("//") {
+                continue;
+            }
+            if t.starts_with('#') {
+                attrs.push(t.to_string());
+                continue;
+            }
+            // 条目头：`fn …{` / `const …;`（跨行签名累积）
+            if t.starts_with("fn ") || t.starts_with("unsafe fn ") || t.starts_with("const ") || t.starts_with("unsafe const ") {
+                let mut sig = t.to_string();
+                let is_const = t.starts_with("const") || t.starts_with("unsafe const");
+                let mut m = k;
+                if is_const {
+                    while m < lines.len() && !sig.trim_end().ends_with(';') {
+                        sig.push(' ');
+                        sig.push_str(lines[m].trim());
+                        m += 1;
+                    }
+                } else {
+                    while m < lines.len() && !sig.trim_end().ends_with('{') {
+                        sig.push(' ');
+                        sig.push_str(lines[m].trim());
+                        m += 1;
+                    }
+                }
+                k = m;
+                let name = sig
+                    .split(|c: char| c == '(' || c == '<' || c == ':')
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or("")
+                    .to_string();
+                let decl = if is_const {
+                    let cut = sig.find(" =").unwrap_or(sig.len());
+                    sig[..cut].trim().to_string()
+                } else {
+                    let cut = sig.rfind('{').unwrap_or(sig.len());
+                    decl_sig(&sig[..cut])
+                };
+                if !name.is_empty() {
+                    items.push(HwItem { name, attrs: std::mem::take(&mut attrs), sig: decl });
+                }
+            }
+            attrs.clear();
+        }
+        out.push(HwBlock { generics, self_args, where_c, items });
+        i = k;
     }
     out
 }
@@ -314,6 +580,8 @@ struct FileFacts {
     vtables: BTreeMap<String, BTreeMap<String, (String, String)>>,
     /// 签名里出现、经本文件 use 表导入的类型名 → 完整路径段
     sig_uses: BTreeMap<String, Vec<String>>,
+    /// `impl __XHw{N} for X` 扩展 trait 实现块（§9.9 K4-2a）
+    hw_blocks: Vec<HwBlock>,
 }
 
 /// 读取并提取一个手写文件；非手写模块文件、不可读或含生成标记的文件返回 `None`
@@ -339,6 +607,7 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
     }
     let vtables = vtable_sigs(&content);
     let sig_uses = sig_uses(&content, &vtables);
+    let hw_blocks = hw_impl_blocks(&content);
     Some(FileFacts {
         class_binary,
         file_pkg: pkg.join("/"),
@@ -346,6 +615,7 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
         cores: method_cores(&content),
         vtables,
         sig_uses,
+        hw_blocks,
     })
 }
 
@@ -368,7 +638,7 @@ impl HandwrittenMap {
     }
 
     fn absorb(&mut self, f: FileFacts, reg: &Registry, idents: &BTreeMap<String, Vec<&str>>) {
-        let FileFacts { class_binary, file_pkg, names, cores, vtables, sig_uses } = f;
+        let FileFacts { class_binary, file_pkg, names, cores, vtables, sig_uses, hw_blocks } = f;
         let refs: BTreeMap<String, String> = sig_uses
             .into_iter()
             .filter_map(|(w, segs)| {
@@ -376,8 +646,13 @@ impl HandwrittenMap {
                 Some((w, hit))
             })
             .collect();
-        if !names.is_empty() {
-            self.classes.entry(class_binary.clone()).or_default().methods.extend(names);
+        if !names.is_empty() || !hw_blocks.is_empty() {
+            let e = self.classes.entry(class_binary.clone()).or_default();
+            e.methods.extend(names);
+            // K4-2a：改写后的 hw 块条目（可见性已剥，`pub fn` 正则不再覆盖）并入 impl_methods——
+            // 名单语义 = 「wrapper 上由手写伴生提供的方法」，宏与判定层口径不变
+            e.methods.extend(hw_blocks.iter().flat_map(|b| b.items.iter().map(|i| i.name.clone())));
+            e.hw_blocks.extend(hw_blocks);
         }
         for (name, core) in cores {
             self.classes.entry(class_binary.clone()).or_default().method_cores.insert(name, core);
@@ -405,6 +680,16 @@ impl HandwrittenMap {
     pub fn get(&self, cls: &str) -> Option<&HwEntry> {
         self.classes.get(cls)
     }
+
+    /// K4-2a 手写扩展 trait 名单（binary → 各块条目名集；发射层据此做调用点按名登记）
+    pub fn hw_names(&self) -> ty::HwNames {
+        ty::HwNames::build(self.classes.iter().map(|(b, e)| {
+            (
+                b.clone(),
+                e.hw_blocks.iter().map(|blk| blk.items.iter().map(|i| i.name.clone()).collect()).collect(),
+            )
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -428,5 +713,30 @@ mod tests {
         let vt = vtable_sigs(src);
         assert_eq!(vt["Iter"]["next"], ("a: i32".to_string(), "Object".to_string()));
         assert_eq!(vt["Iter"].len(), 1);
+    }
+
+    /// K4-2a：`impl __XHw{N} for X` 块的机械镜像（泛型 / where / 条目签名 / cfg 属性 / 多行签名）
+    #[test]
+    fn scans_hw_impl_blocks() {
+        let src = "use super::*;\n\
+                   impl __StringHw for String {\n    fn intern(&self) -> Result<String> { todo() }\n    #[cfg(jdk_ge_25)]\n    fn fetch(&mut self,\n             n: i32) -> Result<Vec<u16>> { todo() }\n    fn by_val(mut self, mut x: i32, (a, b): (u8, u8)) -> Self { self }\n}\n\
+                   impl<T: Clone + Default> __ReferenceHw2 for Reference<T> where T: 'static {\n    const K: i32 = 3;\n}\n\
+                   impl __NotHw for Y { fn f() {} }\nimpl Plain { fn g() {} }\n";
+        let blocks = hw_impl_blocks(src);
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert_eq!(blocks[0].generics, "");
+        assert_eq!(blocks[0].self_args, "");
+        let names: Vec<&str> = blocks[0].items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, vec!["intern", "fetch", "by_val"]);
+        assert_eq!(blocks[0].items[0].sig, "fn intern(&self) -> Result<String>");
+        // 跨行签名 + cfg 属性随行
+        assert_eq!(blocks[0].items[1].attrs, vec!["#[cfg(jdk_ge_25)]"]);
+        assert_eq!(blocks[0].items[1].sig, "fn fetch(&mut self, n: i32) -> Result<Vec<u16>>");
+        // 模式规范化：mut self → self、mut x → x、复合模式 → _
+        assert_eq!(blocks[0].items[2].sig, "fn by_val(self, x: i32, _: (u8, u8)) -> Self");
+        assert_eq!(blocks[1].generics, "<T: Clone + Default>");
+        assert_eq!(blocks[1].self_args, "<T>");
+        assert_eq!(blocks[1].where_c, " where T: 'static ");
+        assert_eq!(blocks[1].items[0].sig, "const K: i32");
     }
 }

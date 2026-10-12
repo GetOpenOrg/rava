@@ -10,6 +10,7 @@ pub mod carrier;
 pub mod class_params;
 pub mod consts;
 pub mod fn_sig;
+pub mod hw_names;
 pub mod ident;
 pub mod jvm_type;
 pub mod manifest;
@@ -26,6 +27,7 @@ pub mod type_map;
 pub(crate) mod testutil;
 
 pub use fn_sig::FnSig;
+pub use hw_names::HwNames;
 pub use jvm_type::{HostPrim, JvmType, PrimKind, TypeParseError, WildKind};
 pub use manifest::Manifest;
 pub use registry::{ClassInfo, Registry};
@@ -45,6 +47,8 @@ pub struct TyCtx<'a> {
     global: &'a ShortNames,
     scope: Option<&'a NameScope>,
     pub manifest: &'a Manifest,
+    /// 手写扩展 trait 名单（§9.9 K4-2a；None = 无伴生块，登记无操作）
+    hw: Option<&'a HwNames>,
 }
 
 impl<'a> TyCtx<'a> {
@@ -54,6 +58,7 @@ impl<'a> TyCtx<'a> {
             global: names,
             scope: None,
             manifest,
+            hw: None,
         }
     }
 
@@ -62,7 +67,12 @@ impl<'a> TyCtx<'a> {
     where
         'a: 'b,
     {
-        TyCtx { reg: self.reg, global: self.global, scope: Some(scope), manifest: self.manifest }
+        TyCtx { reg: self.reg, global: self.global, scope: Some(scope), manifest: self.manifest, hw: self.hw }
+    }
+
+    /// 附上手写扩展 trait 名单（§9.9 K4-2a）
+    pub fn with_hw(&self, hw: &'a HwNames) -> TyCtx<'a> {
+        TyCtx { hw: Some(hw), ..*self }
     }
 
     /// 全局名字表（建作用域、分析期统计用；发射文本不得经此取名）
@@ -95,6 +105,25 @@ impl<'a> TyCtx<'a> {
     pub fn use_methods(&self, binary: &str) {
         if let Some(s) = self.scope {
             s.methods_trait(binary);
+        }
+    }
+
+    /// 登记调用点解析类 `binary` 的 Java 成员 `member`（名或 `<init>`）所需的手写扩展 trait
+    /// 块（§9.9 K4-2a；`__XHw{N}` 匿名导入；无名单 / 无作用域时无操作）
+    pub fn use_hw(&self, binary: &str, member: &str) {
+        if let (Some(s), Some(h)) = (self.scope, self.hw) {
+            for ord in h.ordinals_matching(binary, member) {
+                s.hw_trait(binary, ord);
+            }
+        }
+    }
+
+    /// 登记类 `binary` 的全部手写扩展 trait 块（字面量锚点等无成员名可配的调用面）
+    pub fn use_hw_all(&self, binary: &str) {
+        if let (Some(s), Some(h)) = (self.scope, self.hw) {
+            for ord in h.ordinals(binary) {
+                s.hw_trait(binary, ord);
+            }
         }
     }
 

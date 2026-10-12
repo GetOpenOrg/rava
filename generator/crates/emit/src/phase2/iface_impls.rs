@@ -361,8 +361,12 @@ fn iface_recv_member(
         let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
         let signature = substitute_type_params(&sig.render(&ctx.ty), &param_mapping(&owner_params, owner_args));
         let owner_ty = rust_type(&ctx.short(owner_bin), owner_args);
-        // 继承转发体（宏生成）调用 owner 载体的方法——载体成员在 I__Methods 上（K6 前置项）
+        // 继承转发体（宏生成）调用 owner 载体的方法——载体成员在 I__Methods 上（K6 前置项）；
+        // 手写成员（K4-2a）在 `__OwnerHw` 上，按名登记导入
         ctx.ty.use_methods(owner_bin);
+        if method.handwritten {
+            ctx.ty.use_hw(owner_bin, &method.rust_name);
+        }
         let mut attr = vec![format!("name = \"{}\"", method.name), format!("descriptor = \"{}\"", method.descriptor)];
         if !method.access.is_empty() {
             attr.push(format!("access = \"{}\"", method.access));

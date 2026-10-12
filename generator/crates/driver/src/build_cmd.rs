@@ -317,7 +317,8 @@ pub(crate) fn with_emit_ctx<R>(
         jobs: j.o.emit_jobs,
         archive: j.o.profile.is_some(),
     };
-    let shared = EmitShared::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
+    let hw_names = inp.handwritten.hw_names();
+    let shared = EmitShared::new(&inp, &names, &manifest, j.cp, &hw_names, j.rt, opts).map_err(|e| e.to_string())?;
     perf.mark("names+ctx");
     f(&shared.view(), &names, perf)
 }
