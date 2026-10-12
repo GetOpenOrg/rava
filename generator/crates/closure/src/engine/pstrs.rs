@@ -43,14 +43,14 @@ pub(super) enum PSlot {
 pub(super) struct PStrs {
     /// 字面量序号集（`absint::lit`；传递只做位运算）
     sets: HashMap<PSlot, IdSet>,
-    succ: HashMap<PSlot, BTreeSet<PSlot>>,
+    /// 子集边与逆（有序数组形态：B 树节点摊还 24–28B/条 → 数组 16–24B/条，§4.17）
+    succ: HashMap<PSlot, SortedSet<PSlot>>,
     /// 读过方法形参槽的按名查找站点（偏移）
-    sites: HashMap<(usize, usize), BTreeSet<u32>>,
-    /// 子集边的逆：槽 → 流入它的槽
-    pred: HashMap<PSlot, BTreeSet<PSlot>>,
+    sites: HashMap<(usize, usize), SortedSet<u32>>,
+    pred: HashMap<PSlot, SortedSet<PSlot>>,
     /// 流入 String 形参槽的非常量实参：(调用方, 调用偏移, 实参序号（不含接收者）)；
     /// 流入 String 字段槽的非常量写入：(写入方, putfield / putstatic 偏移, [`FIELD_VALUE`])
-    inputs: HashMap<PSlot, BTreeSet<(usize, u32, usize)>>,
+    inputs: HashMap<PSlot, SortedSet<(usize, u32, usize)>>,
     /// 有实参值未知的调用边的方法 / 枢纽：形参槽推不出
     top_m: HashSet<usize>,
     top_h: HashSet<u32>,
@@ -59,9 +59,9 @@ pub(super) struct PStrs {
     /// 有非常量写入的 String 字段：字段槽推不出
     top_f: HashSet<usize>,
     /// 读过槽（按名取类遍历到的上游槽）的站点
-    demand: HashMap<PSlot, BTreeSet<(usize, u32)>>,
+    demand: HashMap<PSlot, SortedSet<(usize, u32)>>,
     /// 求值读过其调用点实参的调用方 → 读者站点
-    xdemand: HashMap<usize, BTreeSet<(usize, u32)>>,
+    xdemand: HashMap<usize, SortedSet<(usize, u32)>>,
     /// 正在求值的起点槽
     active: Vec<PSlot>,
 }
@@ -69,15 +69,14 @@ pub(super) struct PStrs {
 impl PStrs {
     /// 深堆字节（census deep3 行，只读；`IdSet` 经 `heap_bytes`、B 树按节点摊还）——逐子表
     pub(super) fn deep_items(&self) -> Vec<(&'static str, usize)> {
-        const BT: usize = 8; // B 树节点摊还
         vec![
             ("pstr_sets", self.sets.capacity() * 40 * 9 / 7 + self.sets.values().map(|s| s.heap_bytes()).sum::<usize>()),
-            ("pstr_succ", self.succ.capacity() * 40 * 9 / 7 + self.succ.values().map(|s| s.len() * (16 + BT)).sum::<usize>()),
-            ("pstr_pred", self.pred.capacity() * 40 * 9 / 7 + self.pred.values().map(|s| s.len() * (16 + BT)).sum::<usize>()),
-            ("pstr_sites", self.sites.capacity() * 40 * 9 / 7 + self.sites.values().map(|s| s.len() * (4 + BT)).sum::<usize>()),
-            ("pstr_inputs", self.inputs.capacity() * 40 * 9 / 7 + self.inputs.values().map(|s| s.len() * (20 + BT)).sum::<usize>()),
-            ("pstr_demand", self.demand.capacity() * 40 * 9 / 7 + self.demand.values().map(|s| s.len() * (12 + BT)).sum::<usize>()),
-            ("pstr_xdemand", self.xdemand.capacity() * 40 * 9 / 7 + self.xdemand.values().map(|s| s.len() * (12 + BT)).sum::<usize>()),
+            ("pstr_succ", self.succ.capacity() * 40 * 9 / 7 + self.succ.values().map(|s| s.cap_bytes()).sum::<usize>()),
+            ("pstr_pred", self.pred.capacity() * 40 * 9 / 7 + self.pred.values().map(|s| s.cap_bytes()).sum::<usize>()),
+            ("pstr_sites", self.sites.capacity() * 40 * 9 / 7 + self.sites.values().map(|s| s.cap_bytes()).sum::<usize>()),
+            ("pstr_inputs", self.inputs.capacity() * 40 * 9 / 7 + self.inputs.values().map(|s| s.cap_bytes()).sum::<usize>()),
+            ("pstr_demand", self.demand.capacity() * 40 * 9 / 7 + self.demand.values().map(|s| s.cap_bytes()).sum::<usize>()),
+            ("pstr_xdemand", self.xdemand.capacity() * 40 * 9 / 7 + self.xdemand.values().map(|s| s.cap_bytes()).sum::<usize>()),
             ("pstr_top", self.top_m.capacity() * 8 * 9 / 7 + self.top_h.capacity() * 4 * 9 / 7 + self.offsite.capacity() * 8 * 9 / 7 + self.top_f.capacity() * 8 * 9 / 7 + self.active.capacity() * 16),
         ]
     }
