@@ -373,6 +373,8 @@ fn default_init_interfaces(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
             .any(|m| !m.is_abstract() && !m.is_static() && m.name != "<init>" && m.name != "<clinit>");
         let has_clinit = ic.methods().iter().any(|m| m.name == "<clinit>");
         if has_default && has_clinit {
+            // 宏展开的 `<I>::__class_init()` 落在接口载体的方法 trait 上（§9.9 K6 前置项）
+            ctx.ty.use_methods(name);
             let n = parse_class_type_params(ic.generic_signature()).len();
             let args = if n > 0 { format!("<{}>", vec!["Object"; n].join(", ")) } else { String::new() };
             out.push(with_args(&ctx.short(name), &args));

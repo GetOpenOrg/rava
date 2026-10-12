@@ -114,6 +114,22 @@ fn mod_overhead(rel: &Path, prev_len: usize) -> usize {
     class_lines + pkg_head + ancestors
 }
 
+/// 接口方法 trait 匿名导入行（`use …::<I>__Methods as _;`）的字节数（§9.9 K6 前置项）：
+/// 接口载体成员移入 `I__Methods` 后调用方文件新增的导入行。它只为方法名解析引入名字
+///（K3 峰值归因的次要成分），不计入 D8 体量权重——否则纯解析开销被当作展开体量、按
+/// 240 字节/MB 的斜率推高上段预算，切段随导入行漂移。类侧匿名导入先于本规则存在，
+/// 口径保持不变（对无接口导入行（K3 及更早）的树是零操作）。
+fn iface_methods_import_bytes(iface_decls: &BTreeMap<String, ()>, text: &str) -> usize {
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let path = l.strip_prefix("use ")?.strip_suffix("__Methods as _;")?;
+            let stem = path.rsplit("::").next()?;
+            (!stem.is_empty() && iface_decls.contains_key(stem)).then(|| l.len() + 1)
+        })
+        .sum()
+}
+
 fn segment_with_budget(
     ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path, out_dir: &Path, budget: &SegmentBudget,
 ) -> DeclSegs {
@@ -126,11 +142,29 @@ fn segment_with_budget(
         .filter(|(_, em)| em.crate_name == crates.root())
         .filter_map(|(i, em)| em.path.strip_prefix(decl_src).ok().map(|r| (i, r.to_path_buf())))
         .collect();
-    // 权重 = 落盘字节（类文本原样写出）+ 落在上层段时的 mod 行上界；手写类随 overlay 计入 base
+    // 权重 = 落盘字节（类文本原样写出）+ 落在上层段时的 mod 行上界；手写类随 overlay 计入 base。
+    // 接口方法 trait 的匿名导入行不计入（见 [`iface_methods_import_bytes`]）
+    let iface_decls: BTreeMap<String, ()> = ctx
+        .ty
+        .reg
+        .iter()
+        .filter(|ci| ci.is_interface())
+        .map(|ci| (ctx.declared(ci.name()), ()))
+        .collect();
     let prev_len = decl.len() + SEGMENT_SUFFIX_BYTES;
     let weights: Vec<usize> = members
         .iter()
-        .map(|(i, rel)| if ems[*i].handwritten { 0 } else { ems[*i].text.len() + mod_overhead(rel, prev_len) })
+        .map(|(i, rel)| {
+            if ems[*i].handwritten {
+                0
+            } else {
+                let mut w = ems[*i].text.len() + mod_overhead(rel, prev_len);
+                if !iface_decls.is_empty() {
+                    w = w.saturating_sub(iface_methods_import_bytes(&iface_decls, &ems[*i].text));
+                }
+                w
+            }
+        })
         .collect();
     let hw = handwritten_files(&ctx.runtime_src());
     // 底段 crate 含全部手写 overlay（保守：手写真源全部计入），参与不分段判定并计入上段的上游体量
@@ -324,6 +358,16 @@ mod tests {
         ];
         let actual: usize = written.iter().map(String::len).sum();
         assert!(mod_overhead(rel, "java_base_decl".len() + SEGMENT_SUFFIX_BYTES) >= actual);
+    }
+
+    #[test]
+    fn iface_methods_import_bytes_excluded() {
+        let mut ifaces = BTreeMap::new();
+        ifaces.insert("Function".to_string(), ());
+        let t = "use crate::prelude::*;\nuse crate::java::util::function::Function__Methods as _;\nuse crate::java::util::AbstractList__Methods as _;\nlet x = 1;\n";
+        // 只扣接口的方法 trait 匿名导入行（57 = 行长 + 换行）；类侧（AbstractList）与普通导入不计
+        assert_eq!(iface_methods_import_bytes(&ifaces, t), 57);
+        assert_eq!(iface_methods_import_bytes(&BTreeMap::new(), t), 0);
     }
 
     #[test]

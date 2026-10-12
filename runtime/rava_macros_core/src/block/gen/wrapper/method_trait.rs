@@ -25,25 +25,25 @@ pub(crate) const STD_COLLISIONS: [&str; 11] = [
     "try_into",
 ];
 
-/// 方法 trait 名（宏生成，不出现在可读层方法体文本中）
-pub(crate) fn trait_ident(ctx: &GenContext) -> syn::Ident {
-    format_ident!("{}__Methods", ctx.struct_ident)
-}
-
 /// 该固有成员是否移入方法 trait
 ///
 /// 不移入（除 `const fn` 与 std 同名外，S7 计划 §9.9 K3 收尾）：字段访问器（`__get_*` / `__set_*`）、
 /// `_init_not_null`、`__init_on`——它们的跨 crate 调用点（实现层体、子类构造器体、反射分派尾巴）
 /// 都在实现层或对本类，固有 impl 即可解析；放进 trait 只会让声明层 crate 的展开 / 类型检查 /
 /// 元数据为每个字段多付一份签名（§9.9 K3 峰值归因：trait 项是签名双份的主要来源）。
-/// K6 搬 struct 进标记 crate 后固有失效，届时按 K6 前置项处理（同 std 同名成员，见下）
+/// K6 搬 struct 进标记 crate 后固有失效，届时按 K6 前置项处理（同 std 同名成员，见下）。
+///
+/// 接口载体（§9.9 K6 前置项，经 [`split_parts`]）另有内部成员留固有：`is_jvm_null`（null 探测，
+/// 与类 wrapper 的固有方法同形，K6 归标记层身份面）、`__default_*`（default 体的单一持有处，
+/// 载体分派回退与合成对象 vtable 条目都直调——固有调用无需 trait 导入）
 fn moves_to_trait(f: &ImplItemFn) -> bool {
     let n = f.sig.ident.to_string();
     f.sig.constness.is_none()
         && !STD_COLLISIONS.contains(&n.as_str())
-        && !matches!(n.as_str(), "_init_not_null" | "__init_on")
+        && !matches!(n.as_str(), "_init_not_null" | "__init_on" | "is_jvm_null")
         && !n.starts_with("__get_")
         && !n.starts_with("__set_")
+        && !n.starts_with("__default_")
 }
 
 /// trait 中的方法声明：签名同实现（形参模式去 `mut` / 非标识符模式改 `_`，无体声明不接受模式），
@@ -77,11 +77,20 @@ fn declaration(f: &ImplItemFn) -> TraitItemFn {
 
 /// wrapper 成员 → (方法 trait 声明 + wrapper 的 trait 实现, 留在固有 impl 的成员)
 pub(super) fn split(ctx: &GenContext, members: TokenStream2) -> syn::Result<TokenStream2> {
-    let struct_ident = &ctx.struct_ident;
-    let impl_g = &ctx.impl_g;
-    let ty_g = &ctx.ty_g;
-    let where_c = &ctx.where_c;
-    let trait_ident = trait_ident(ctx);
+    split_parts(&ctx.struct_ident, &ctx.impl_g, &ctx.ty_g, &ctx.where_c, members)
+}
+
+/// [`split`] 的载体形态（接口载体无 GenContext，§9.9 K6 前置项：载体成员同样移入
+/// `I__Methods`——K6 搬载体 struct 进标记 crate 后固有 impl 跨 crate 失效）。
+/// 三段泛型即 `Generics::split_for_impl` 的展开片段（TokenStream 形态，与 GenContext 同）
+pub(crate) fn split_parts(
+    struct_ident: &syn::Ident,
+    impl_g: &TokenStream2,
+    ty_g: &TokenStream2,
+    where_c: &TokenStream2,
+    members: TokenStream2,
+) -> syn::Result<TokenStream2> {
+    let trait_ident = format_ident!("{}__Methods", struct_ident);
     let all: syn::ItemImpl = syn::parse2(quote! {
         impl #impl_g #struct_ident #ty_g #where_c { #members }
     })?;
@@ -200,7 +209,9 @@ mod tests {
         assert!(out.contains("pub fn __get_n (& self) -> i32"), "{out}");
     }
 
-    /// 与 std prelude trait 同名的 Java 方法（`clone`）留在固有 impl（trait 内同名即 E0034）
+    /// 与 std prelude trait 同名的 Java 方法（`clone`）留在固有 impl（trait 内同名即 E0034）。
+    /// 生成器侧对这类成员已统一改 `__` 前缀内部名（fn 标识符 `__clone`，§9.9 K6 前置项）——
+    /// 本测试守护宏对**未经改名**的块输入（手写块）的兜底行为
     #[test]
     fn std_named_method_stays_inherent() {
         let out = expanded();
@@ -208,5 +219,24 @@ mod tests {
         assert!(tr.contains("fn new ()"), "{tr}");
         assert!(!tr.contains("fn clone"), "{tr}");
         assert!(out.contains("pub fn clone (& self) -> Result < Object >"), "{out}");
+    }
+
+    /// 生成器改过名的 std 同名成员（`__clone`）不在 [`STD_COLLISIONS`]，正常移入方法 trait
+    #[test]
+    fn renamed_std_member_moves_to_trait() {
+        use std::str::FromStr;
+        let src = r#"
+        #[binary_name = "a/C"]
+        pub struct C { pub n: i32 }
+        impl C {
+            #[java_method(name = "clone", descriptor = "()Ljava/lang/Object;", access = "public")]
+            pub fn __clone(&self) -> Result<Object> { Ok(Object::default()) }
+        }
+    "#;
+        let out = super::super::super::super::expand(TokenStream2::from_str(src).unwrap()).to_string();
+        assert!(!out.contains("compile_error"), "{out}");
+        let tr = out.split("pub trait C__Methods").nth(1).unwrap().split("impl <").next().unwrap();
+        assert!(tr.contains("fn __clone"), "{tr}");
+        assert!(out.contains("impl C__Methods for C"), "{out}");
     }
 }

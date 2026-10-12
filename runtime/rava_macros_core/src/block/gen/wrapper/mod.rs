@@ -14,6 +14,8 @@ mod method_trait;
 mod into_object;
 
 pub(crate) use body_fns::functionize_applicable;
+// 接口载体成员拆入 I__Methods（§9.9 K6 前置项）：interface.rs 无 GenContext，用分量形态
+pub(crate) use method_trait::split_parts;
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

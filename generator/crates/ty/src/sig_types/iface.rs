@@ -17,6 +17,7 @@ use classfile::Method;
 
 use super::{param_section, ParamSets};
 use crate::consts::OBJECT;
+use crate::ident::escape_std_trait_method;
 use crate::jvm_type::subtype::super_closure;
 use crate::registry::ClassInfo;
 use crate::rs_type::RsType;
@@ -113,12 +114,13 @@ impl<'a> TyCtx<'a> {
         result
     }
 
-    /// 方法在其声明接口 decl 上的 Rust 名（未转义）
+    /// 方法在其声明接口 decl 上的 Rust 名（未转义；与 std prelude trait 方法同名时加 `__`
+    /// 前缀——接口载体成员在 `I__Methods` 上，§9.9 K6 前置项）
     fn interface_declared_name(&self, decl: &ClassInfo, name: &str, desc: &str) -> String {
         if self.hierarchy_overloaded_names(decl).contains(name) {
             mangle_name(self.manifest, name, desc)
         } else {
-            name.to_string()
+            escape_std_trait_method(name)
         }
     }
 

@@ -184,9 +184,10 @@ impl<'c, 'a> Plan<'c, 'a> {
         }
     }
 
-    /// 登记类的方法 trait 使用：由字节码生成的非接口类（宏为其生成 `X__Methods`）
+    /// 登记类的方法 trait 使用：由字节码生成的类与接口载体（宏为其生成 `X__Methods`；
+    /// 接口载体成员自 §9.9 K6 前置项起同样在方法 trait 上）
     fn use_methods(&self, cls: &str) {
-        let generated = self.ctx.class(cls).is_some_and(|ci| !ci.is_interface())
+        let generated = self.ctx.class(cls).is_some()
             && !self.ctx.is_opaque(cls)
             && self.ems.get(cls).is_some_and(|em| !em.handwritten);
         if generated {

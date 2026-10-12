@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use classfile::{acc, op, ClassFile, Method, Operand};
 use resolve::classpath::ClassPath;
-use ty::ident::safe_ident;
+use ty::ident::{escape_std_trait_method, safe_ident};
 use ty::type_map::mangle_name;
 use ty::{consts, ClassInfo, Registry, ShortNames, TyCtx};
 
@@ -241,7 +241,8 @@ impl<'a> Planner<'a> {
         if overloaded.contains(&m.name) {
             mangle_name(self.ty.manifest, &m.name, &m.desc)
         } else {
-            m.name.clone()
+            // 与 std prelude trait 方法同名的成员在方法 trait 表面上用 `__` 前缀内部名（§9.9 K6 前置项）
+            escape_std_trait_method(&m.name)
         }
     }
 

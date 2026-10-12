@@ -13,6 +13,7 @@ use quote::{format_ident, quote};
 use syn::{GenericParam, Ident, Type};
 
 use super::class_init;
+use super::gen::wrapper::split_parts;
 use super::erasure::{
     erase_signature, erase_type, erasure_hits_param, erasure_hits_ret, expand_non_virtual_fn, flat_type_tokens,
     mentions_any, objectize_type, param_idents, result_inner_ty, same_type_tokens,
@@ -39,8 +40,10 @@ fn is_instance_decl(f: &FnItem) -> bool {
 ///   类型变量位置的实参 / 返回值在 `Object` 与 `E` 之间转换（等价 javac 插入的 checkcast）。
 ///   函数式接口的 lambda 实例是 A-5 合成对象（`Iface__Lambda`，sam_objects 生成），
 ///   实现 `Iface__VTable` 并经 `__interface` 应答——SAM 与 default 方法都走 vtable 分派。
-/// - 命名空间语义：接口的 static 方法 / static 字段访问器落在载体的 inherent impl 上，
-///   调用点与 Java 同构（`Map::copyOf(m)`）。
+/// - 命名空间语义：接口的 static 方法 / static 字段访问器与实例分派成员落在载体的方法
+///   trait `I__Methods` 上（由载体实现，§9.9 K6 前置项——K6 搬载体 struct 进标记 crate 后
+///   固有 impl 跨 crate 失效），调用点与 Java 同构（`Map::copyOf(m)` / `it.next()`），
+///   调用方匿名导入 `use …::I__Methods as _;`。
 ///
 /// 类型别名（`type Iface = Object`）无法承担命名空间语义：别名上的关联函数解析到 `Object`，
 /// 且别名不能携带未使用的类型参数。
@@ -204,6 +207,21 @@ pub(crate) fn expand_interface(
         }}
     };
 
+    let carrier_members = split_parts(
+        struct_ident,
+        &quote! { #impl_g },
+        &quote! { #ty_g },
+        &quote! { #where_c },
+        quote! {
+            #(#static_members)*
+            #(#static_accessors)*
+            #class_init_fn
+
+            #(#carrier_methods)*
+        },
+    )
+    .unwrap_or_else(|e| e.to_compile_error());
+
     quote! {
         #[allow(non_camel_case_types)]
         pub trait #vtable_ident: 'static + __ThreadSafe {
@@ -279,13 +297,12 @@ pub(crate) fn expand_interface(
             pub fn is_jvm_null(&self) -> bool {
                 ObjectVTable::is_jvm_null(&*self.__ref.0)
             }
-
-            #(#static_members)*
-            #(#static_accessors)*
-            #class_init_fn
-
-            #(#carrier_methods)*
         }
+
+        // 载体成员移入方法 trait I__Methods（§9.9 K6 前置项）：static 方法 / static
+        // 字段访问器 / `__class_init` / 实例分派与继承转发；const fn（__from_image）、
+        // 关联常量（BINARY_NAME / __IMAGE_NULL）、`is_jvm_null`、`__default_*` 留固有
+        #carrier_members
     }
 }
 
@@ -463,5 +480,39 @@ mod tests {
             .replace("enter :: < dyn I__VTable >", "")
             .replace("< dyn I__VTable > :: m", "");
         assert!(!rest.contains("__VTable"), "{rest}");
+    }
+
+    /// §9.9 K6 前置项：载体成员移入方法 trait `I__Methods`（由载体实现）；静态方法 /
+    /// `__class_init` / 实例分派成员全在 trait 上，`__default_*` / `is_jvm_null` /
+    /// 关联常量 / const fn 留固有
+    #[test]
+    fn carrier_members_on_methods_trait() {
+        let src = r#"
+        #[binary_name = "a/J"]
+        #[is_interface = true]
+        pub struct J {}
+        impl J {
+            #[java_method(name = "m", descriptor = "()I", access = "public", modifiers = "abstract", is_abstract  = true)]
+            pub fn m(&self) -> Result<i32>;
+            #[java_method(name = "d", descriptor = "()V", access = "public")]
+            pub fn d(&self) -> Result<()> { Ok(()) }
+            #[java_method(name = "s", descriptor = "()I", access = "public", modifiers = "static", is_static    = true)]
+            pub fn s() -> Result<i32> { Ok(0) }
+        }
+    "#;
+        let out = super::super::expand(TokenStream2::from_str(src).unwrap()).to_string();
+        assert!(!out.contains("compile_error"), "{out}");
+        // trait 声明 + 载体实现（与 wrapper 的 X__Methods 同形）
+        assert!(out.contains("pub trait J__Methods"), "{out}");
+        assert!(out.contains("impl J__Methods for J"), "{out}");
+        let tr = out.split("pub trait J__Methods").nth(1).unwrap().split("impl J__Methods").next().unwrap();
+        for m in ["fn m (& self) -> Result < i32 > ;", "fn d (& self) -> Result < () > ;", "fn s () -> Result < i32 > ;", "fn __class_init ()"] {
+            assert!(tr.contains(m), "{m} 应在 trait 声明里: {tr}");
+        }
+        // default 体持有处与 null 探测留固有
+        assert!(out.contains("pub fn __default_d (& self)"), "{out}");
+        assert!(out.contains("pub fn is_jvm_null (& self) -> bool"), "{out}");
+        // `__default_d` 的最终回退在 trait impl 里（self . __default_d 调用）
+        assert!(out.contains("self . __default_d ("), "{out}");
     }
 }

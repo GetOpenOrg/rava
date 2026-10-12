@@ -12,6 +12,7 @@ use classfile::Method;
 use input::plan::CLINIT_FN;
 use input::{MethodPlan, Role, Verdict};
 use ty::ident::safe_ident;
+use ty::ident::escape_std_trait_method;
 use ty::type_map::mangle_name;
 use ty::{ClassInfo, FnSig};
 
@@ -216,7 +217,8 @@ fn lambda_rust_name(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method) -> String {
     {
         mangled
     } else {
-        m.name.clone()
+        // 载体 / wrapper 的方法 trait 表面用 `__` 前缀内部名避开 std prelude trait 同名（§9.9 K6 前置项）
+        escape_std_trait_method(&m.name)
     };
     safe_ident(&name.replace("<init>", "new"))
 }

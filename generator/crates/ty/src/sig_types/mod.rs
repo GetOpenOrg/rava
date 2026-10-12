@@ -13,7 +13,7 @@ use std::sync::Arc;
 pub use ctor::{is_anonymous_class, SigTypes};
 pub use emitted::EmittedSig;
 
-use crate::ident::safe_ident;
+use crate::ident::{escape_std_trait_method, safe_ident};
 use crate::registry::ClassInfo;
 use crate::type_map::mangle_name;
 use crate::TyCtx;
@@ -263,7 +263,7 @@ impl TyCtx<'_> {
             seen.insert(c.name().to_string());
             if let Some(declared) = self.class_method_param_sets(c).1.get(mname) {
                 return if declared.contains(&params) {
-                    mname.to_string()
+                    escape_std_trait_method(mname)
                 } else {
                     mangle_name(self.manifest, mname, desc)
                 };
@@ -274,7 +274,7 @@ impl TyCtx<'_> {
                 self.reg.get(c.super_class())
             };
         }
-        mname.to_string()
+        escape_std_trait_method(mname)
     }
 
     /// 类 ci 声明的方法名是否带描述符后缀
@@ -282,11 +282,12 @@ impl TyCtx<'_> {
         self.hierarchy_overloaded_names(ci).contains(method_name)
     }
 
-    /// 继承成员在接收者 wrapper 上的名字（接收者重载态 mangle + 关键字转义）
+    /// 继承成员在接收者 wrapper 上的名字（接收者重载态 mangle + 关键字转义；与 std prelude
+    /// trait 方法同名时加 `__` 前缀，与定义侧 fn 标识符同一口径——§9.9 K6 前置项）
     pub fn receiver_member_name(&self, m_name: &str, m_desc: &str, recv: &ClassInfo) -> String {
         if self.hierarchy_overloaded_names(recv).contains(m_name) {
             return safe_ident(&mangle_name(self.manifest, m_name, m_desc));
         }
-        safe_ident(m_name)
+        safe_ident(&escape_std_trait_method(m_name))
     }
 }

@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use classfile::{acc, op, Method, Operand};
 use ty::ident::safe_ident;
 use ty::sig_parse::substitute_signature_type_vars;
+use ty::ident::escape_std_trait_method;
 use ty::type_map::mangle_name;
 use ty::ClassInfo;
 
@@ -136,7 +137,12 @@ pub(super) fn interface_default_inheritance<'c>(
     let mut used_rust: BTreeSet<String> = visible
         .iter()
         .filter(|m| !is_ctor_name(&m.name))
-        .map(|m| if cx.overloaded.contains(&m.name) { mangle_name(mt, &m.name, &m.desc) } else { m.name.clone() })
+        .map(|m| if cx.overloaded.contains(&m.name) {
+            mangle_name(mt, &m.name, &m.desc)
+        } else {
+            // 方法 trait 表面用 `__` 前缀内部名避开 std prelude trait 同名（§9.9 K6 前置项）
+            escape_std_trait_method(&m.name)
+        })
         .collect();
     let anc = ancestor_interfaces(ctx, ci);
     // 预扫描：待继承 default 方法按 (名, 参数签名) 去重计数（default 之间重名则 mangle）
@@ -164,9 +170,9 @@ pub(super) fn interface_default_inheritance<'c>(
     });
     for (ici, dm) in pending {
         let mangle = cx.overloaded.contains(&dm.name)
-            || used_rust.contains(&dm.name)
+            || used_rust.contains(&escape_std_trait_method(&dm.name))
             || counts.get(&dm.name).copied().unwrap_or(0) > 1;
-        let rust = if mangle { mangle_name(mt, &dm.name, &dm.desc) } else { dm.name.clone() };
+        let rust = if mangle { mangle_name(mt, &dm.name, &dm.desc) } else { escape_std_trait_method(&dm.name) };
         used_rust.insert(rust.clone());
         let (adapted, view) = adapt_interface_method(ctx, ci, ici.name(), dm)?;
         let e = Emitted { method: Cow::Owned(adapted), owner: ici, index: method_index(ici, dm) };
@@ -215,7 +221,7 @@ pub(crate) fn interface_special_member_name(ctx: &EmitCtx<'_>, owner: &ClassInfo
     let m = if ctx.ty.hierarchy_overloaded_names(owner).contains(name) {
         mangle_name(&ctx.manifest.ty, name, desc)
     } else {
-        name.to_string()
+        escape_std_trait_method(name)
     };
     format!("{}_super_{m}", ctx.short(owner.name()))
 }

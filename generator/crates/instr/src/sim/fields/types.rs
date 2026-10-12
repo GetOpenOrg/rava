@@ -150,6 +150,12 @@ pub fn resolve_static_field(env: &InstrEnv, cls: &str, raw_name: &str, desc: &st
     let field_name = ty::ident::safe_ident(raw_name);
     let mut ty = if desc.is_empty() { RsType::Object } else { ctx.ty.jvm_to_rust(desc) };
     let cls = if cls.is_empty() { String::new() } else { resolve_static_field_owner(reg, cls, raw_name).unwrap_or_else(|| cls.to_string()) };
+    // 访问器生成在声明类上（常量池 owner 可以是引用它的子类 / 接口实现类）：调用方文件按声明类
+    // 登记方法 trait——接口的 static 字段访问器在 `I__Methods` 上（§9.9 K6 前置项），类的登记
+    // 与 record_member 的超类链登记重合
+    if !cls.is_empty() && reg.get(&cls).is_some() {
+        ctx.ty.use_methods(&cls);
+    }
     let cls_ci = if reg.is_empty() || cls.is_empty() {
         None
     } else if reg.contains(&cls) {

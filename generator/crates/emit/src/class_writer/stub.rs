@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use classfile::Method;
-use ty::ident::safe_ident;
+use ty::ident::{escape_std_trait_method, safe_ident};
 use ty::{ClassInfo, FnSig};
 
 use crate::ctx::EmitCtx;
@@ -133,7 +133,10 @@ pub fn native_stub(
     } else {
         format!("Result<{}>", sig.ret.render(&ctx.ty))
     };
-    let fn_name = safe_ident(if rust_name.is_empty() { &m.name } else { rust_name });
+    // rust_name 为空（super-inherit 重发射）时按 Java 名取方法 trait 表面名：与 std prelude
+    // trait 方法同名者加 `__` 前缀，与定义侧 fn 标识符同一口径（§9.9 K6 前置项）
+    let escaped = escape_std_trait_method(&m.name);
+    let fn_name = safe_ident(if rust_name.is_empty() { escaped.as_str() } else { rust_name });
     let body = stub_body(ci, m);
     if m.is_static() && m.name == "main" && m.desc == lang::MAIN_DESC {
         let sig = "pub fn main() -> Result<()>".to_string();

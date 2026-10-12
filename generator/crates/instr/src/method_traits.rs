@@ -4,8 +4,9 @@
 //!
 //! 登记来源是字节码成员引用的 owner：invoke / 字段指令的 owner，invokedynamic 引导实参中的
 //! 方法句柄 owner；沿 owner 的超类链登记到声明该成员的类为止（继承成员在 owner 的 wrapper 上
-//! 有转发外壳，调用点也可能落在声明类的 wrapper 上）。接口（载体是固有 impl）、根类（手写）
-//! 不登记。
+//! 有转发外壳，调用点也可能落在声明类的 wrapper 上）。接口载体成员同样在 `I__Methods` 上
+//!（§9.9 K6 前置项）：接收者载体持有自身声明与继承转发的全部外壳，只登记 owner 接口，
+//! 不沿超接口链走。根类（手写）不登记。
 
 use classfile::{Const, Insn, Operand};
 
@@ -31,15 +32,19 @@ pub fn record_insn(ctx: &InstrCtx, ins: &Insn) {
 }
 
 /// 成员引用 `owner.name[desc]`：owner 起沿超类链到声明类（含）登记方法 trait。
-/// `desc` = None 表示字段引用
+/// `desc` = None 表示字段引用。接口（载体成员在 `I__Methods` 上，K6 前置项）只登记
+/// owner 自身——继承成员的转发外壳由宏在 owner 载体上生成，调用点落在 owner 载体上
 pub fn record_member(ctx: &InstrCtx, owner: &str, name: &str, desc: Option<&str>) {
     let reg = ctx.reg();
     let mut cur = owner;
     while let Some(ci) = reg.get(cur) {
-        if ci.is_interface() || cur == ty::consts::OBJECT {
+        if cur == ty::consts::OBJECT {
             return;
         }
         ctx.ty.use_methods(cur);
+        if ci.is_interface() {
+            return;
+        }
         let declares = match desc {
             Some(d) => ci.methods().iter().any(|m| m.name == name && m.desc == d),
             None => ci.fields().iter().any(|f| f.name == name),
