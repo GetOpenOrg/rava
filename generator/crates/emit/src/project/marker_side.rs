@@ -80,7 +80,8 @@ fn free_marker_stem(reserved: &BTreeMap<PathBuf, BTreeSet<String>>, class: &Path
 }
 
 /// 类声明文本 → 标记文件文本：块首层属性换 `marker`，块后尾巴（`iface_upcasts!` 等，声明层项）
-/// 不进标记文件。未拆层（无 `decl` 属性）返回 None。
+/// 不进标记文件；文件头按标记块的词剪枝（见 [`prune_marker_header`]）。
+/// 未拆层（无 `decl` 属性）返回 None。
 pub fn marker_text(text: &str) -> Option<String> {
     let open = text.find(BLOCK_OPEN)?;
     let start = open + BLOCK_OPEN.len();
@@ -88,7 +89,8 @@ pub fn marker_text(text: &str) -> Option<String> {
     let end = text[start..].find("\n}\n")?;
     let close = start + end + 3;
     let block = text[start..close].strip_prefix(DECL_ATTR)?;
-    Some(format!("{}{BLOCK_OPEN}{}{}", &text[..open], MARKER_ATTR, block))
+    let header = prune_marker_header(&text[..open], block);
+    Some(format!("{header}{BLOCK_OPEN}{MARKER_ATTR}{block}"))
 }
 
 /// 标记层计划：标记文件与其宿主类（绝对路径 → 标记模块名；上层段 mod 行按它补声明）
@@ -154,6 +156,17 @@ pub fn split(
         plan.hosts.insert(path, marker_stem);
     }
     plan
+}
+
+/// 标记文件头剪枝：只留标记展开引用的名字（按词剪枝，与声明层 [`super::layers::prune_uses`]
+/// 同一规则，词表取标记块——标记部分是声明层块的子集，声明层剪枝保下的名字这里保下的是子集，
+/// 只会多留不会误删）。方法 trait 匿名导入全部剪去（标记层无方法面）。
+fn prune_marker_header(header: &str, block: &str) -> String {
+    super::layers::prune_uses(
+        header,
+        &[block],
+        &super::layers::AnonKeep::Set(BTreeSet::new()),
+    )
 }
 
 #[cfg(test)]

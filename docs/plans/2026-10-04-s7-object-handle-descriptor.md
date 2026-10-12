@@ -1033,13 +1033,78 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     - **系统性缝（`#[jvm_native]` 注入 `Self::__class_init()?`，20 文件）**：`jvm_native` 宏对静态 native 注入类初始化触发点，而 `__class_init` 在方法 trait 上——每个伴生文件（`use super::x::X` 非 glob 形态）都缺本类导入。批量补：console、random_access_file、process_handle_impl(_info)、finalizer、accessor_utils、native_method/native_constructor/direct_method_handle_accessor 三件、continuation_support、linux/mac_osx_socket_options、e_poll、k_queue、net(_ext)、socket/unix_dispatcher、bsd_file_system、bsd/linux_native_dispatcher、perf（含 `ByteBuffer__Methods`/`ByteOrder__Methods`——allocate / order_byteorder / nativeOrder / BIG_ENDIAN）、default_proxy_selector（含 `Proxy`/`Proxy_Type`/`InetSocketAddress`）、net_impl（含 `Inet4/6Address`、`InetSocketAddress`）。**同包 glob 伴生（`use super::*`，system/thread/class/string_utf16/strict_math 等 13 文件）经包 mod.rs 的 `pub use X::*` 已覆盖，无需处理**（33 例抽查实证）。
   - **排查方法（复用）**：路径调用扫描（`X::m` 正则 × use 表交叉 × 留固有名单）＋ `jvm_native` 静态注入面枚举＋ 主侧 diff 的 camelCase 实例调用增量的三合一；残余风险＝伴生文件不在既有抽查闭包内的实例调用（需类型推断，静态不可判），下批抽查覆盖新伴生宿主时自然暴露。
   - **验收（全过，abdd523b）**：宏单测 plan 39 / 缺省 35 全过、generator `cargo check --tests` 过；服务器作业 `bfx-acc`（us1，rc=0）：ArraysStream / HelloWorld / TestJunitAssertFamily PASS，加验 TestDirectBuffer / TestDirectBufferPaging（覆盖 zip 伴生修复）共 5/5；`bfx-seed`（jp1，rc=0）：四例种子 0/1/2 闭包集合对 batch-1013 基线（adf4cc1f）逐项全同（HelloWorld 641/2108/61、CollectorsDemo 662/2206/62、DeepCopy 2660/15390/801、TestSerialLookupPairing 2662/15380/795，`seed-sets: ALL-IDENTICAL`——s7-k3 的集合性质不变）。
+- **K6 本体（10-12，s7-k6 2e3e9c2f + 5e7b21b8，基于 batch-1013 31e4762d）**：`java_class!` 块拆出
+  类型标记层（`#[rava_layer = "marker"]`）——类 struct 的声明承载从声明层分离。
+  - **与文档分解的偏差（先行记录）**：K6 的文档前提是 K4（手写基础设施分层）与 K5（类初始化骨架
+    去按类展开），两者均未做（K4 未派、K5 未派）。标记部分引用 `__Handle` / `Object` / `__ClassDesc`
+    等，全部在手写 INFRA（overlay 进声明底段 crate）；没有 K4 的两层拆分，**不存在能放在声明链
+    之下的独立 `java_marker` crate**（标记 crate 依赖底段、底段又要标记类型 → 环）。本轮取过渡形态：
+    **标记文件与声明层文件同目录同段（同 crate）**，K4 落地后只剩文件搬移与路径前缀。K5 未做不
+    影响 K6 的机制正确性，只影响 D8 图收窄（⑤ 口径）的最终验收（归 K8）。
+  - **宏（`runtime/rava_macros_core`）**：`Layer::Marker` 只展开与签名无关的部分——wrapper
+    struct、`__from_parts` / `__from_image` / `__virtual_view` / `is_jvm_null` / `__nn` 固有 impl、
+    身份 std impl（Default/Clone/PartialEq/Debug）、`From<X> for Object`、`BINARY_NAME`、描述符
+    `X__DESC` / `X::__DESC`、`From<Object> for X`、`Into<Object>`（R-1）、`From<X> for Anc` 上转、
+    alloc/offsets 钩子外部声明（`place_fns` 对 marker 同 decl）。`Layer::Decl` 不再展开这些
+    （`__vt` 固有 impl 留声明层——引用本类 vtable trait，见遗留）。`Layer::Full` 拼回两段（`__vt`
+    自 `__from_parts` impl 拆出为独立 impl 块，项序与拆前不同、内容不变）；用户 crate / lib crate
+    零变化。接口遇 marker 层展开为空（接口本轮不拆）。
+  - **生成器（`emit`）**：新 `project/marker_side.rs`——D8 分段**之后**对已拆层根模块类发射标记文件
+    `<stem>_m.rs`（同目录同段；未拆层类不发射；同包 `Foo` / `FooM` 撞名退 `<stem>__m`，确定性）。
+    宿主声明文件头补一行 `pub use super::<标记模块>::<类名>;`——标记部分剥去后类名不在本模块，
+    声明层展开（`impl X` / `X__VTable` / `X__Methods` 实现）与实现层文件的
+    `use <声明层>::<包>::<类模块>::*;` 都要它；包级两 glob（类模块与标记模块）重复导出同一
+    `X`，同一定义不歧义。**声明文件块文本与 D8 分段输入逐字节不变**（改写在分段之后）——切段
+    逐类与基线一致由构造保证。底段包 mod.rs 由 `mod_tree` 按磁盘扫描自动声明标记模块；上段由
+    `DeclSegs::write_crates` 按 `marker.hosts` 补 `pub mod` / `pub use` 行。
+  - **K6pre 遗留清单归位（本轮形态）**：类 wrapper `is_jvm_null` 随标记层（from_parts impl 一部分）；
+    `_init_not_null` / `__init_on` / 字段访问器 `__get_*`/`__set_*` / `valueOf_*` 留**声明层文件**
+    固有 impl——同 crate 有效（访问器体引用 vtable 槽、`__init_on`/`valueOf_*` 外壳引用体函数
+    外部声明）；接口载体 `is_jvm_null` / `__default_*` / 载体关联常量不动（接口不拆层）。**K4 后
+    搬 crate 时的剩余项**：访问器与 `__vt`（引用 vtable trait，不能进标记 crate）须并入方法 trait
+    或调用点内联取视图（`self.__r.view::<dyn X__VTable>(depth)`）；`_init_not_null` / `__init_on` /
+    `valueOf_*` 与钩子外部声明可随标记文件走。
+  - **实施中修复**：首版把体函数 / base 函数生成挂在「声明层才算」的分支下，实现层（Body）静默
+    丢定义——cargo check 全绿但链接缺符号（`__jbm_*` / `*_base` undefined）。本机以
+    `cargo build --bin` 链接验证抓出（HelloWorld 链接失败→修复→过）。**教训：拆层类改动必须做
+    本地链接级验证，check 不覆盖 extern 声明 / 导出定义的配对。**
+  - **本机验证（dev，JDK 21）**：宏单测 41（`--features plan`）/ 35（缺省）全过（新增
+    `marker_layer_is_signature_free`——标记展开无 `__VTable` / `__Methods` / `__vt`、
+    `decl_layer_keeps_dispatch_face`、`wrapper_holds_handle_only` 改完整展开口径）；emit 单测 99
+    （新增 marker 文本切分 / 未拆层不发射 / 撞名避让 / 上段标记模块行 4 例）；generator
+    `cargo check --release --tests` 0 警告；HelloWorld / InterfaceDispatch / TestGenerics /
+    TestDynamicProxy 四例 emit→编译→rava-link 链接→运行输出与 JVM 期望逐字一致（TestDynamicProxy
+    1843 类，覆盖装箱工厂协议面 `valueOf_*` 固有寻址与代理路径）；双发 emit 树确定（时间戳版本号
+    外零差异）；HelloWorld 树 542 个标记文件（底段 317 + 上段 225）。**生成树对照（基线 31e4762d
+    同闭包重发射，逐文件 diff）**：新增 542 个 `_m.rs`、删除 0；修改 595 个文件全部为三类——542
+    个类文件只多一行 `pub use super::<m>::<Name>;`、48 个包 mod.rs 只多标记模块行、8 个
+    Cargo.toml 只差时间戳版本号，另 5 个为 vendor 宏 crate 源码（本轮宏改动）——**方法体与声明层
+    块文本逐字节不变**。
+  - **服务器验收（tag 前缀 s7k6b-，基线 31e4762d）**：`s7k6b-macro`（宏单测）、`s7k6b-seed`
+    （`scripts/diag/s7k6_seed_sets.sh 31e4762d`，四例 × 种子 0/1/2 闭包集合）、`s7k6b-det`
+    （`closure_independent_of_*` 两项）、`s7k6b-seg`（新 `scripts/diag/s7k6b_segments.sh`——三例
+    各段类文件集合逐项对照 + 标记文件体量统计）、`s7k6b-peak`（`scripts/diag/s7k6_peak.sh
+    31e4762d`，三例逐 crate 固定切段重建峰值）。结果见下「K6 服务器验收」节。
+  - **待验证清单（交主会话合批抽查，批级）**：K3 七例集（HelloWorld、CollectorsDemo、DeepCopy、
+    TestDynamicProxy、TestAnnoReflect、TestSerialLookupPairing、TestXmlTransform）＋ K6pre 新增例
+    （PolymorphicCopy、ArraysStream、HashMapStream、StreamToUnmodifiableCollections、
+    TestObjectNativeFrames）＋ K3 相关例（InheritanceChain、InterfaceDispatch、LambdaBasic、
+    StreamDemo、TestCollections、TestGenerics、Polymorphism、TestZonedDateTime、TestArrayList）＋
+    本轮 struct 搬移直接受影响面（标记层承载的 `From<Object>` 强转 / `From<X> for Anc` 上转 /
+    `Clone`·`Debug`·`PartialEq` 身份 impl / `__from_image` 引导映像常量 / 描述符 `__DESC` 反射面）：
+    TestCoerceBoxCast、TestMhBoxCast、TestReflectBoxCast、TestUnboxWrapperFaces、
+    TestWidenFacesInvoke、TestWrapperValueFaces、ReflectionAPI。本机已过四例（HelloWorld、
+    InterfaceDispatch、TestGenerics、TestDynamicProxy——含 1843 例的装箱工厂协议面）。
+  - **K7 / K8 衔接**：K7（共置手写随宿主）独立可并行——标记文件按类同段落盘，宿主判定不受影响；
+    K4 落地后标记文件整体挪入 `java_marker` crate，届时 D8 图只剩 inherit / hidden 边（⑤ 口径）
+    的验证归 K8 档案验收（连同标记 crate 自身体量——本轮已随 `s7k6b-seg` 产出逐例统计）。
 - **K4 及后续方案**（10-11 用户暂停派发新代理，K4 未派，以下为续作入口）：
   - **K3 收尾**：10-11 晚已完成分解归因与两轮修复（15276d82，见上「K3 收尾」节）：切段漂移全部收回（与基线逐类一致）、底段峰值 +24–31% 收窄到 +8%（本机口径）、body crate 达标、DeepCopy 工作区复测与全量单测已发服务器作业。**剩余决策**：~~须用户裁决后合入~~ **已裁决（2026-10-12 用户）：阈值放宽至 ±10%，K3 随下一批合入**（batch-1012 未等 K3；固有 impl 保留 / 选择性 trait 的进一步压缩并入 K6 取舍；s7k3-fix2 三例同机复测 +7.1–9.5% 见上表）。
   - **K4** 运行时基础设施分层：按上表实施。新增两项要求：
     - 标记层基础只含类型与句柄，不含任何 `use …__Methods`；
     - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层。
   - **K5** 类初始化骨架去按类展开：与 K3、K4 无依赖，可与 K3 收尾并行。
-  - **K6** 标记 crate 生成：前提是 K3（含第 5 项改名——✅ 已随 K6 前置项完成，std 同名与接口载体成员均已在方法 trait 上）、K4、K5。方法 trait 与其 impl 留声明 crate；标记 crate 展开文本不含 `__Methods`。
+  - **K6** 标记 crate 生成：前提是 K3（含第 5 项改名——✅ 已随 K6 前置项完成，std 同名与接口载体成员均已在方法 trait 上）、K4、K5。**机制已随 10-12 K6 本体落地（同 crate 标记文件过渡形态，见上「K6 本体」节）**；独立 `java_marker` crate 待 K4（标记文件搬移 + 路径前缀 + 访问器/`__vt` 并入方法 trait）。方法 trait 与其 impl 留声明 crate；标记层展开文本不含 `__Methods`（✅ 宏单测守护）。
   - **K7** D8 共置手写随宿主：独立。注意 K3 增加的 `use` 行改变了按体量切段的结果，模拟器（`decl_scc_sim.py`）的体量口径需同步计入导入行，或改为不计 `use` 行。
   - **K8** 档案验收：按上表；连同 K2 留下的 §4.3 热循环用例、StockTrans 计时一并补测。
 - 下一步：
