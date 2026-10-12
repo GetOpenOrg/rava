@@ -468,8 +468,8 @@ impl Engine<'_> {
         // 枢纽真实深字节：Hub 结构 + recvs/plain B 树 + links 的 Rc<Link>（含实参 Args）+ 其余集合
         let mut hubs_b = self.hubs.len() * std::mem::size_of::<Hub>();
         for h in &self.hubs {
-            hubs_b += h.recvs.len() * 6 + h.plain.len() * 10 + h.edged.len() * 8 + h.skeys.len() * 12;
-            hubs_b += h.ltargets.len() * 10 + h.lhubs.len() * 6 + h.lbind.len() * 14;
+            hubs_b += h.recvs.cap_bytes() + h.plain.cap_bytes() + h.edged.capacity() * 12 * 9 / 7 + h.skeys.capacity() * 12 * 9 / 7;
+            hubs_b += h.ltargets.cap_bytes() + h.lhubs.cap_bytes() + h.lbind.cap_bytes();
             hubs_b += h.special.values().map(|v| 16 + v.len() * 4).sum::<usize>();
             if let Some(v) = h.vals.as_ref() {
                 hubs_b += v.len() * std::mem::size_of::<PV>();
