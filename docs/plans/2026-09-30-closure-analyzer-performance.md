@@ -803,6 +803,10 @@ S0 ≤20 万上下文 / ≤16 GiB 的目标未达成，20 万上下文量级在�
   `summary.perf.site_cap` 确认零触发（四例最大单点变体 228）。
 - 剖析计量本身（35994a96 计数分配器 + f9de87f1 待推增量字节计量）不改变输出：f9de87f1 对 693b6c50 在
   HelloWorld / DeepCopy（种子 0）上规范化 JSON 逐项相同（本机 heavy_lock 复核）。
+- **确定性两项通过**（作业 `g1c2-det`，dev#22 槽 28 GiB，f9de87f1，缺省 `SITE_CAP`）：
+  `closure_independent_of_order` 与 `closure_independent_of_hash_seed` 均 ok（2 passed / 0 failed，
+  测试段 5805 s；计数开销较 g1ctx-det8 的 3370 s 拉长）。注：g1c2-scapreg job 02 曾在 18 GiB 分片上限内
+  被 OOM 杀（测试双线程并发峰超限），换 28 GiB 槽后通过，非测试失败。
 - **机制否定（负结果，三处实测同档）**：分配点变体数——语料扫描（作业 `g1c2-objscan`，全语料单例闭包
   1123 例取 final dump `objsite` 行，3 分片 × 并行 3；1108 例 rc=0 有数，11 例 rc=1 为 §4.12 已知的 JUnit /
   TestUnnamedVar 类路径族，4 例 rc=137 为 18 GiB 分片上限内 3 并发被杀的重量级 XML 例——其同族已测例
