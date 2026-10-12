@@ -320,7 +320,7 @@ impl Engine<'_> {
         }
         let hp = |p: &idset::ReprProfile| {
             format!(
-                "n={} dense={} sp={} bytes={:.0}MiB words={:.0}MiB fill={} est_b={:.0}MiB est_a={:.0}MiB",
+                "n={} dense={} sp={} bytes={:.0}MiB words={:.0}MiB fill={} est_b={:.0}MiB est_s={:.0}MiB est_a={:.0}MiB",
                 p.sets,
                 p.dense_n,
                 p.sparse_n,
@@ -328,6 +328,7 @@ impl Engine<'_> {
                 p.words_cap as f64 / 1048576.0,
                 if p.words == 0 { 0 } else { p.nz_words * 100 / p.words },
                 p.est_blocks as f64 / 1048576.0,
+                p.est_sparse as f64 / 1048576.0,
                 p.est_adaptive as f64 / 1048576.0,
             )
         };

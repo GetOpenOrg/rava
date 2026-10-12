@@ -48,8 +48,9 @@ pub(super) struct ReprProfile {
     pub(super) len_hist: [u64; 7],
     /// fill 直方图（非零字 / 字数）：<5% / <20% / <50% / <80% / ≥80%
     pub(super) fill_hist: [u64; 5],
-    /// 块式估计 / 逐集合自适应估计（字节）
+    /// 块式估计 / 纯稀疏估计（len×4×1.25 容量余量）/ 逐集合自适应估计（三者与现状取小，字节）
     pub(super) est_blocks: u64,
+    pub(super) est_sparse: u64,
     pub(super) est_adaptive: u64,
 }
 
@@ -117,7 +118,10 @@ impl IdSet {
                     }
                 }
                 p.est_blocks += est;
-                p.est_adaptive += est.min(cur);
+                // 纯稀疏估计：有序 u32 数组（容量按 1.25 倍摊还），宽距低密度集合的最小形态
+                let sp = n as u64 * 5 + 24;
+                p.est_sparse += sp;
+                p.est_adaptive += est.min(cur).min(sp);
                 // fill 直方图按本集合的非零字占比
                 let local_nz: u64 = d.sum.iter().map(|s| u64::from(s.count_ones())).sum();
                 let r = if wl == 0 { 0 } else { local_nz * 100 / wl.max(1) as u64 };
