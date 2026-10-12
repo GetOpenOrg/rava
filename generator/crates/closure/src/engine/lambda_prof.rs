@@ -416,8 +416,10 @@ impl Engine<'_> {
             }
         }
         let lcall_col = self.lcalls.capacity() * std::mem::size_of::<LCall>();
+        // 子类型判定缓存（SubRow：按过滤类型的 known/yes 位图，尺寸随查过的 x id 增长——2^16 段候选）
+        let subrow_b: usize = self.sub_rows.iter().map(|r| r.prof_bytes()).sum();
         eprintln!(
-            "{tag} census deep gcols={:.0}MiB gids={:.0}MiB gedges={:.0}MiB gseen={:.0}MiB gextra={:.0}MiB watch={:.0}MiB call_watch={:.0}MiB disp={:.0}MiB ldone={:.0}MiB recv_done={:.0}MiB lcall_col={:.0}MiB largs={:.0}MiB lcalls_n={}",
+            "{tag} census deep gcols={:.0}MiB gids={:.0}MiB gedges={:.0}MiB gseen={:.0}MiB gextra={:.0}MiB watch={:.0}MiB call_watch={:.0}MiB disp={:.0}MiB ldone={:.0}MiB recv_done={:.0}MiB lcall_col={:.0}MiB largs={:.0}MiB subrows={:.0}MiB lcalls_n={}",
             gcols as f64 / 1048576.0,
             gids as f64 / 1048576.0,
             gedges as f64 / 1048576.0,
@@ -430,6 +432,7 @@ impl Engine<'_> {
             recv_done_b as f64 / 1048576.0,
             lcall_col as f64 / 1048576.0,
             args_b as f64 / 1048576.0,
+            subrow_b as f64 / 1048576.0,
             self.lcalls.len(),
         );
         let hub_recvs: usize = self.hubs.iter().map(|h| h.recvs.len()).sum();
