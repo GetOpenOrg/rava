@@ -220,6 +220,17 @@ impl Engine<'_> {
             self.hub_sites.len(),
             self.mref_keys.len(),
         );
+        // 排空点等价类合并（eqmerge.rs）：累计检查点 / 合并类 / 并掉节点 / 克隆组 / 细化轮 / 耗时 / 标记克隆数
+        eprintln!(
+            "{tag} eqmerge ckpts={} classes={} nodes={} groups={} rounds={} ms={} marked={}",
+            self.eqm.stats[0],
+            self.eqm.stats[1],
+            self.eqm.stats[2],
+            self.eqm.stats[3],
+            self.eqm.stats[4],
+            self.eqm.stats[5],
+            self.eqm.marks.len(),
+        );
         // 内存剖析（同上，定位 RSS 尖峰）：分配器计数 + 主要驻留结构的字节估计。
         // rss_max 为上一段 dump 间隙的采样峰值；live（活跃字节）与 rss 之差是分配器滞留
         let ac = &crate::alloc_prof::COUNTERS;

@@ -97,14 +97,30 @@ impl<'a> Engine<'a> {
         self.pstr.sites.get(&(m, i)).into_iter().flatten().copied().collect()
     }
 
+    /// 槽的常量集（升序字面量序号；克隆等价前置签名用，`eqmerge.rs`）
+    pub(super) fn pstr_set_ids(&self, s: PSlot) -> Option<Vec<u32>> {
+        self.pstr.sets.get(&s).map(|xs| {
+            let mut v: Vec<u32> = xs.iter().collect();
+            v.sort_unstable();
+            v
+        })
+    }
+
     /// 槽 s 的子集边后继中记污染的槽（方法 / 枢纽形参槽）
     pub(super) fn pstr_succ_slots(&self, s: PSlot) -> Vec<PSlot> {
         self.pstr.succ.get(&s).into_iter().flatten().copied().filter(|u| matches!(u, PSlot::M(..) | PSlot::H(..))).collect()
     }
 
-    /// 常量并入槽 at，沿子集边传递（只传新增部分）
+    /// 常量并入槽 at，沿子集边传递（只传新增部分）。方法形参槽的增长锁步扇出到等价组成员（`eqmerge.rs`）
     fn pstr_add(&mut self, at: PSlot, strs: IdSet) {
-        let mut work = vec![(at, strs)];
+        let mut work = vec![(at, strs.clone())];
+        if let PSlot::M(t, i) = at {
+            for u in self.eqm.mates.get(&t).into_iter().flatten().copied().collect::<Vec<_>>() {
+                if u != t {
+                    work.push((PSlot::M(u, i), strs.clone()));
+                }
+            }
+        }
         while let Some((s, xs)) = work.pop() {
             let set = self.pstr.sets.entry(s).or_default();
             let new = xs.minus(set);
@@ -172,11 +188,18 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 方法 t 有实参值未知的调用边（或无调用点记录即被分析）：形参槽推不出
+    /// 方法 t 有实参值未知的调用边（或无调用点记录即被分析）：形参槽推不出。锁步扇出到等价组成员（`eqmerge.rs`）
     pub(super) fn pstr_top_m(&mut self, t: usize) {
         if self.pstr.top_m.insert(t) {
             for i in 0..self.methods[t].ptypes.len() {
                 self.pstr_wake(PSlot::M(t, i));
+            }
+        }
+        for u in self.eqm.mates.get(&t).into_iter().flatten().copied().collect::<Vec<_>>() {
+            if u != t && self.pstr.top_m.insert(u) {
+                for i in 0..self.methods[u].ptypes.len() {
+                    self.pstr_wake(PSlot::M(u, i));
+                }
             }
         }
     }
@@ -188,6 +211,16 @@ impl<'a> Engine<'a> {
             for i in 0..self.methods[t].ptypes.len() {
                 for off in self.pstr_readers(t, i) {
                     self.push_site((t, off), site_prof::TRIG_TAINT, None);
+                }
+            }
+        }
+        // 锁步扇出（`eqmerge.rs` 等价组）
+        for u in self.eqm.mates.get(&t).into_iter().flatten().copied().collect::<Vec<_>>() {
+            if u != t && self.pstr.offsite.insert(u) {
+                for i in 0..self.methods[u].ptypes.len() {
+                    for off in self.pstr_readers(u, i) {
+                        self.push_site((u, off), site_prof::TRIG_TAINT, None);
+                    }
                 }
             }
         }

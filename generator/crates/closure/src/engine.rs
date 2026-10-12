@@ -64,6 +64,7 @@ mod lambda_prof;
 mod ctx_prof;
 mod ctx_free;
 mod ctx_flat;
+mod eqmerge;
 mod hub_prof;
 mod gather;
 mod defs;
@@ -464,6 +465,8 @@ pub struct Engine<'a> {
     ctx_flat_hits: u64,
     ctx_flat_mode: u8,
     level_inited: HashSet<(String, u32)>,
+    /// 常量载体与排空点等价类合并（`eqmerge.rs`，性能计划 §4.14 ①）：位 1/2 通道开的克隆按等价类合并
+    eqm: eqmerge::Eqm,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,

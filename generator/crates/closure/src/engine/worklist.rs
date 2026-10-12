@@ -111,6 +111,13 @@ impl<'a> Engine<'a> {
                 if self.rdirect_release() {
                     continue;
                 }
+                // 工作队列排空：排空点等价类合并（§4.14 ①，`eqmerge.rs`；位 1/2 通道开才做，
+                // 分档门控）。合并在种子轮前——种子补入的新工作沿合并后的图继续传播
+                if self.eq_merge_due() {
+                    self.stat_enter(Phase::Flows);
+                    self.eq_merge_checkpoint();
+                    self.stat_leave();
+                }
                 // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
                 self.stat_enter(Phase::Seeds);
                 let seeded = self.seed_round();
