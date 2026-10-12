@@ -802,11 +802,13 @@ S0 ≤20 万上下文 / ≤16 GiB 的目标未达成，20 万上下文量级在�
   （唯一差异 `summary.boot_image.eval_ms` 计时抖动，`closure_bench.sh --diff` 此前不剔该字段、已修）；
   `summary.perf.site_cap` 确认零触发（四例最大单点变体 228）。
 - **机制否定（负结果，三处实测同档）**：分配点变体数——语料扫描（作业 `g1c2-objscan`，全语料单例闭包
-  1082 例取 final dump `objsite` 行，3 分片 × 并行 3）最大 **291**（`TestConcatLoneSurrogate` 的
-  `ArrayList$Itr`，次一档 206–273）；sb3 终态最大 **261**（`ConcurrentHashMap$Node/TreeNode` 一族）；
+  1082 例取 final dump `objsite` 行，3 分片 × 并行 3；1074 例有数，8 例 rc=1 为 §4.12 已知的 JUnit /
+  TestUnnamedVar 类路径族，重例本次全部跑完无缺失）**最大 302**（`TestRandomFactoryAll` 的
+  `ArrayList$Itr`；p99 291 / p90 206 / p50 20，前列几乎全是 `ArrayList$Itr` 与 CHM 节点一族）；
+  sb3 终态最大 **261**（`ConcurrentHashMap$Node/TreeNode` 一族）；
   S0 A 全开（`g1ctx-s0a` 3949 s 一段）最大 **213**（同 CHM 一族），`objsites=11653` 个分配点摊 2.3 万对象。
   **三者的单点宽度同在 200–300 档，不存在「宽分配点」**：对象总量的放大是「（站点 × 外层上下文） × 每对象
-  十余个方法」的总量放大，不是单点宽度。任何语料安全阈值（≥291）在 sb3 / S0 上同样不触发——
+  十余个方法」的总量放大，不是单点宽度。任何语料安全阈值（≥302）在 sb3 / S0 上同样不触发——
   堆链选择性（按站点封顶）**不解决 G1**。实现保留（语料零触发、零开销、`RAVA_SITE_CAP` 可调，作后续
   对象数实验的现成机制），缺省 16384。
 - sb3 / S0 复测按「行为中性」处理：缺省阈值零触发时输出与基线逐字节一致（四例已证），曲线即 §4.12/§4.13
