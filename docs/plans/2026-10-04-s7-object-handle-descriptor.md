@@ -1176,49 +1176,61 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     `__default_*` 应在 trait 声明）；**HelloWorld、CollectorsDemo、DeepCopy 三例 emit→编译→
     rava-link→运行输出与 JVM 逐字一致**（覆盖装箱协议面 / 访问器 / 虚分派 / lambda-sam / 接口
     default / 反射 clone 链）。
-  - **阶段 3（未做，续作入口）——INFRA 主体搬移 + 标记文件挪入 java_marker，原子落地**：
-    - **为何原子**：`ObjectVTable::getClass(&self) -> Result<Class>` 的签名引用生成类 `Class`
-      （java.lang.Class 是字节码翻译类）。`ObjectVTable` 整体随 object.rs 入 java_marker 时，
-      `Class` 的标记 struct 必须已在 java_marker（即标记文件已搬入）——否则不可解析。同理
-      `JvmError::catch_any` / `dispatch_uncaught` 签名引用 `Throwable` / `Thread`。**不可行方案
-      已排除**：手写最小 Class 标记占位（其 DESC 引用约 30 个类 / 接口标记，级联不可收敛）；
-      getClass 移出 ObjectVTable（final 方法，数组分派依赖 T 不可恢复）。
-    - **运行时搬移清单**（java_runtime → java_marker，行为面 extern 钩子转交）：
-      `class_desc.rs`（纯）、`field_desc.rs`（纯——`__clone_fields` / Unsafe 按名协议全在标记层类型
-      上）、`error.rs`（拆分：struct / `Result` / `thrown` / `class_name` / `is_instance_of` /
-      `catch_as` 与签名安全的 VM 构造器留标记（体 = `__rava_marker_*` 钩子）；签名引用
-      `Throwable` / `Thread` 的 `catch_any`（零调用点，可删）与 `dispatch_uncaught`（三个手写调用
-      点改自由函数 `dispatch_uncaught(&JvmError, &Thread)`，vmrules 的 fns 名单不受影响——名保留））
-      、`handle.rs`（`__Handle` / `__IfaceRef`；释放计深 `__release` → 钩子；`__stack_check` → 钩子）、
-      `java/lang/object.rs`（`Object` / `ObjectVTable` / `__TypedNull` / JVM_NULL / 基本类型盒 /
-      `JvmRef` / Rc 数组 impl；钩子：object_body 五函数（equals / toString / wait×3 / finalize——
-      行为侧包装返回 std String 消 String 签名依赖）、monitor 五入口、`Class::for_class` /
-      `Class::__mirror_hash`（`__object_identity_hash` 留标记）、`java_fmt_*` 纯函数随迁再导出）、
-      `java/lang/object_ext.rs`（impl Object 全块——`try_cast_array` 依赖的 `array::try_array_view`
-      随数组系统同迁；`meta::java_name` → 钩子）、`array.rs` + `array/{obj,store,view,vtable}.rs`
-      （`ObjectVTable` 的数组 impl 必须随 trait 同 crate——orphan；钩子：`Class::for_class` /
-      `Class::__name_assignable` / `gil::safepoint`）、lib.rs 的 `_is_jnull` / `_is_jnull_ref` /
-      `java_fmt` 族。
-      声明层包 mod.rs 注入：`pub use java_marker::java::lang::object::*;`（`crate::java::lang::Object`
-      等旧路径零变化；java_marker 侧 java/lang/mod.rs 手写真源声明 object / object_ext）。
-    - **生成器清单**：`marker_side` v2——标记文件落 `<scratch>/java_marker/src/<pkg>/<stem>_m.rs`
-      （类与接口都要——接口标记文件承载载体身份面，接口声明文件 `pub use java_marker::…` 再导出，
-      宏侧已就绪）；宿主声明文件的再导出行改 `pub use java_marker::<pkg>::<m>::<Name>;`；java_marker
-      的包 mod.rs（镜像手写真源 + 生成模块合并，同 mod_tree 口径）与 lib.rs 补全；java_marker 侧
-      prelude（标记文件头 `use crate::prelude::*;` 的标记子集——`__Handle` / `Object` / `JvmError` /
-      `Result` / `__ClassDesc` / `__FieldDesc` / `__FieldKind` / `__TypedNull` / `__ThreadSafe` /
-      `__erased_view` / `__class_from_object` / `JArray`）；`object_ext` 用的 `#[jvm_ext]` 需要
-      java_marker 依赖 rava_macros（scratch 内重定向到 vendor/）；`InstrFacts` / `root_api` /
-      `handwritten_vtable_impls` 审计扫两处真源。
-    - **切片与峰值口径**：D8 分段输入不含标记文件（K6 同 crate 形态即如此——标记文件是分段后
-      新增文件），搬移不改切段；声明 crate 源码减标记文件字节（HW 约 −6.15 MB）——阶段 2 的
-      trait 项回涨（估 +0.5–1.5 pp）由本项收回。java_marker 自身峰值见 §9.8.2 探针（语料量级
-      约 1.0 GB，非约束）。
-    - **standalone 编译面变化（须接受并记入 CI 口径）**：阶段 3 后 `runtime/java_marker` 手写
-      真源引用 `Class`（getClass 签名）——该类型只在 scratch（生成标记文件）存在，**java_marker
-      与 java_runtime 的 standalone `cargo check` 不再是绿色口径**（java_runtime standalone 在
-      阶段 1 前即因 java/jdk/sun 占位 mod.rs 缺失而非绿）；以「scratch 全构建 + 宏单测 +
-      generator check」为口径。
+  - **阶段 3（⛔ 10-12 原子落地受阻，已回退到可编译状态——续作入口）——INFRA 主体搬移 +
+    标记文件挪入 java_marker**：
+    - **受阻根因（原清单外的结构性缺口，续作必须先解）**：伴生手写文件（`<x>_impl.rs` /
+      `_ext.rs`，约 100 份：`class_impl` / `string_impl`+`string_ext` / `thread_impl` /
+      `throwable_impl` / `double_impl` / `shutdown_impl` …）对**生成类 wrapper 的固有
+      impl**（`impl Class {`、`impl String {` 等；native/边界成员的真实定义，生成侧以
+      `#[impl_methods = "..."]` 名单引用它们，调用点（含生成的方法体）按固有方法解析）。
+      wrapper struct 随标记文件挪入 java_marker 后，定义 crate 变为 java_marker，这些
+      固有 impl 在声明层 crate 全部 **E0390**（固有 impl 必须与 struct 同 crate，§9.2
+      的硬约束——K3/K6 只把**宏生成**的可读层成员移入了方法 trait，手写面未动）。服务器
+      实测（s7k4c-cddp，c66f7814）：DeepCopy 编译失败；另一处独立小缺口同场暴露——标记
+      文件头的 `use crate::…::X__VTable;` 单名导入（`prune_uses` 的词规则：块内出现
+      `X` 即保 `X__VTable`）在 java_marker 侧不可解析（vtable trait 留声明层），E0432
+      （`standard_charsets_m.rs` 的 `CharsetProvider__VTable`）。
+    - **不可行的绕行（本轮论证排除，续作勿再走）**：
+      - 伴生整体挪入 java_marker：其方法体大量调用声明层方法 trait（`__get_*` /
+        `Class__Methods` 等），且违反「标记层不含 `__Methods`」的用户要求（10-12 两项
+        之一）；
+      - 只挪部分类的标记文件：标记文件的引用闭包（祖先 ∪ 接口 ∪ 字段类型）在
+        java.base 上不可截断（与手写最小 Class 占位同一级联），部分挪 = 全量挪；
+      - wrapper struct 双定义（两 crate 各一份）：不同名义类型，From/identity 全断。
+    - **可行出路（建议的续作首步，工作量以文件数计）**：手写面从固有 impl 迁到**声明层
+      扩展 trait**——生成器对每个有 `impl_methods` 的类发射 `pub trait __XHw<..>:
+      X__Methods<..> { /* 与 impl_methods 同形的签名（生成侧已有全部签名——今天的
+      `// [meta]` 注释）*/ }`（声明层 crate，trait 本地 + 类型本地，孤儿规则允许），
+      伴生文件把 `impl X {` 机械改写为 `impl __XHw for X {`（体不动），调用点由生成器
+      的导入机制补 `use …::__XHw as _;`（与 b1013-fix 的方法 trait 导入同一机制；手写
+      调用点按既有排查法补 use 行）。**落地后 wrapper struct 不再有声明层固有依赖**，
+      阶段 3 的搬移清单即可原样执行。改写约 100 份伴生文件（模式机械：impl 头替换 +
+      `Self::__class_init` 一类注入点核对 `#[jvm_native]` 语义不变），建议单独成步
+      （K4-2a）并先在 3–5 份文件上走通宏 / 生成器配合面。
+    - **已落地并保留的部分（854dc7f3，零操作安全件）**：接口宏拆层修正——`expand_interface`
+      的 `Layer::Decl` 不再包含载体身份面（iface_marker；原 `_` 臂同时给了 Full 与
+      Decl，标记文件独立成 crate 后会重复定义）；当前无接口文件带层属性，零操作；宏守护
+      单测 `interface_layers_split_carrier_face`（宏单测 36（缺省）/42（plan）过，
+      s7k4c-macro，jp2 rc=0）。
+    - **完整实现已做并在分支历史（c66f7814，revert 6f9ac2a0 保留可 cherry-pick）**：
+      运行时搬移与 39 枚 `__rava_marker_*` 钩子（error 拆分 / object 三件 / array 系统 /
+      handle / desc / java_fmt / _is_jnull 族 + java_runtime 按原路径再导出）、
+      marker_side v2（标记文件落 java_marker、接口拆层、不透明类文件双发、宿主再导出
+      改 `pub use java_marker::<pkg>::<m>::<Name>;`）、java_marker 包 mod 树 / lib.rs
+      补全 / prelude / vendor 重定向、闭包分析器双根扫描（种子集合构造性不变）+ 缓存
+      指纹、InstrFacts / root_api / handwritten_vtable_impls 扫两处。**续作两处修补**：
+      （a）`prune_marker_header` 加剪 `__VTable` / `__Methods` 后缀的单名导入（E0432 的
+      修法，一处小改）；（b）上述 __XHw 扩展 trait 落地后重放。generator `cargo check
+      --release --tests` 在 c66f7814 即过（0 警告），宏单测 42/36 过——受阻仅在
+      scratch 链接级。
+    - **standalone 口径变化（回退后不生效，续作落地时再记）**：java_marker / java_runtime
+      真源 standalone `cargo check` 非绿（getClass 签名引用的 Class 只在 scratch）；
+      以「scratch 全构建 + 宏单测 + generator check」为口径。
+    - **阶段 3 验证作业（tag 前缀 s7k4c-）回收状态**：`s7k4c-macro` ✅（jp2，rc=0，
+      36/42——含新守护）；`s7k4c-hw`（口径误用系统 python，作废）/ `s7k4c-hw2`
+      （c66f7814，rc=1 编译失败——证据如上）/ `s7k4c-cddp`（同，DeepCopy compile
+      error 3m56.6s）/ `s7k4c-hw3`（kill，证据已足够）；回退后 `s7k4c-hw4`
+      （854dc7f3）验证分支尖 = 阶段 2 形态 + 宏修正可编译可运行。
   - **阶段 2 服务器验收（tag 前缀 s7k4-，基线 s7-k6 a07fbb6f，交回时在跑）**：
     - `s7k4-macro` ✅（jp2，rc=0）：宏单测 **plan 41/41、缺省 35/35**。
     - `s7k4-seed`（jp1）：`s7k6_seed_sets.sh a07fbb6f` 四例 × 种子 0/1/2 闭包集合对照——日志尾
