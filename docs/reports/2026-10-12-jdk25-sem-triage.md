@@ -88,12 +88,12 @@ FractionReduction 已实证转过。分类与验收以 release 为准；dev 档�
 
 ## 5. 交接（下一棒从这里继续）
 
-1. 盯 `/data/workspace/rava-wt/j25-sem/cluster_results/job/{j25s-rA,j25s-rB,j25s-fix1}/summary.json`
+1. 盯 `/data/workspace/rava-wt/j25-sem/cluster_results/job/{j25s-rA,j25s-rB,j25s-fix2}/summary.json`
    （勿裸 pgrep）。rA/rB 完成后：解包各 `NN/j25s2-g*-logs.tgz`，用逐例 run.log/build.log 聚类
    （聚合脚本雏形 `/tmp/j25s_collect.py`），把 §2.2 的「预期已修」坐实、新簇落 §2.3。
 2. OOM 类现名单 = rA/rB summary 的 `oom` 条目 + §2.1 已列名字，交主会话大槽批量重跑。
-3. j25s-fix1 两作业 rc=0 即代表例验收完成；若 FunctionalCompositionTest 仍败，读
-   `build/j25sfix-a.out`（服务器检出 `/data/rava-spot-job-j25s-fix1`）。
+3. j25s-fix2 两作业 rc=0 即代表例验收完成；若 FunctionalCompositionTest 仍败，读
+   `build/j25sfix-a.out`（服务器检出 `/data/rava-spot-job-j25s-fix2`）。
 4. 派发器均为 setsid 脱离进程，本子代理结束后继续运行；如需停止：`pkill -f "job j25s-rA"` 等。
 5. 未竟事项：junit 8 例 OOM（G1 线）、HttpLoopback native 缺口、resource-bundle-by-name、
    StackFrameInfo 反射流（G1 线）均维持 open 登记，不在本分支修复。
