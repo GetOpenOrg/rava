@@ -3,7 +3,9 @@
 
 用法：
   scripts/marker_crate_probe.py <names.txt> <out_dir>
-  (cd <out_dir> && /usr/bin/time -v cargo build)        # 只在服务器上跑
+  (cd <out_dir> && RUSTC_WRAPPER= /usr/bin/time -v cargo build)   # 只在服务器上跑；
+  # 本机若配了 rustc-wrapper=sccache 必须置空 RUSTC_WRAPPER——命中缓存不跑 rustc、
+  # 未命中时真编译在守护进程内而 time 只见瘦客户端，两种情况峰值都是假数据（2026-10-13 踩坑）
 
 <names.txt>：每行一个 binary name（如 `java/lang/String`；可由 `jimage list` 取 java.base 全部类），其后可跟空格分隔的
 全部祖先（父类与接口的传递闭包，由 `decl_scc_full.py --ancestors` 产出）；清单内的祖先各生成一个上转 `From`。
