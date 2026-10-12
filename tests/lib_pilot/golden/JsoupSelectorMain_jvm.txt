@@ -1,0 +1,14 @@
+PASS class-and
+PASS class-only
+PASS attr-exists
+PASS attr-eq
+PASS attr-prefix
+PASS nth-child
+PASS td-last
+PASS data-attr
+PASS not-selector
+PASS contains-text
+PASS element-count
+PASS union-selector
+PASS empty-input-value
+DONE JsoupSelectorMain

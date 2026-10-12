@@ -1,0 +1,14 @@
+PASS first-get
+PASS second-get
+PASS other-key
+PASS load-count
+PASS getall
+PASS load-count-after
+PASS after-invalidate
+PASS load-count-final
+PASS hit-count
+PASS miss-count
+PASS size
+PASS manual-present
+PASS manual-absent
+DONE CaffeineManualMain

@@ -1,0 +1,7 @@
+PASS events-count
+PASS event1
+PASS event2
+PASS event3-head
+PASS event3-throwable
+PASS level-filter
+DONE LogbackPatternMain

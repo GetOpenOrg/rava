@@ -1,0 +1,3 @@
+providers=0
+PASS logger-initialized false
+DONE Slf4jSpiMain

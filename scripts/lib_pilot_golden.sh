@@ -69,21 +69,22 @@ pilot_cp_table() {
     JodaBasicMain|JodaChronologyMain|JodaPeriodMain) echo joda-time ;;
     Lang3NumberUtilsMain|Lang3ReflectMain|Lang3StringUtilsMain|Lang3TimeFormatMain|Lang3TupleMain) echo commons-lang3 ;;
     IoCopyMain|IoEndianMain|IoFilenameMain) echo commons-io ;;
-    OgnlCollectionMain|OgnlContextMain|OgnlEvalMain) echo ognl ;;
+    OgnlCollectionMain|OgnlContextMain|OgnlEvalMain) echo ognl,javassist ;;
     JsoupParseMain|JsoupSelectorMain) echo jsoup ;;
     CaffeineManualMain|CaffeineWeigherMain) echo caffeine ;;
     YamlRoundTripMain|YamlTypesMain) echo snakeyaml ;;
     HoconParseMain) echo config ;;
     AssertJChainMain) echo assertj-core ;;
     FastjsonPathMain|FastjsonStreamMain) echo fastjson2 ;;
-    LogbackConfigMain|LogbackPatternMain) echo logback-classic,logback-core ;;
+    LogbackConfigMain|LogbackPatternMain) echo logback-classic,logback-core,slf4j-api ;;
     Log4j2ApiMain) echo log4j-api ;;
     DatabindAnnotationMain|DatabindDeserMain|DatabindSerMain) echo jackson-databind,jackson-core,jackson-annotations ;;
     ServletAnnotationMain|ServletCookieMain|ServletEnumMetaMain|ServletSessionEventMain) echo jakarta.servlet-api ;;
     JpaAnnotationMain|JpaEnumMetaMain) echo jakarta.persistence-api ;;
-    SpringGenericResolverMain|SpringProxyJdkMain|SpringReflectUtilsMain|SpringUtilAssertMain) echo spring-core,spring-jcl ;;
-    AsmGenerateMain|AsmTransformMain) echo asm ;;
-    AsmCommonsMain) echo asm,asm-commons ;;
+    SpringGenericResolverMain|SpringReflectUtilsMain|SpringUtilAssertMain) echo spring-core,spring-jcl ;;
+    SpringProxyJdkMain) echo spring-aop,spring-core,spring-jcl ;;
+    AsmGenerateMain) echo asm ;;
+    AsmTransformMain|AsmCommonsMain) echo asm,asm-commons ;;
     KotlinStdlibPilotMain) echo kotlin-stdlib ;;
     *) return 1 ;;
     esac
@@ -116,6 +117,7 @@ print(",".join(tomllib.loads(open(sys.argv[1], encoding="utf-8").read()).get("cp
 }
 
 GOLDEN_ID="$MODE"          # golden 文件名（既有 id 模式 = id；项目模式 = <库>_<入口简名>）
+MODE_TAG="$(echo "$MODE" | tr "/" "_")"   # /tmp 日志文件名（项目模式 MODE 含 /，须打平）
 SRCDIR="."                 # 源目录（"." = tests/lib_pilot 平铺单文件）
 MAIN_ARGS=()               # rava build 额外参数（多文件项目须 --main 声明入口）
 
@@ -241,12 +243,16 @@ print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', sys.argv[1]).lower())
 PY
 )"
 TRANSPILE_S=-
+# rava build 在 cd "$REPO_ROOT" 后调用：源列表须锚仓库根前缀（main 既有口径是
+# tests/lib_pilot/$MAIN.java 硬编码；SOURCES 相对 tests/lib_pilot，此处统一补前缀）
+RAVA_SOURCES=()
+for _s in "${SOURCES[@]}"; do RAVA_SOURCES+=("tests/lib_pilot/$_s"); done
 if [[ "$TRANSPILE" == 1 ]]; then
     _t0=$EPOCHREALTIME
     # shellcheck disable=SC2046  # 源列表与既有 id 模式同一入口；项目模式多源 + --main 声明入口
-    "$RAVA" build "${SOURCES[@]}" "${MAIN_ARGS[@]}" "${CORPUS_JDK_ARGS[@]}" --clean "${LIB_ARGS[@]}" \
-        --out "$SCRATCH" --stop-after emit > "/tmp/${MODE}_transpile.log" 2>&1 \
-        || { echo "转译失败，见 /tmp/${MODE}_transpile.log" >&2; exit 1; }
+    "$RAVA" build "${RAVA_SOURCES[@]}" "${MAIN_ARGS[@]}" "${CORPUS_JDK_ARGS[@]}" --clean "${LIB_ARGS[@]}" \
+        --out "$SCRATCH" --stop-after emit > "/tmp/${MODE_TAG}_transpile.log" 2>&1 \
+        || { echo "转译失败，见 /tmp/${MODE_TAG}_transpile.log" >&2; exit 1; }
     TRANSPILE_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.1f}')")
 fi
 if [[ "$EMIT_ONLY" == 1 ]]; then
@@ -256,16 +262,16 @@ fi
 _t0=$EPOCHREALTIME
 PROFILE_ARGS=()
 [[ -n "${PILOT_PROFILE:-}" && "$PILOT_PROFILE" != dev ]] && PROFILE_ARGS=(--"$PILOT_PROFILE")
-"$RAVA" compile "$SCRATCH" "${PROFILE_ARGS[@]}" > "/tmp/${MODE}_cargo.err" 2>&1 \
+"$RAVA" compile "$SCRATCH" "${PROFILE_ARGS[@]}" > "/tmp/${MODE_TAG}_cargo.err" 2>&1 \
     || { echo "编译失败，见 /tmp/${MODE}_cargo.err 与 $SCRATCH/build_status.json" >&2; exit 1; }
 COMPILE_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.1f}')")
 EXE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["exe"])' "$SCRATCH/build_status.json")"
 _t0=$EPOCHREALTIME
-"$EXE" > "$REPO_ROOT/tests/lib_pilot/golden/${GOLDEN_ID}_rs.txt" 2>>"/tmp/${MODE}_cargo.err" \
-    || { echo "运行失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
+"$EXE" > "$REPO_ROOT/tests/lib_pilot/golden/${GOLDEN_ID}_rs.txt" 2>>"/tmp/${MODE_TAG}_cargo.err" \
+    || { echo "运行失败，见 /tmp/${MODE_TAG}_cargo.err" >&2; exit 1; }
 RUN_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.3f}')")
 # 程序自报的吞吐基准行（stderr 的 JC_BENCH；JVM 侧直接打在本日志）
-grep -h "^JC_BENCH" "/tmp/${MODE}_cargo.err" | sed "s/^/rs /" || true
+grep -h "^JC_BENCH" "/tmp/${MODE_TAG}_cargo.err" | sed "s/^/rs /" || true
 echo "METRICS ${MODE} profile=${PILOT_PROFILE:-dev} run_s=${RUN_S} jvm_run_s=${JVM_S} transpile_s=${TRANSPILE_S} compile_s=${COMPILE_S} bin_bytes=$(stat -c %s "$EXE")"
 
 echo "== [3/3] 逐字对账 =="

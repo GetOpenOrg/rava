@@ -1,0 +1,13 @@
+PASS accessors
+PASS value-semantics
+PASS different
+PASS hashcode-equal
+PASS tostring
+PASS compare
+PASS mutable-set
+PASS immutable-reject
+PASS triple-accessors
+PASS triple-equals
+PASS triple-tostring
+PASS map-entry
+DONE Lang3TupleMain

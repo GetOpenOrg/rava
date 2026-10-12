@@ -1,0 +1,16 @@
+PASS name
+PASS value
+PASS path
+PASS domain
+PASS maxage
+PASS secure
+PASS httponly
+PASS version
+PASS attribute
+PASS attribute-absent
+PASS mutated-value
+PASS session-maxage
+PASS equals-clone
+PASS equals-value-matters
+PASS clone-value
+DONE ServletCookieMain

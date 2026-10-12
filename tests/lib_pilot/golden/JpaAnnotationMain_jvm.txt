@@ -1,0 +1,16 @@
+PASS entity-name
+PASS table-name
+PASS table-schema
+PASS unique-constraint
+PASS unique-columns
+PASS id-present
+PASS id-strategy
+PASS column-name
+PASS column-nullable
+PASS column-length
+PASS column-unique
+PASS enum-type
+PASS version-present
+PASS transient-present
+PASS annotated-fields
+DONE JpaAnnotationMain

@@ -1,0 +1,14 @@
+PASS max-or-null
+PASS sorted
+PASS reversed
+PASS first
+PASS contains
+PASS join-tostring
+PASS repeat
+PASS is-blank
+PASS lines
+PASS kotlin-list-size
+PASS pair
+PASS pair-first
+PASS pair-second
+DONE KotlinStdlibPilotMain

@@ -1,0 +1,25 @@
+--- dumped ---
+name: pilot
+level: 7
+ratio: 2.5
+enabled: true
+tags:
+- a
+- b
+nested:
+  depth: 2
+  list:
+  - 1
+  - 2
+  - 3
+PASS scalar-str
+PASS scalar-int
+PASS scalar-float
+PASS scalar-bool
+PASS list
+PASS nested-depth
+PASS nested-list
+PASS keyset
+PASS alias-anchor-used
+PASS bare-string
+DONE YamlRoundTripMain

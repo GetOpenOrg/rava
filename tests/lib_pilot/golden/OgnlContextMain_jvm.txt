@@ -1,0 +1,2 @@
+PASS var-read
+PASS var-compare

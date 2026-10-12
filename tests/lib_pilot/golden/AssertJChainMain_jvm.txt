@@ -1,0 +1,9 @@
+PASS string-chain
+PASS number-chain
+PASS list-chain
+PASS map-chain
+PASS extracting
+  msg-eq:  | expected: 2 |  but was: 1
+  msg-size:  | Expected size: 5 but was: 3 in: | "abc"
+  msg-contains:  | Expecting actual: |   "abc" | to contain: |   "z" 
+DONE AssertJChainMain
