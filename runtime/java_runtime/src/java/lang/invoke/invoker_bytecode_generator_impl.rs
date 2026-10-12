@@ -18,17 +18,18 @@ use crate::java::lang::invoke::MemberName__Methods as _;
 use crate::prelude::*;
 use super::invoker_bytecode_generator::InvokerBytecodeGenerator;
 use super::{LambdaForm, MemberName, MethodType};
+use super::__InvokerBytecodeGeneratorHw;
 
-impl InvokerBytecodeGenerator {
+impl __InvokerBytecodeGeneratorHw for InvokerBytecodeGenerator {
     /// `generateCustomizedCode(LambdaForm, MethodType)`：不生成字节码 → 解释入口 vmentry。
     #[jvm_native]
-    pub fn generateCustomizedCode(_form: LambdaForm, invokerType: MethodType) -> Result<MemberName> {
+    fn generateCustomizedCode(_form: LambdaForm, invokerType: MethodType) -> Result<MemberName> {
         interpreter_entry(invokerType)
     }
 
     /// `generateLambdaFormInterpreterEntryPoint(MethodType)`：解释入口由原生解释器承载。
     #[jvm_native]
-    pub fn generateLambdaFormInterpreterEntryPoint(mt: MethodType) -> Result<MemberName> {
+    fn generateLambdaFormInterpreterEntryPoint(mt: MethodType) -> Result<MemberName> {
         interpreter_entry(mt)
     }
 }

@@ -12,6 +12,7 @@ use crate::jdk::internal::loader::NativeLibraries__Methods as _;
 use crate::prelude::*;
 use super::native_libraries::NativeLibraries;
 use super::native_libraries_native_library_impl::NativeLibraries_NativeLibraryImpl;
+use super::__NativeLibrariesHw;
 
 /// JDK 21 随附的本地库（macOS / Linux 两平台的并集，去掉 `lib` 前缀与平台后缀）：
 /// 其 native 方法由 java_runtime 静态提供，即 JDK 意义上的内建库。
@@ -41,11 +42,11 @@ where
     e.map(Into::into).unwrap_or_else(|e| e)
 }
 
-impl NativeLibraries {
+impl __NativeLibrariesHw for NativeLibraries {
     /// native `findBuiltinLib(String filename)`：去掉平台前缀 / 后缀（JNI 只按长度截取，不校验内容）后
     /// 为内建库则返回库名，否则 null；filename 为 null 抛 InternalError。
     #[jvm_native]
-    pub fn findBuiltinLib(filename: String) -> Result<String> {
+    fn findBuiltinLib(filename: String) -> Result<String> {
         if filename.is_jvm_null() {
             let e = crate::java::lang::InternalError::new_str(String::from("NULL filename for native library"));
             return Err(error(e));
@@ -64,7 +65,7 @@ impl NativeLibraries {
     /// 内建库登记进程句柄与 JNI 1.8 后返回 true；非内建库无法以 JNI 加载——
     /// throwExceptionIfFail 时抛 UnsatisfiedLinkError（「Can't load library: <name>」），否则返回 false。
     #[jvm_native]
-    pub fn load(lib: NativeLibraries_NativeLibraryImpl, name: String, isBuiltin: bool, throwExceptionIfFail: bool) -> Result<bool> {
+    fn load(lib: NativeLibraries_NativeLibraryImpl, name: String, isBuiltin: bool, throwExceptionIfFail: bool) -> Result<bool> {
         if isBuiltin {
             lib.__set_handle(PROCESS_HANDLE);
             lib.__set_jniVersion(JNI_VERSION_1_8);
@@ -79,7 +80,7 @@ impl NativeLibraries {
 
     /// native `unload(String name, boolean isBuiltin, long handle)`：内建库的 JNI_OnUnload_<lib> 不存在，无事可做。
     #[jvm_native]
-    pub fn unload(name: String, isBuiltin: bool, handle: i64) -> Result<()> {
+    fn unload(name: String, isBuiltin: bool, handle: i64) -> Result<()> {
         Ok(())
     }
 }

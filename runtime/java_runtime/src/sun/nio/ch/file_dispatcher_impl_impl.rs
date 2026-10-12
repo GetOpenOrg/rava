@@ -13,17 +13,18 @@ use crate::prelude::*;
 use super::file_dispatcher_impl::FileDispatcherImpl;
 use super::unix_file_dispatcher_impl_impl::{errno, fd_of, io_exception};
 use crate::java::io::FileDescriptor;
+use super::__FileDispatcherImplHw;
 
 const IOS_UNAVAILABLE: i64 = -2;
 const IOS_INTERRUPTED: i64 = -3;
 const IOS_UNSUPPORTED_CASE: i64 = -6;
 
-impl FileDispatcherImpl {
+impl __FileDispatcherImplHw for FileDispatcherImpl {
     /// native `init0()`（Linux）：JNI 侧用 `dlsym(RTLD_DEFAULT, "copy_file_range")` 取函数指针，
     /// 留给 transferTo0 / transferFrom0 的快速路径使用；取不到时退回 sendfile。原生二进制直接链接 libc，
     /// 不需要运行期查找函数指针，因此这里没有需要初始化的状态。
     #[jvm_native]
-    pub fn init0() -> Result<()> {
+    fn init0() -> Result<()> {
         Ok(())
     }
 
@@ -33,7 +34,7 @@ impl FileDispatcherImpl {
     /// Linux：copy_file_range，EINVAL / ENOSYS / EXDEV 退回 sendfile；macOS：sendfile(2)（仅支持套接字目标，
     /// 普通文件得 ENOTSOCK → UNSUPPORTED_CASE）。
     #[jvm_native]
-    pub fn transferTo0(src: FileDescriptor, position: i64, count: i64, dst: FileDescriptor, append: bool) -> Result<i64> {
+    fn transferTo0(src: FileDescriptor, position: i64, count: i64, dst: FileDescriptor, append: bool) -> Result<i64> {
         if append {
             return Ok(IOS_UNSUPPORTED_CASE);
         }
@@ -44,7 +45,7 @@ impl FileDispatcherImpl {
     /// （Linux）：copy_file_range 从 src 当前位置写到 dst 的 position 处。append 目标、EBADF / EINVAL /
     /// EXDEV / ENOSYS 均为 UNSUPPORTED_CASE（由调用方退回通用拷贝），EAGAIN 为 UNAVAILABLE。
     #[jvm_native]
-    pub fn transferFrom0(src: FileDescriptor, dst: FileDescriptor, position: i64, count: i64, append: bool) -> Result<i64> {
+    fn transferFrom0(src: FileDescriptor, dst: FileDescriptor, position: i64, count: i64, append: bool) -> Result<i64> {
         if append {
             return Ok(IOS_UNSUPPORTED_CASE);
         }

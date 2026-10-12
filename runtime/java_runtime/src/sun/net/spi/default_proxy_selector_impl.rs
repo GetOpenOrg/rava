@@ -12,23 +12,24 @@ use crate::prelude::*;
 use super::default_proxy_selector::DefaultProxySelector;
 use super::default_proxy_selector_ext::{self as system, SystemProxy};
 use crate::java::net::{InetSocketAddress, Proxy, Proxy_Type, SocketAddress};
+use super::__DefaultProxySelectorHw;
 
 fn create_proxy(ty: Proxy_Type, host: &str, port: i32) -> Result<Proxy> {
     let sa = InetSocketAddress::createUnresolved(String::from(host), port)?;
     Proxy::new_proxy_type_socketaddress(ty, <SocketAddress as From<InetSocketAddress>>::from(sa))
 }
 
-impl DefaultProxySelector {
+impl __DefaultProxySelectorHw for DefaultProxySelector {
     /// native `init()`：探测平台系统代理设施，可用返回 true。
     #[jvm_native]
-    pub fn init() -> Result<bool> {
+    fn init() -> Result<bool> {
         Ok(system::init())
     }
 
     /// native `getSystemProxies(String proto, String host)`：按系统配置给出 `proto://host` 的代理列表；
     /// 无设施 / 查询失败 / 条目不完整时返回 null（由 Java 侧回落为 DIRECT）。
     #[jvm_native]
-    pub fn getSystemProxies(&self, proto: String, host: String) -> Result<JArray<Proxy>> {
+    fn getSystemProxies(&self, proto: String, host: String) -> Result<JArray<Proxy>> {
         if proto.is_jvm_null() || host.is_jvm_null() {
             return Ok(JArray::default());
         }

@@ -10,6 +10,7 @@
 use crate::prelude::*;
 use super::*;
 use std::ffi::{c_char, CString};
+use super::__ProcessImplHw;
 
 /// Java `toCString` 产出的字节数组 → C 字符串（去掉末尾 NUL；null 数组 → None）。
 fn c_bytes(a: &JArray<i8>) -> Option<Vec<u8>> {
@@ -154,13 +155,13 @@ unsafe fn report_errno(err_fd: i32, e: i32) -> ! {
     libc::_exit(127)
 }
 
-impl ProcessImpl {
+impl __ProcessImplHw for ProcessImpl {
     /// native `init()`（`<clinit>` 末尾调用）：JDK ProcessImpl_md.c 在此缓存 PATH 拆分
     /// 结果（parentPathv）与 JNI 字段 ID，供 forkAndExec 解析可执行文件。原生二进制无 JNI
     /// 字段缓存；PATH 在 forkAndExec 落地时按调用时刻的环境解析（与 JDK 在 <clinit> 快照
     /// 的差异仅在运行期修改 PATH 时可观察，而 Java 无修改进程环境的 API）。无可观察状态。
     #[jvm_native]
-    pub fn init() -> Result<()> {
+    fn init() -> Result<()> {
         Ok(())
     }
 
@@ -172,7 +173,7 @@ impl ProcessImpl {
     /// redirectErrorStream 时子进程 stderr 复制 stdout，`fds[2]` 回写 -1（getErrorStream 为空流）。
     #[jvm_native]
     #[allow(clippy::too_many_arguments)]
-    pub fn forkAndExec(&self, _mode: i32, _helperpath: JArray<i8>, prog: JArray<i8>,
+    fn forkAndExec(&self, _mode: i32, _helperpath: JArray<i8>, prog: JArray<i8>,
                        arg_block: JArray<i8>, argc: i32, env_block: JArray<i8>, envc: i32,
                        dir: JArray<i8>, fds: JArray<i32>, redirect_error_stream: bool) -> Result<i32> {
         let prog = c_bytes(&prog).unwrap_or_default();

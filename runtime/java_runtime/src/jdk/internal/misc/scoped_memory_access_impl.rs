@@ -3,11 +3,12 @@
 use crate::jdk::internal::misc::ScopedMemoryAccess__Methods as _;
 use crate::prelude::*;
 use super::scoped_memory_access::ScopedMemoryAccess;
+use super::__ScopedMemoryAccessHw;
 
-impl ScopedMemoryAccess {
+impl __ScopedMemoryAccessHw for ScopedMemoryAccess {
     /// native `registerNatives()`：HotSpot 登记 closeScope0 的 JNI 入口；原生二进制按名链接 → no-op。
     #[jvm_native]
-    pub fn registerNatives() -> Result<()> {
+    fn registerNatives() -> Result<()> {
         Ok(())
     }
 }

@@ -12,22 +12,23 @@ use crate::java::lang::ProcessHandleImpl_Info__Methods as _;
 use crate::prelude::*;
 use super::process_handle_impl_info::ProcessHandleImpl_Info;
 use super::process_handle_impl_impl::proc_stat;
+use super::__ProcessHandleImpl_InfoHw;
 
 /// uid → 用户名；无对应条目时为数字串（JDK ProcessHandleImpl_unix.c 同形）。
 fn user_name(uid: u32) -> std::string::String {
     crate::posix::passwd_name(uid).unwrap_or_else(|| uid.to_string())
 }
 
-impl ProcessHandleImpl_Info {
+impl __ProcessHandleImpl_InfoHw for ProcessHandleImpl_Info {
     /// native `initIDs()`：缓存 JNI 字段 ID——无需初始化。
     #[jvm_native]
-    pub fn initIDs() -> Result<()> {
+    fn initIDs() -> Result<()> {
         Ok(())
     }
 
     /// native `info0(long pid)`：采集进程信息写入本对象字段。
     #[jvm_native]
-    pub fn info0(&self, pid: i64) -> Result<()> {
+    fn info0(&self, pid: i64) -> Result<()> {
         use std::os::unix::fs::MetadataExt;
         if let Some(st) = proc_stat(pid) {
             self.__set_totalTime(st.total_time);

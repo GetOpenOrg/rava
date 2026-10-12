@@ -10,13 +10,14 @@ use crate::prelude::*;
 use super::method_accessor_generator::MethodAccessorGenerator;
 use super::{SerializationConstructorAccessorDyn, SerializationConstructorAccessorImpl};
 use crate::java::lang::Class;
+use super::__MethodAccessorGeneratorHw;
 
-impl MethodAccessorGenerator {
+impl __MethodAccessorGeneratorHw for MethodAccessorGenerator {
     /// `generateSerializationConstructor(declaringClass, parameterTypes, modifiers,
     /// targetConstructorClass)`：分配 declaringClass 实例、运行 targetConstructorClass 的
     /// 无参构造体的访问器（ReflectionFactory.generateConstructor 其余步骤走字节码）。
     #[jvm_native]
-    pub fn __impl_generateSerializationConstructor(
+    fn __impl_generateSerializationConstructor(
         &self,
         declaring_class: Class,
         _parameter_types: JArray<Class>,

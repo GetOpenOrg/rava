@@ -5,6 +5,7 @@
 use crate::sun::nio::ch::KQueue__Methods as _;
 use crate::prelude::*;
 use super::k_queue::KQueue;
+use super::__KQueueHw;
 
 const IOS_INTERRUPTED: i32 = -3;
 
@@ -13,30 +14,30 @@ fn io_exception(default: &str) -> JvmError {
     crate::java::io::IOException::new_str(msg).map(JvmError::from).unwrap_or_else(|e| e)
 }
 
-impl KQueue {
+impl __KQueueHw for KQueue {
     #[jvm_native]
-    pub fn keventSize() -> Result<i32> {
+    fn keventSize() -> Result<i32> {
         Ok(std::mem::size_of::<libc::kevent>() as i32)
     }
 
     #[jvm_native]
-    pub fn identOffset() -> Result<i32> {
+    fn identOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::kevent, ident) as i32)
     }
 
     #[jvm_native]
-    pub fn filterOffset() -> Result<i32> {
+    fn filterOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::kevent, filter) as i32)
     }
 
     #[jvm_native]
-    pub fn flagsOffset() -> Result<i32> {
+    fn flagsOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::kevent, flags) as i32)
     }
 
     /// native `create()`：kqueue(2)。
     #[jvm_native]
-    pub fn create() -> Result<i32> {
+    fn create() -> Result<i32> {
         // SAFETY: kqueue 无参数
         let kq = unsafe { libc::kqueue() };
         if kq < 0 {
@@ -47,7 +48,7 @@ impl KQueue {
 
     /// native `register(int kqfd, int fd, int filter, int flags)`：提交单个变更，返回 errno 或 0。
     #[jvm_native]
-    pub fn register(kqfd: i32, fd: i32, filter: i32, flags: i32) -> Result<i32> {
+    fn register(kqfd: i32, fd: i32, filter: i32, flags: i32) -> Result<i32> {
         let change = libc::kevent {
             ident: fd as libc::uintptr_t,
             filter: filter as i16,
@@ -64,7 +65,7 @@ impl KQueue {
     /// native `poll(int kqfd, long pollAddress, int nevents, long timeout)`：timeout < 0 无限等待；
     /// 被信号打断返回 INTERRUPTED。
     #[jvm_native]
-    pub fn poll(kqfd: i32, address: i64, nevents: i32, timeout: i64) -> Result<i32> {
+    fn poll(kqfd: i32, address: i64, nevents: i32, timeout: i64) -> Result<i32> {
         let ts = libc::timespec { tv_sec: (timeout / 1000) as libc::time_t, tv_nsec: ((timeout % 1000) * 1_000_000) as libc::c_long };
         let tsp: *const libc::timespec = if timeout >= 0 { &ts } else { std::ptr::null() };
         // SAFETY: address 指向至少 nevents 个 kevent 的本地数组

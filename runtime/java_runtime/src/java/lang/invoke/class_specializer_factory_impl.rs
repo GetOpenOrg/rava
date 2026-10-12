@@ -11,16 +11,17 @@ use crate::prelude::*;
 use super::class_specializer_factory::ClassSpecializer_Factory;
 use super::ClassSpecializer_SpeciesData;
 use crate::java::lang::Class;
+use super::__ClassSpecializer_FactoryHw;
 
-impl<T, K, S> ClassSpecializer_Factory<T, K, S>
-where
-    T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
-    K: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
-    S: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
-{
+impl<T, K, S> __ClassSpecializer_FactoryHw for ClassSpecializer_Factory<T, K, S> where T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, K: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, S: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe {
+
+
+
+
+
     /// `generateConcreteSpeciesCode(String className, SpeciesData)`：登记动态物种，返回通用载体类。
     #[jvm_native]
-    pub fn __impl_generateConcreteSpeciesCode(
+    fn __impl_generateConcreteSpeciesCode(
         &self,
         _className: String,
         speciesData: ClassSpecializer_SpeciesData<T, K, S>,

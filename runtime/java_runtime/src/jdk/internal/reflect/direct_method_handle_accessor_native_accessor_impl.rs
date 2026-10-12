@@ -9,6 +9,7 @@ use crate::prelude::*;
 use super::direct_method_handle_accessor_native_accessor::DirectMethodHandleAccessor_NativeAccessor;
 use crate::java::lang::reflect::Method;
 use crate::java::lang::reflect::InvocationTargetException;
+use super::__DirectMethodHandleAccessor_NativeAccessorHw;
 
 /// 目标抛出的异常包装为 InvocationTargetException（JVM 同）；实参拆箱失败的
 /// IllegalArgumentException 直抛。
@@ -23,9 +24,9 @@ fn __wrap_target_exception(e: crate::error::JvmError) -> crate::error::JvmError 
     }
 }
 
-impl DirectMethodHandleAccessor_NativeAccessor {
+impl __DirectMethodHandleAccessor_NativeAccessorHw for DirectMethodHandleAccessor_NativeAccessor {
     #[jvm_native]
-    pub fn invoke0(m: Method, obj: Object, args: JArray<Object>) -> Result<Object> {
+    fn invoke0(m: Method, obj: Object, args: JArray<Object>) -> Result<Object> {
         let Some((cls, name, desc)) = m.__reflect_key() else {
             panic!("stub: NativeAccessor.invoke0 无声明键（非表构造的 Method）");
         };

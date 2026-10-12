@@ -16,6 +16,8 @@ mod memory;
 use memory::*;
 mod primitive;
 use primitive::*;
+use super::__UnsafeHw;
+use super::__UnsafeHw2;
 
 // 内部边界类 jdk.internal.misc.Unsafe：按调用链按需实现，其余保持 panic 存根。
 
@@ -177,17 +179,17 @@ fn _ref_rmw(o: &Object, offset: i64, what: &str,
     }
 }
 
-impl Unsafe {
+impl __UnsafeHw for Unsafe {
     /// 偏移 id → (声明类, 字段名)（`field_of_offset` 的类型挂载入口：本伴生文件以私有 mod
     /// 挂入，自由函数对包外不可见）。MH-native 解释器的 Unsafe 字段访问形态消费。
-    pub fn __field_of_offset(off: i64) -> Option<(std::string::String, std::string::String)> {
+    fn __field_of_offset(off: i64) -> Option<(std::string::String, std::string::String)> {
         field_of_offset(off)
     }
 
     /// native `fullFence()`：全栅栏（StoreLoad 在内）——SeqCst 栅栏（进程回收线程的
     /// ProcessHandleImpl 完成通知等 VarHandle.fullFence 路径触达）。
     #[jvm_native]
-    pub fn fullFence(&self) -> Result<()> {
+    fn fullFence(&self) -> Result<()> {
         std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
@@ -200,7 +202,7 @@ impl Unsafe {
     /// InstantiationException，接口、抽象类抛 InstantiationException（消息为类名），`Class` 本身抛 IllegalAccessException——不可实例化的类
     /// 没有 `<alloc>` 臂，校验先于分派（如 `findConstructor(Number.class, ..)` 句柄调用）
     #[jvm_native]
-    pub fn allocateInstance(&self, cls: Class) -> Result<Object> {
+    fn allocateInstance(&self, cls: Class) -> Result<Object> {
         if crate::_is_jnull_ref(&cls) {
             return Err(JvmError::null_pointer());
         }
@@ -225,14 +227,14 @@ impl Unsafe {
 
     /// 引用槽的原子读-改-写（VarHandle 引用族 CAS / 交换）：与 Unsafe 引用 CAS 族同一载体分派
     ///（引用元素数组 / 静态字段 / 实例字段），返回旧值。
-    pub(crate) fn __vh_ref_update(&self, o: &Object, offset: i64,
+    fn __vh_ref_update(&self, o: &Object, offset: i64,
                                   f: &mut dyn FnMut(Object) -> Option<Object>) -> Result<Object> {
         _ref_rmw(o, offset, "VarHandle 引用族读-改-写", f)
     }
 
     /// 基本类型槽 `width` 字节的原子读-改-写（VarHandle 基本类型族 CAS / 交换 / getAndAdd）：与
     /// Unsafe 基本类型访问器族同一载体（`unsafe__ext::prim`），返回旧位形。
-    pub(crate) fn __vh_prim_update(&self, o: &Object, offset: i64, width: usize,
+    fn __vh_prim_update(&self, o: &Object, offset: i64, width: usize,
                                    f: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
         _ext::prim(o, offset, width, "VarHandle 基本类型族读-改-写", f)
     }
@@ -241,10 +243,10 @@ impl Unsafe {
 /// ACC_NATIVE（类 1）：布局 / 字段偏移 / 类初始化的 native 落点。公开包装（getUnsafe、objectFieldOffset×2、
 /// arrayBaseOffset、arrayIndexScale、ensureClassInitialized、shouldBeInitialized 的判空转发）与 `<clinit>`
 ///（theUnsafe 单例与 ARRAY_* 常量；常量读取另经 [vm_constants.injected_statics] 取 VM 值）按 JDK 字节码翻译（a3-U3）。
-impl Unsafe {
+impl __UnsafeHw2 for Unsafe {
     /// native `registerNatives()`：HotSpot 登记 JNI 入口；原生二进制按名链接 → no-op。
     #[jvm_native]
-    pub fn registerNatives() -> Result<()> {
+    fn registerNatives() -> Result<()> {
         Ok(())
     }
 
@@ -253,14 +255,14 @@ impl Unsafe {
     /// compareAndSetLong——恒等即可）。按 (声明类名, 字段名) 分配稳定的不透明 id，同一字段恒等——与
     /// `objectFieldOffset0(Field)` 共用同一登记表（JDK 两重载对同一字段同值）。
     #[jvm_native]
-    pub fn objectFieldOffset1(&self, c: Class, name: String) -> Result<i64> {
+    fn objectFieldOffset1(&self, c: Class, name: String) -> Result<i64> {
         Ok(_object_field_offset_id(format!("{}", c.__get_name()), format!("{}", name)))
     }
 
     /// native `objectFieldOffset0(Field)`：实例字段偏移，只消费 Field 的 (声明类, 字段名) 身份，
     /// 与 (Class, String) 形态经同一登记表对同一字段返回同一不透明 id。
     #[jvm_native]
-    pub fn objectFieldOffset0(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
+    fn objectFieldOffset0(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
         Ok(_object_field_offset_id(
             format!("{}", f.__get_clazz().__get_name()),
             format!("{}", f.__get_name()),
@@ -270,7 +272,7 @@ impl Unsafe {
     /// native `arrayBaseOffset0(Class)`：数组存储里首个元素前的头部长度。HotSpot 64 位（压缩 oops）对所有
     /// 数组类返回 16；原生二进制无 C 布局，该值与访问器族的偏移解码共用常量（自洽即可，不进可观察输出）。
     #[jvm_native]
-    pub fn arrayBaseOffset0(&self, array_class: Class) -> Result<i32> {
+    fn arrayBaseOffset0(&self, array_class: Class) -> Result<i32> {
         let name = format!("{}", array_class.__get_name());
         if _array_index_scale_by_name(&name).is_none() {
             // JDK 语义：非数组类的返回值未定义（HotSpot 走 assert/崩溃）
@@ -282,7 +284,7 @@ impl Unsafe {
     /// native `arrayIndexScale0(Class)`：数组元素的寻址 stride（字节）。HotSpot 语义按元素类型给出（引用元素
     /// 为压缩指针 4）；消费方（CHM 的 ASHIFT 等）据此构造偏移，访问器族用同一组常量反解下标。
     #[jvm_native]
-    pub fn arrayIndexScale0(&self, array_class: Class) -> Result<i32> {
+    fn arrayIndexScale0(&self, array_class: Class) -> Result<i32> {
         let name = format!("{}", array_class.__get_name());
         match _array_index_scale_by_name(&name) {
             Some(scale) => Ok(scale as i32),
@@ -295,7 +297,7 @@ impl Unsafe {
     /// 推迟到「首次主动使用」会丢失该副作用，故按名同步触发：闭包把按镜像初始化的目标类导出为初始化钩子
     ///（closure.json `seeds.mirror_inits`），未登记的类（数组 / 基本类型 / 无 `<clinit>`）no-op。
     #[jvm_native]
-    pub fn ensureClassInitialized0(&self, c: Class) -> Result<()> {
+    fn ensureClassInitialized0(&self, c: Class) -> Result<()> {
         crate::ensure_class_initialized(&format!("{}", c.__get_name()))
     }
 
@@ -305,7 +307,7 @@ impl Unsafe {
     /// 首次访问，`<clinit>` 的副作用顺序与 JVM 不同。只对登记了初始化钩子的类作答（与
     /// `ensureClassInitialized0` 同一张表）。
     #[jvm_native]
-    pub fn shouldBeInitialized0(&self, c: Class) -> Result<bool> {
+    fn shouldBeInitialized0(&self, c: Class) -> Result<bool> {
         Ok(crate::class_needs_initialization(&format!("{}", c.__get_name())))
     }
 }

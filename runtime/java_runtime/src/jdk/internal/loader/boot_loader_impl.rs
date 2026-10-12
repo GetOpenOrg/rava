@@ -1,16 +1,17 @@
 use crate::jdk::internal::loader::BootLoader__Methods as _;
 use crate::prelude::*;
 use super::boot_loader::BootLoader;
+use super::__BootLoaderHw;
 
 // jdk.internal.loader.BootLoader 伴生：只含 ACC_NATIVE 方法（手写边界 ①）。服务目录（getServicesCatalog）
 // 与资源定位（findResource / findResourceAsStream）走字节码：引导层由 Module.defineModules 按 jimage
 // 系统模块登记服务目录，资源经 SystemModuleReader 读本程序 jimage（boot-image §5.7）。
-impl BootLoader {
+impl __BootLoaderHw for BootLoader {
     /// native `getSystemPackageNames()`：boot 层已定义包名（Package.getPackages / ClassLoader
     /// .getPackages 的 boot 部分）。单二进制无模块层包登记——空数组（BootLoader.packages()
     /// 的其余部分由 Java 侧按已加载类补齐）。
     #[jvm_native]
-    pub fn getSystemPackageNames() -> Result<JArray<String>> {
+    fn getSystemPackageNames() -> Result<JArray<String>> {
         Ok(JArray::new(0))
     }
 
@@ -18,7 +19,7 @@ impl BootLoader {
     /// 模块的 location（引导层模块为 `jrt:/<模块名>`，`PackageHelper.definePackage` 据此按模块定义
     /// Package）。引导层模块登记于 VM 模块表（映像初值）；未登记的包 → null。
     #[jvm_native]
-    pub fn getSystemPackageLocation(name: String) -> Result<String> {
+    fn getSystemPackageLocation(name: String) -> Result<String> {
         if name.is_jvm_null() {
             return Ok(Default::default());
         }
@@ -34,7 +35,7 @@ impl BootLoader {
     /// （`hasClassPath` 恒 false），没有类归属该模块——无需登记，no-op。模块对象本身仍由字节码建立，
     /// `BootLoader.getUnnamedModule()` 照常返回它。
     #[jvm_native]
-    pub fn setBootLoaderUnnamedModule0(_module: crate::java::lang::Module) -> Result<()> {
+    fn setBootLoaderUnnamedModule0(_module: crate::java::lang::Module) -> Result<()> {
         Ok(())
     }
 }

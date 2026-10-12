@@ -11,6 +11,7 @@ use crate::prelude::*;
 use super::constant_pool::ConstantPool;
 use crate::java::lang::Class;
 use crate::anno_pool::CpVal;
+use super::__ConstantPoolHw;
 
 fn entry(cp_oop: &Object, index: i32) -> Result<&'static CpVal> {
     let cls = <Class as From<Object>>::from(Clone::clone(cp_oop));
@@ -23,9 +24,9 @@ fn wrong(index: i32) -> JvmError {
     JvmError::illegal_argument(&format!("Wrong type at constant pool index {}", index))
 }
 
-impl ConstantPool {
+impl __ConstantPoolHw for ConstantPool {
     #[jvm_native]
-    pub fn getUTF8At0(&self, cp_oop: Object, index: i32) -> Result<String> {
+    fn getUTF8At0(&self, cp_oop: Object, index: i32) -> Result<String> {
         match entry(&cp_oop, index)? {
             CpVal::U(s) => Ok(String::from(*s)),
             CpVal::W(units) => Ok(String::from_utf16_lit(units)),
@@ -34,7 +35,7 @@ impl ConstantPool {
     }
 
     #[jvm_native]
-    pub fn getIntAt0(&self, cp_oop: Object, index: i32) -> Result<i32> {
+    fn getIntAt0(&self, cp_oop: Object, index: i32) -> Result<i32> {
         match entry(&cp_oop, index)? {
             CpVal::I(v) => Ok(*v),
             _ => Err(wrong(index)),
@@ -42,7 +43,7 @@ impl ConstantPool {
     }
 
     #[jvm_native]
-    pub fn getLongAt0(&self, cp_oop: Object, index: i32) -> Result<i64> {
+    fn getLongAt0(&self, cp_oop: Object, index: i32) -> Result<i64> {
         match entry(&cp_oop, index)? {
             CpVal::J(v) => Ok(*v),
             _ => Err(wrong(index)),
@@ -50,7 +51,7 @@ impl ConstantPool {
     }
 
     #[jvm_native]
-    pub fn getFloatAt0(&self, cp_oop: Object, index: i32) -> Result<f32> {
+    fn getFloatAt0(&self, cp_oop: Object, index: i32) -> Result<f32> {
         match entry(&cp_oop, index)? {
             CpVal::F(v) => Ok(*v),
             _ => Err(wrong(index)),
@@ -58,7 +59,7 @@ impl ConstantPool {
     }
 
     #[jvm_native]
-    pub fn getDoubleAt0(&self, cp_oop: Object, index: i32) -> Result<f64> {
+    fn getDoubleAt0(&self, cp_oop: Object, index: i32) -> Result<f64> {
         match entry(&cp_oop, index)? {
             CpVal::D(v) => Ok(*v),
             _ => Err(wrong(index)),

@@ -11,6 +11,7 @@ use crate::prelude::*;
 use super::unix_dispatcher::UnixDispatcher;
 use crate::java::io::FileDescriptor;
 use crate::net_posix::{self, errno};
+use super::__UnixDispatcherHw;
 
 static PRE_CLOSE_FD: AtomicI32 = AtomicI32::new(-1);
 
@@ -19,10 +20,10 @@ fn io_exception(default: &str) -> JvmError {
     crate::java::io::IOException::new_str(msg).map(JvmError::from).unwrap_or_else(|e| e)
 }
 
-impl UnixDispatcher {
+impl __UnixDispatcherHw for UnixDispatcher {
     /// native `init()`：socketpair 后关闭 sp[1]，sp[0] 作预关闭 fd。
     #[jvm_native]
-    pub fn init() -> Result<()> {
+    fn init() -> Result<()> {
         let mut sp = [0 as libc::c_int; 2];
         // SAFETY: socketpair 写入两元素数组
         if unsafe { libc::socketpair(libc::PF_UNIX, libc::SOCK_STREAM, 0, sp.as_mut_ptr()) } < 0 {
@@ -36,7 +37,7 @@ impl UnixDispatcher {
 
     /// native `preClose0(FileDescriptor)`：dup2(预关闭 fd, fd)。
     #[jvm_native]
-    pub fn preClose0(fdo: FileDescriptor) -> Result<()> {
+    fn preClose0(fdo: FileDescriptor) -> Result<()> {
         let pre = PRE_CLOSE_FD.load(Ordering::SeqCst);
         // SAFETY: 两个 fd 均为进程内有效描述符
         if pre >= 0 && unsafe { libc::dup2(pre, fdo.__get_fd()) } < 0 {
@@ -47,7 +48,7 @@ impl UnixDispatcher {
 
     /// native `close0(FileDescriptor)`：close(2)；EINTR 不报错。
     #[jvm_native]
-    pub fn close0(fdo: FileDescriptor) -> Result<()> {
+    fn close0(fdo: FileDescriptor) -> Result<()> {
         let fd = fdo.__get_fd();
         // SAFETY: 关闭调用方持有的 fd
         if fd != -1 && unsafe { libc::close(fd) } < 0 && errno() != libc::EINTR {

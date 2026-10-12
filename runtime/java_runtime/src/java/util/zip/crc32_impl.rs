@@ -4,6 +4,7 @@
 use crate::java::util::zip::CRC32__Methods as _;
 use crate::prelude::*;
 use super::crc32::CRC32;
+use super::__CRC32Hw;
 
 fn crc_table() -> &'static [u32; 256] {
     static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
@@ -29,16 +30,16 @@ fn crc_update(crc: i32, bytes: impl Iterator<Item = u8>) -> i32 {
     (!c) as i32
 }
 
-impl CRC32 {
+impl __CRC32Hw for CRC32 {
     /// `update(int crc, int b)`：追加单字节（低 8 位）。
     #[jvm_native]
-    pub fn update_i_i(crc: i32, b: i32) -> Result<i32> {
+    fn update_i_i(crc: i32, b: i32) -> Result<i32> {
         Ok(crc_update(crc, std::iter::once(b as u8)))
     }
 
     /// `updateBytes0(int crc, byte[] b, int off, int len)`。
     #[jvm_native]
-    pub fn updateBytes0(crc: i32, b: JArray<i8>, off: i32, len: i32) -> Result<i32> {
+    fn updateBytes0(crc: i32, b: JArray<i8>, off: i32, len: i32) -> Result<i32> {
         let mut buf = Vec::with_capacity(len.max(0) as usize);
         for i in off..off.saturating_add(len) {
             buf.push(b.get(i)? as u8);
@@ -48,7 +49,7 @@ impl CRC32 {
 
     /// `updateByteBuffer0(int, long addr, int off, int len)`：直接缓冲区（直接内存地址 addr + off 起 len 字节）。
     #[jvm_native]
-    pub fn updateByteBuffer0(v: i32, addr: i64, off: i32, len: i32) -> Result<i32> {
+    fn updateByteBuffer0(v: i32, addr: i64, off: i32, len: i32) -> Result<i32> {
         // SAFETY: addr 为 DirectByteBuffer 的直接内存地址，Java 侧已做 off / len 界检查
         let bytes = unsafe { std::slice::from_raw_parts((addr + off as i64) as *const u8, len.max(0) as usize) };
         Ok(crc_update(v, bytes.iter().copied()))

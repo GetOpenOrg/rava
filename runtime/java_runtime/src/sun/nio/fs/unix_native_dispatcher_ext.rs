@@ -13,6 +13,7 @@ use super::unix_file_attributes::UnixFileAttributes;
 use super::unix_file_store_attributes::UnixFileStoreAttributes;
 use super::unix_native_dispatcher::UnixNativeDispatcher;
 use super::unix_native_dispatcher_impl::{errno, fill_stat, path_of, restartable, unix_exception, virtual_stat};
+use super::__UnixNativeDispatcherHw;
 
 /// NativeBuffer 地址 → C 路径指针。
 fn cpath(address: i64) -> *const libc::c_char {
@@ -38,10 +39,10 @@ fn bytes_of(buf: &[libc::c_char]) -> JArray<i8> {
     JArray::from(buf.iter().map(|c| *c as i8).collect::<Vec<i8>>())
 }
 
-impl UnixNativeDispatcher {
+impl __UnixNativeDispatcherHw for UnixNativeDispatcher {
     /// `symlink0(long target, long link)`：symlink(2)（name1 为链接内容，name2 为新建链接）。
     #[jvm_native]
-    pub fn symlink0(name1: i64, name2: i64) -> Result<()> {
+    fn symlink0(name1: i64, name2: i64) -> Result<()> {
         // SAFETY: 两个地址均指向 NUL 结尾路径
         check(|| unsafe { libc::symlink(cpath(name1), cpath(name2)) })
     }
@@ -49,7 +50,7 @@ impl UnixNativeDispatcher {
     /// `readlink0(long path)`：readlink(2)，缓冲 `PATH_MAX + 1`；结果恰好填满缓冲时截掉末字节
     /// （JDK 同口径）。
     #[jvm_native]
-    pub fn readlink0(path: i64) -> Result<JArray<i8>> {
+    fn readlink0(path: i64) -> Result<JArray<i8>> {
         let mut target = vec![0 as libc::c_char; libc::PATH_MAX as usize + 1];
         // SAFETY: target 长度即传入的缓冲大小
         let n = unsafe { libc::readlink(cpath(path), target.as_mut_ptr(), target.len()) };
@@ -62,7 +63,7 @@ impl UnixNativeDispatcher {
 
     /// `realpath0(long path)`：realpath(3)，返回规范绝对路径字节。
     #[jvm_native]
-    pub fn realpath0(path: i64) -> Result<JArray<i8>> {
+    fn realpath0(path: i64) -> Result<JArray<i8>> {
         // 虚拟树无链接：存在的节点即规范路径（调用方 UnixPath 已规范化）
         let p = path_of(path);
         if let Some(r) = virtual_stat(&p) {
@@ -81,7 +82,7 @@ impl UnixNativeDispatcher {
 
     /// `fstat0(int fd, UnixFileAttributes)`：fstat(2) 后填 st_* 字段。
     #[jvm_native]
-    pub fn fstat0(fd: i32, attrs: UnixFileAttributes) -> Result<()> {
+    fn fstat0(fd: i32, attrs: UnixFileAttributes) -> Result<()> {
         if let Some(st) = crate::jdk_resources::virtual_fstat(fd) {
             fill_stat(&attrs, &st);
             return Ok(());
@@ -95,42 +96,42 @@ impl UnixNativeDispatcher {
 
     /// `chmod0(long path, int mode)`：chmod(2)。
     #[jvm_native]
-    pub fn chmod0(path: i64, mode: i32) -> Result<()> {
+    fn chmod0(path: i64, mode: i32) -> Result<()> {
         // SAFETY: path 指向 NUL 结尾路径
         check(|| unsafe { libc::chmod(cpath(path), mode as libc::mode_t) })
     }
 
     /// `fchmod0(int fd, int mode)`：fchmod(2)。
     #[jvm_native]
-    pub fn fchmod0(fd: i32, mode: i32) -> Result<()> {
+    fn fchmod0(fd: i32, mode: i32) -> Result<()> {
         // SAFETY: 只作用于调用方持有的 fd
         check(|| unsafe { libc::fchmod(fd, mode as libc::mode_t) })
     }
 
     /// `chown0(long path, int uid, int gid)`：chown(2)。
     #[jvm_native]
-    pub fn chown0(path: i64, uid: i32, gid: i32) -> Result<()> {
+    fn chown0(path: i64, uid: i32, gid: i32) -> Result<()> {
         // SAFETY: path 指向 NUL 结尾路径
         check(|| unsafe { libc::chown(cpath(path), uid as libc::uid_t, gid as libc::gid_t) })
     }
 
     /// `lchown0(long path, int uid, int gid)`：lchown(2)（不跟随符号链接）。
     #[jvm_native]
-    pub fn lchown0(path: i64, uid: i32, gid: i32) -> Result<()> {
+    fn lchown0(path: i64, uid: i32, gid: i32) -> Result<()> {
         // SAFETY: path 指向 NUL 结尾路径
         check(|| unsafe { libc::lchown(cpath(path), uid as libc::uid_t, gid as libc::gid_t) })
     }
 
     /// `fchown0(int fd, int uid, int gid)`：fchown(2)。
     #[jvm_native]
-    pub fn fchown0(fd: i32, uid: i32, gid: i32) -> Result<()> {
+    fn fchown0(fd: i32, uid: i32, gid: i32) -> Result<()> {
         // SAFETY: 只作用于调用方持有的 fd
         check(|| unsafe { libc::fchown(fd, uid as libc::uid_t, gid as libc::gid_t) })
     }
 
     /// `utimes0(long path, long accessUs, long modifyUs)`：utimes(2)，微秒。
     #[jvm_native]
-    pub fn utimes0(path: i64, access: i64, modify: i64) -> Result<()> {
+    fn utimes0(path: i64, access: i64, modify: i64) -> Result<()> {
         let times = timevals(access, modify);
         // SAFETY: times 为两元素 timeval 数组
         check(|| unsafe { libc::utimes(cpath(path), times.as_ptr()) })
@@ -138,7 +139,7 @@ impl UnixNativeDispatcher {
 
     /// `futimes0(int fd, long accessUs, long modifyUs)`：futimes(2)，微秒。
     #[jvm_native]
-    pub fn futimes0(fd: i32, access: i64, modify: i64) -> Result<()> {
+    fn futimes0(fd: i32, access: i64, modify: i64) -> Result<()> {
         let times = timevals(access, modify);
         // SAFETY: times 为两元素 timeval 数组
         check(|| unsafe { libc::futimes(fd, times.as_ptr()) })
@@ -146,7 +147,7 @@ impl UnixNativeDispatcher {
 
     /// `lutimes0(long path, long accessUs, long modifyUs)`：lutimes(3)，微秒（不跟随符号链接）。
     #[jvm_native]
-    pub fn lutimes0(path: i64, access: i64, modify: i64) -> Result<()> {
+    fn lutimes0(path: i64, access: i64, modify: i64) -> Result<()> {
         let times = timevals(access, modify);
         // SAFETY: times 为两元素 timeval 数组
         check(|| unsafe { libc::lutimes(cpath(path), times.as_ptr()) })
@@ -154,7 +155,7 @@ impl UnixNativeDispatcher {
 
     /// `futimens0(int fd, long accessNs, long modifyNs)`：futimens(2)，纳秒。
     #[jvm_native]
-    pub fn futimens0(fd: i32, access: i64, modify: i64) -> Result<()> {
+    fn futimens0(fd: i32, access: i64, modify: i64) -> Result<()> {
         let ts = |t: i64| libc::timespec {
             tv_sec: (t / 1_000_000_000) as libc::time_t,
             tv_nsec: (t % 1_000_000_000) as _,
@@ -167,7 +168,7 @@ impl UnixNativeDispatcher {
     /// `statvfs0(long path, UnixFileStoreAttributes)`：文件存储容量。JDK 21 在 macOS 走 statfs(2)
     /// （块大小取 `f_bsize`），其余平台走 statvfs(3)（取 `f_frsize`）。
     #[jvm_native]
-    pub fn statvfs0(path: i64, attrs: UnixFileStoreAttributes) -> Result<()> {
+    fn statvfs0(path: i64, attrs: UnixFileStoreAttributes) -> Result<()> {
         #[cfg(target_os = "macos")]
         let (frsize, blocks, bfree, bavail) = {
             // SAFETY: statfs 为纯数据结构，零值合法
@@ -194,7 +195,7 @@ impl UnixNativeDispatcher {
     /// `getpwuid(int uid)`：getpwuid_r(3) 取用户名字节。缓冲取 `_SC_GETPW_R_SIZE_MAX`（不可得时
     /// 1024，JDK `ENT_BUF_SIZE`）；未找到或名字为空时抛 UnixException（errno 缺省 ENOENT）。
     #[jvm_native]
-    pub fn getpwuid(uid: i32) -> Result<JArray<i8>> {
+    fn getpwuid(uid: i32) -> Result<JArray<i8>> {
         // SAFETY: sysconf 无副作用
         let max = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
         let mut buf = vec![0 as libc::c_char; if max > 0 { max as usize } else { 1024 }];
@@ -221,7 +222,7 @@ impl UnixNativeDispatcher {
     /// `getgrgid(int gid)`：getgrgid_r(3) 取组名字节；ERANGE 时缓冲加 `ENT_BUF_SIZE` 重试（JDK 同款），
     /// 未找到或名字为空时抛 UnixException（errno 缺省 ENOENT）。
     #[jvm_native]
-    pub fn getgrgid(gid: i32) -> Result<JArray<i8>> {
+    fn getgrgid(gid: i32) -> Result<JArray<i8>> {
         match group_lookup(|grp, buf, len, found| unsafe {
             // SAFETY: grp / buf / found 在调用期间有效，buf 长度即 len
             libc::getgrgid_r(gid as libc::gid_t, grp, buf, len, found)
@@ -235,7 +236,7 @@ impl UnixNativeDispatcher {
     /// `getpwnam0(long name)`：getpwnam_r(3) 取 uid；未找到返回 -1，ENOENT / ESRCH / EBADF / EPERM
     /// 视同未找到（各 libc 对「无此用户」的报告不一），其余错误抛 UnixException。
     #[jvm_native]
-    pub fn getpwnam0(name: i64) -> Result<i32> {
+    fn getpwnam0(name: i64) -> Result<i32> {
         // SAFETY: sysconf 无副作用
         let max = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
         let mut buf = vec![0 as libc::c_char; if max > 0 { max as usize } else { ENT_BUF_SIZE }];
@@ -259,7 +260,7 @@ impl UnixNativeDispatcher {
 
     /// `getgrnam0(long name)`：getgrnam_r(3) 取 gid；ERANGE 重试，未找到口径同 getpwnam0。
     #[jvm_native]
-    pub fn getgrnam0(name: i64) -> Result<i32> {
+    fn getgrnam0(name: i64) -> Result<i32> {
         match group_lookup(|grp, buf, len, found| unsafe {
             // SAFETY: name 指向 NUL 结尾串；grp / buf / found 在调用期间有效
             libc::getgrnam_r(cpath(name), grp, buf, len, found)
@@ -272,7 +273,7 @@ impl UnixNativeDispatcher {
 
     /// `fgetxattr0(int fd, long name, long value, int valueLen)`：fgetxattr(2)，返回属性值字节数。
     #[jvm_native]
-    pub fn fgetxattr0(fd: i32, name: i64, value: i64, value_len: i32) -> Result<i32> {
+    fn fgetxattr0(fd: i32, name: i64, value: i64, value_len: i32) -> Result<i32> {
         let (v, n) = (value as *mut libc::c_void, value_len as libc::size_t);
         // SAFETY: name 指向 NUL 结尾属性名；value 为调用方 NativeBuffer，至少 value_len 字节
         #[cfg(target_os = "macos")]
@@ -284,7 +285,7 @@ impl UnixNativeDispatcher {
 
     /// `fsetxattr0(int fd, long name, long value, int valueLen)`：fsetxattr(2)（flags 0：创建或替换）。
     #[jvm_native]
-    pub fn fsetxattr0(fd: i32, name: i64, value: i64, value_len: i32) -> Result<()> {
+    fn fsetxattr0(fd: i32, name: i64, value: i64, value_len: i32) -> Result<()> {
         let (v, n) = (value as *const libc::c_void, value_len as libc::size_t);
         // SAFETY: 同 fgetxattr0，value 至少 value_len 字节可读
         #[cfg(target_os = "macos")]
@@ -296,7 +297,7 @@ impl UnixNativeDispatcher {
 
     /// `fremovexattr0(int fd, long name)`：fremovexattr(2)。
     #[jvm_native]
-    pub fn fremovexattr0(fd: i32, name: i64) -> Result<()> {
+    fn fremovexattr0(fd: i32, name: i64) -> Result<()> {
         // SAFETY: name 指向 NUL 结尾属性名
         #[cfg(target_os = "macos")]
         let r = unsafe { libc::fremovexattr(fd, cpath(name), 0) };
@@ -307,7 +308,7 @@ impl UnixNativeDispatcher {
 
     /// `flistxattr(int fd, long list, int size)`：flistxattr(2)，返回名字表（NUL 分隔）字节数。
     #[jvm_native]
-    pub fn flistxattr(fd: i32, list: i64, size: i32) -> Result<i32> {
+    fn flistxattr(fd: i32, list: i64, size: i32) -> Result<i32> {
         let (l, n) = (list as *mut libc::c_char, size as libc::size_t);
         // SAFETY: list 为调用方 NativeBuffer，至少 size 字节可写
         #[cfg(target_os = "macos")]

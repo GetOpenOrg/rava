@@ -36,6 +36,8 @@ use super::*;
 
 use std::cell::RefCell;
 use std::time::Duration;
+use super::__ThreadHw;
+use super::__ThreadHw2;
 
 // JVMTI 线程状态位（jdk.internal.misc.VM.toThreadState 的编码，getState 消费）：
 // ALIVE = 0x1，TERMINATED = 0x2，RUNNABLE = 0x4。
@@ -162,13 +164,13 @@ fn run_java_thread(t: &Thread) {
     crate::monitor::forget_parker(id);
 }
 
-impl Thread {
+impl __ThreadHw for Thread {
     /// 绑定初始线程（计划 2026-10-05-boot-image-evaluator §5.5.1 S3）：引导映像中的 main 线程（HotSpot
     /// `create_initial_thread` 的对象：system / main 线程组、initPhase3 设定的上下文类加载器）成为 OS 主线程的
     /// 当前线程。eetop / threadStatus 按 `create_initial_thread` 写入（存活、RUNNABLE）。启动序列在任何 Java
     /// 代码之前调用；此前若已按需构造过初始线程，以映像线程取代。
     #[doc(hidden)]
-    pub fn __vm_bind_initial(&self) {
+    fn __vm_bind_initial(&self) {
         let t = Clone::clone(self);
         t.__set_eetop(1);
         let _ = t.__get_holder().__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
@@ -185,7 +187,7 @@ impl Thread {
     /// 线程 id 计数字的地址与初值（引导映像 VM 单元 `next_thread_id`；本伴生文件以私有 mod 挂入，
     /// 经类型挂载对包外可见）
     #[doc(hidden)]
-    pub fn __next_thread_id_cell() -> &'static std::sync::atomic::AtomicI64 {
+    fn __next_thread_id_cell() -> &'static std::sync::atomic::AtomicI64 {
         &NEXT_THREAD_ID
     }
 
@@ -193,7 +195,7 @@ impl Thread {
     /// `<clinit>` 中调用）。转译运行时的 native 在编译期静态解析，注册动作无
     /// 对应物 → no-op（与 CDS.initializeFromArchive 同一处置）。
     #[jvm_native]
-    pub fn registerNatives() -> Result<()> {
+    fn registerNatives() -> Result<()> {
         Ok(())
     }
 
@@ -204,7 +206,7 @@ impl Thread {
     /// 闭包分析沿 `spawn_java_thread` → `run_java_thread` 的手写体调用点（`t.run()`）
     /// 推断，run() 的方法体（Runnable task 的转发入口）照常翻译。
     #[jvm_native]
-    pub fn start0(&self) -> Result<()> {
+    fn start0(&self) -> Result<()> {
         self.__set_eetop(1);
         let holder = self.__get_holder();
         let _ = holder.__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
@@ -225,7 +227,7 @@ impl Thread {
     /// 进入时或驻留中被中断：清中断状态并抛 `InterruptedException("sleep interrupted")`
     /// （HotSpot JVM_Sleep 同语义）。
     #[jvm_native]
-    pub fn sleep0(nanos: i64) -> Result<()> {
+    fn sleep0(nanos: i64) -> Result<()> {
         let me = crate::monitor::current_thread_identity()?;
         let t = Thread::currentThread()?;
         let interrupted = t.__get_interrupted() || {
@@ -245,7 +247,7 @@ impl Thread {
 
     /// native `yield0()`：OS 级让出当前线程时间片。
     #[jvm_native]
-    pub fn yield0() -> Result<()> {
+    fn yield0() -> Result<()> {
         crate::gil::yield_now();
         Ok(())
     }
@@ -253,7 +255,7 @@ impl Thread {
     /// native `sleepNanos0(long)`：JDK25 对 `sleep0(long)` 的改名（参数同为纳秒，
     /// 语义不变）——两版语料各经各自名面触达，同一实现。
     #[jvm_native]
-    pub fn sleepNanos0(nanos: i64) -> Result<()> {
+    fn sleepNanos0(nanos: i64) -> Result<()> {
         Self::sleep0(nanos)
     }
 
@@ -267,7 +269,7 @@ impl Thread {
     /// println 路径），FieldHolder 类一并入闭包——Thread.holder 字段保持真实类型而非擦除
     /// Object，本文件的 holder 访问在任意闭包形态下可编译。
     #[jvm_native]
-    pub fn currentThread() -> Result<Thread> {
+    fn currentThread() -> Result<Thread> {
         if let Some(t) = current_slot() {
             return Ok(t);
         }
@@ -283,14 +285,14 @@ impl Thread {
     /// 字节码写入 holder（getPriority 读取）；HotSpot 在 Linux 缺省策略
     /// （ThreadPriorityPolicy=0）下同样不改变调度，无可观察行为。
     #[jvm_native]
-    pub fn setPriority0(&self, _newPriority: i32) -> Result<()> {
+    fn setPriority0(&self, _newPriority: i32) -> Result<()> {
         Ok(())
     }
 
     /// native `setNativeName(String)`：设置 OS 层线程名（调试器 / top 可见），Java 侧
     /// 名字已由 `setName` 字节码写入 name 字段；OS 线程名在派生时已按创建时名设定。
     #[jvm_native]
-    pub fn setNativeName(&self, _name: String) -> Result<()> {
+    fn setNativeName(&self, _name: String) -> Result<()> {
         Ok(())
     }
 
@@ -299,7 +301,7 @@ impl Thread {
     /// 线程表读锁内只复制句柄；`eetop` 过滤在放锁后做——Java 字段读取是安全点，持 `__RefSlot`
     /// 守卫进入安全点违反持锁约束（无 GC 文档第四节小步 A），快照中落选的句柄也在锁外释放。
     #[jvm_native]
-    pub fn getThreads() -> Result<JArray<Thread>> {
+    fn getThreads() -> Result<JArray<Thread>> {
         let snapshot: Vec<Thread> = LIVE_THREADS.with(|v| v.borrow().to_vec());
         Ok(JArray::from(snapshot.into_iter().filter(|t| t.__get_eetop() != 0).collect::<Vec<_>>()))
     }
@@ -307,14 +309,14 @@ impl Thread {
     /// native `getStackTrace0()`：他线程的栈快照。Java 帧元数据不随原生栈保留（FS-E1），
     /// 返回 null——`getStackTrace` 按 JDK 语义给出空数组（与目标线程已终结同形）。
     #[jvm_native]
-    pub fn getStackTrace0(&self) -> Result<Object> {
+    fn getStackTrace0(&self) -> Result<Object> {
         Ok(Object::default())
     }
 
     /// native `dumpThreads(Thread[])`：getAllStackTraces 的批量快照，同上每线程为空栈
     /// （StackTraceElement 由共置手写层保证恒在闭包内）。
     #[jvm_native]
-    pub fn dumpThreads(threads: JArray<Thread>) -> Result<JArray<JArray<crate::java::lang::StackTraceElement>>> {
+    fn dumpThreads(threads: JArray<Thread>) -> Result<JArray<JArray<crate::java::lang::StackTraceElement>>> {
         let n = threads.len()?;
         Ok(JArray::new_with(n, || JArray::new(0)))
     }
@@ -322,7 +324,7 @@ impl Thread {
     /// native `currentCarrierThread()`：当前载体线程（`JavaThread::_threadObj`）。虚拟线程挂载期间
     /// 与 `currentThread()` 不同；平台线程上两者相同。
     #[jvm_native]
-    pub fn currentCarrierThread() -> Result<Thread> {
+    fn currentCarrierThread() -> Result<Thread> {
         if let Some(t) = carrier_slot() {
             return Ok(t);
         }
@@ -334,7 +336,7 @@ impl Thread {
     /// native `setCurrentThread(Thread)`：`this` 为载体，VirtualThread 挂载 / 卸载时切换本载体的
     /// 「当前线程」对象（HotSpot JavaThread::_vthread）。
     #[jvm_native]
-    pub fn setCurrentThread(&self, thread: Thread) -> Result<()> {
+    fn setCurrentThread(&self, thread: Thread) -> Result<()> {
         set_current_slot(Some(thread));
         Ok(())
     }
@@ -344,18 +346,18 @@ impl Thread {
     /// 处于初始哨兵态（新线程、从未进入 runWith）时才走本查找，此时栈上无 runWith 帧，
     /// 返回 null（调用方回落 `Snapshot.EMPTY_SNAPSHOT`）。
     #[jvm_native]
-    pub fn findScopedValueBindings() -> Result<Object> {
+    fn findScopedValueBindings() -> Result<Object> {
         Ok(Object::default())
     }
 
     /// native `scopedValueCache()` / `setScopedValueCache(Object[])`：每线程缓存槽。
     #[jvm_native]
-    pub fn scopedValueCache() -> Result<JArray<Object>> {
+    fn scopedValueCache() -> Result<JArray<Object>> {
         Ok(scoped_value_cache_slot().unwrap_or_default())
     }
 
     #[jvm_native]
-    pub fn setScopedValueCache(cache: JArray<Object>) -> Result<()> {
+    fn setScopedValueCache(cache: JArray<Object>) -> Result<()> {
         set_scoped_value_cache_slot(if cache.is_jvm_null() { None } else { Some(cache) });
         Ok(())
     }
@@ -364,7 +366,7 @@ impl Thread {
     /// `Thread.runWith` 里对 scoped-value 绑定做的栈遍历物化簿记（纯 VM 内部
     /// 动作，无可观察行为）→ no-op。
     #[jvm_native]
-    pub fn ensureMaterializedForStackWalk(_bindings: Object) -> Result<()> {
+    fn ensureMaterializedForStackWalk(_bindings: Object) -> Result<()> {
         Ok(())
     }
 
@@ -372,26 +374,26 @@ impl Thread {
     /// 与 HotSpot 同形：计数字是 VM 侧静态存储（`ThreadIdentifier` 的 next 字），返回其
     /// 绝对地址，`Unsafe.getAndAddLong(null, 地址, 1)` 经原生内存的原子指令推进。
     #[jvm_native]
-    pub fn getNextThreadIdOffset() -> Result<i64> {
+    fn getNextThreadIdOffset() -> Result<i64> {
         Ok(NEXT_THREAD_ID.as_ptr() as i64)
     }
 
     /// native `holdsLock(Object)`：当前线程是否持有 obj 的监视器（null → NPE）。
     #[jvm_native]
-    pub fn holdsLock(obj: Object) -> Result<bool> {
+    fn holdsLock(obj: Object) -> Result<bool> {
         crate::monitor::holds_lock(obj.0.__identity() as usize)
     }
 
     /// native `interrupt0()`：JDK `interrupt()` 字节码置字段后通知 VM——唤醒同上。
     #[jvm_native]
-    pub fn interrupt0(&self) -> Result<()> {
+    fn interrupt0(&self) -> Result<()> {
         crate::monitor::interrupt(Object::from(Clone::clone(self)).0.__identity() as usize);
         Ok(())
     }
 
     /// native `clearInterruptEvent()`：Java 侧清中断状态后同步清 VM 侧镜像。
     #[jvm_native]
-    pub fn clearInterruptEvent() -> Result<()> {
+    fn clearInterruptEvent() -> Result<()> {
         crate::monitor::clear_interrupt(crate::monitor::current_thread_identity()?);
         Ok(())
     }
@@ -486,10 +488,10 @@ fn vm_system_thread(name: &str) -> Result<Thread> {
     Ok(t)
 }
 
-impl Thread {
+impl __ThreadHw2 for Thread {
     /// 派生 VM 系统线程（见 [`spawn_vm_system_thread`]；本伴生文件以私有 mod 挂入，经类型挂载对包外可见）
     #[doc(hidden)]
-    pub fn __vm_spawn_system(name: &'static str, body: impl FnOnce() + Send + 'static) -> Result<()> {
+    fn __vm_spawn_system(name: &'static str, body: impl FnOnce() + Send + 'static) -> Result<()> {
         spawn_vm_system_thread(name, body)
     }
 }

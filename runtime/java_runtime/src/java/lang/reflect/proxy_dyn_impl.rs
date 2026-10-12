@@ -27,6 +27,7 @@ use super::Proxy_Dyn;
 use crate::java::lang::{Boolean, Byte, Character, Class, Double, Float, Integer, Long, Short};
 use crate::reflect_dispatch as rd;
 use crate::java::lang::reflect::Method;
+use super::__Proxy_DynHw;
 
 crate::__process_static! {
     /// (接口, 方法名, 描述符) → Method 对象。
@@ -81,11 +82,11 @@ fn rebox(kind: u8, v: Object) -> Result<Object> {
     })
 }
 
-impl Proxy_Dyn {
+impl __Proxy_DynHw for Proxy_Dyn {
     /// 代理类定义点：接口全部声明实例方法的 Method 对象入进程级缓存（ProxyGenerator 生成类的
     /// static final Method 字段的对应物；调用时按 (声明接口, 名字, 描述符) 命中同一对象）。
     #[jvm_native]
-    pub fn defineInterfaceMethods(intf: Class) -> Result<()> {
+    fn defineInterfaceMethods(intf: Class) -> Result<()> {
         let iface = format!("{}", intf.__get_name()).replace('.', "/");
         for meta in intf.__declared_method_rows() {
             if meta.inherited || meta.is_static || meta.name.starts_with('<') {
@@ -97,7 +98,7 @@ impl Proxy_Dyn {
     }
 
     /// instanceof / checkcast：实例接口列表中任一接口（含其超接口）可赋值给 `type_id`。
-    pub fn __vm_proxy_implements(&self, type_id: &str) -> bool {
+    fn __vm_proxy_implements(&self, type_id: &str) -> bool {
         let intfs = self.__get_intfs();
         let Ok(n) = intfs.len() else { return false };
         (0..n).any(|i| match intfs.get(i) {
@@ -111,7 +112,7 @@ impl Proxy_Dyn {
 
     /// 接口方法调用（接口载体分派回退点）：转入 `dispatch(Method, Object[])`。VM 钩子（非 Java 成员，
     /// 类 2：动态代理由 VM 支持类 Proxy$Dyn 承载，登记见 vm_intrinsics.toml Proxy.newProxyInstance）。
-    pub fn __vm_proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: Vec<Object>) -> Result<Object> {
+    fn __vm_proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: Vec<Object>) -> Result<Object> {
         let m = proxy_method(iface, name, desc)?;
         let kinds = param_kinds(desc);
         let mut boxed = Vec::with_capacity(args.len());

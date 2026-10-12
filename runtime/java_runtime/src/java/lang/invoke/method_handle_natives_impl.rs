@@ -18,6 +18,7 @@ use super::method_type::MethodType;
 use crate::java::lang::Class;
 use crate::java::lang::NoSuchFieldError;
 use crate::java::lang::NoSuchMethodError;
+use super::__MethodHandleNativesHw;
 
 fn _internal_error(msg: &str) -> JvmError {
     match crate::java::lang::InternalError::new_str(String::from(msg)) {
@@ -47,10 +48,10 @@ fn caller_sensitive_bit(class_slash: &str, name: &str, descriptor: &str) -> i32 
         .map_or(0, |_| MN_CALLER_SENSITIVE)
 }
 
-impl MethodHandleNatives {
+impl __MethodHandleNativesHw for MethodHandleNatives {
     /// native `registerNatives()`：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
-    pub fn registerNatives() -> Result<()> {
+    fn registerNatives() -> Result<()> {
         Ok(())
     }
 
@@ -67,7 +68,7 @@ impl MethodHandleNatives {
     ///     private → invokeSpecial；其余 invokeVirtual）| 修饰位；
     ///   - 字段：clazz、name、type = 字段类型、flags = IS_FIELD | refKind（getStatic / getField）| 修饰位。
     #[jvm_native]
-    pub fn init(m: MemberName, reference: Object) -> Result<()> {
+    fn init(m: MemberName, reference: Object) -> Result<()> {
         // 经 ObjectVTable 的按名字段协议读反射对象（不静态引用反射类型：本 impl 在
         // MethodHandleNatives 生成时即参与编译，反射类未必在闭包内）
         const ACC_STATIC: i32 = 0x0008;
@@ -146,7 +147,7 @@ impl MethodHandleNatives {
     /// resolveOrFail 经 makeAccessException 还原 NoSuchField(/Method)
     /// Exception（与 JDK 解析失败同型）；speculative → Ok(null MemberName)。
     #[jvm_native]
-    pub fn resolve(m: MemberName, _lookupClass: Class, _allowedModes: i32, speculativeResolve: bool) -> Result<MemberName> {
+    fn resolve(m: MemberName, _lookupClass: Class, _allowedModes: i32, speculativeResolve: bool) -> Result<MemberName> {
         let flags = m.__get_flags();
         let ref_kind: i8 = (((flags >> 24) & 15) as i8);
         if ref_kind >= 1 && ref_kind <= 4 {
@@ -260,7 +261,7 @@ impl MethodHandleNatives {
     /// native `staticFieldBase(MemberName)`：静态字段基址——声明类 Class 对象（与
     /// Unsafe.staticFieldBase 同约定；MH 解释器据 Class 基址识别静态访问）。
     #[jvm_native]
-    pub fn staticFieldBase(m: MemberName) -> Result<Object> {
+    fn staticFieldBase(m: MemberName) -> Result<Object> {
         Ok(Object::from(m.__get_clazz()))
     }
 
@@ -269,7 +270,7 @@ impl MethodHandleNatives {
     /// 字段不相交）：Unsafe 引用访问器据此路由到声明类的静态存储（ClassSpecializer$Factory
     /// .linkCodeToSpeciesData 写 species 类 BMH_SPECIES 的消费路径）。
     #[jvm_native]
-    pub fn staticFieldOffset(m: MemberName) -> Result<i64> {
+    fn staticFieldOffset(m: MemberName) -> Result<i64> {
         let decl = format!("{}", m.__get_clazz().__get_name()).replace('.', "/");
         Ok(crate::reflect_dispatch::static_field_id(decl, format!("{}", m.__get_name())))
     }
@@ -281,7 +282,7 @@ impl MethodHandleNatives {
     /// HotSpot 按 vmindex（偏移）回查字段，本模型偏移是不透明标识，按已知名字回查字段表补 type，名字也缺
     /// 则回查不到 → 与 HotSpot 回查失败同落到 "unrecognized MemberName format"。
     #[jvm_native]
-    pub fn expand(m: MemberName) -> Result<()> {
+    fn expand(m: MemberName) -> Result<()> {
         if _is_jnull_ref(&m) {
             return Err(_internal_error("mname is null"));
         }
@@ -311,7 +312,7 @@ impl MethodHandleNatives {
     }
 
     #[jvm_native]
-    pub fn objectFieldOffset(m: MemberName) -> Result<i64> {
+    fn objectFieldOffset(m: MemberName) -> Result<i64> {
         crate::jdk::internal::misc::Unsafe::getUnsafe()?
             .objectFieldOffset1(Clone::clone(&m.__get_clazz()), Clone::clone(&m.__get_name()))
     }

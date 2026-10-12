@@ -8,6 +8,7 @@ use crate::prelude::*;
 use super::socket_dispatcher::SocketDispatcher;
 use crate::java::io::FileDescriptor;
 use crate::net_posix::{self, errno};
+use super::__SocketDispatcherHw;
 
 const IOS_EOF: i64 = -1;
 const IOS_UNAVAILABLE: i64 = -2;
@@ -40,10 +41,10 @@ fn read_result(n: i64) -> Result<i64> {
     convert(n, true)
 }
 
-impl SocketDispatcher {
+impl __SocketDispatcherHw for SocketDispatcher {
     /// native `read0(FileDescriptor, long address, int len)`：read(2)。
     #[jvm_native]
-    pub fn read0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
+    fn read0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向至少 len 字节的本地缓冲区
         let n = crate::gil::blocking(|| unsafe { libc::read(fd, address as *mut libc::c_void, len as usize) });
@@ -52,7 +53,7 @@ impl SocketDispatcher {
 
     /// native `readv0(FileDescriptor, long address, int len)`：address 为 len 个 iovec。
     #[jvm_native]
-    pub fn readv0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i64> {
+    fn readv0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i64> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向 len 个有效 iovec
         let n = crate::gil::blocking(|| unsafe { libc::readv(fd, address as *const libc::iovec, len) });
@@ -61,7 +62,7 @@ impl SocketDispatcher {
 
     /// native `write0(FileDescriptor, long address, int len)`：write(2)。
     #[jvm_native]
-    pub fn write0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
+    fn write0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向至少 len 字节的本地缓冲区
         let n = crate::gil::blocking(|| unsafe { libc::write(fd, address as *const libc::c_void, len as usize) });
@@ -70,7 +71,7 @@ impl SocketDispatcher {
 
     /// native `writev0(FileDescriptor, long address, int len)`：address 为 len 个 iovec。
     #[jvm_native]
-    pub fn writev0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i64> {
+    fn writev0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i64> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向 len 个有效 iovec
         let n = crate::gil::blocking(|| unsafe { libc::writev(fd, address as *const libc::iovec, len) });

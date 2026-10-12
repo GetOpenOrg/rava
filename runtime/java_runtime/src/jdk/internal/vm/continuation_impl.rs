@@ -21,6 +21,7 @@ use parking_lot::Mutex;
 use crate::exec_context::{self, ExecContext};
 use rava_coro::{Context, Stack};
 use std::collections::HashMap;
+use super::__ContinuationHw;
 
 /// 一条协程（repr(C)：执行上下文块为首字段，`doYield` 由当前块地址还原记录）
 #[repr(C)]
@@ -89,10 +90,10 @@ fn set_tail_empty(c: &Continuation, empty: bool) {
     }
 }
 
-impl Continuation {
+impl __ContinuationHw for Continuation {
     /// native `registerNatives()`：HotSpot 登记 enterSpecial / doYield 等入口；原生二进制按名链接 → no-op。
     #[jvm_native]
-    pub fn registerNatives() -> Result<()> {
+    fn registerNatives() -> Result<()> {
         Ok(())
     }
 
@@ -102,7 +103,7 @@ impl Continuation {
     /// panic（unwind 形态）在此于载体栈上继续 unwind。
     /// `isVirtualThread` 只供 HotSpot 的 JVMTI 通知，这里不用。
     #[jvm_native(unpinned)]
-    pub fn enterSpecial(c: Continuation, isContinue: bool, isVirtualThread: bool) -> Result<()> {
+    fn enterSpecial(c: Continuation, isContinue: bool, isVirtualThread: bool) -> Result<()> {
         let key = identity(Clone::clone(&c));
         let co: *mut Coroutine = if isContinue {
             match shard(key).lock().get_mut(&key) {
@@ -161,7 +162,7 @@ impl Continuation {
     /// native `doYield()`：当前（最内层）Continuation 未被 pin 时保存上下文、切回其 `enterSpecial` 调用点，
     /// 日后被继续时返回 0（可能已在另一载体上）；被 pin 时不切换，返回原因码（2 / 3 / 4）
     #[jvm_native(unpinned)]
-    pub fn doYield() -> Result<i32> {
+    fn doYield() -> Result<i32> {
         let ctx = exec_context::current();
         match exec_context::yield_pinned_reason() {
             None => panic!("rava: doYield 不在 Continuation 内"),
@@ -178,7 +179,7 @@ impl Continuation {
 
     /// native `pin()`：当前 Continuation 的临界区计数 +1；不在 Continuation 内时无操作
     #[jvm_native(unpinned)]
-    pub fn pin() -> Result<()> {
+    fn pin() -> Result<()> {
         if exec_context::pin_critical() {
             Ok(())
         } else {
@@ -188,7 +189,7 @@ impl Continuation {
 
     /// native `unpin()`：临界区计数 −1；计数为 0 时抛 IllegalStateException（HotSpot 同消息）
     #[jvm_native(unpinned)]
-    pub fn unpin() -> Result<()> {
+    fn unpin() -> Result<()> {
         if exec_context::unpin_critical() {
             Ok(())
         } else {
@@ -198,7 +199,7 @@ impl Continuation {
 
     /// native `isPinned0(scope)`：自最内层向外到第一个 `scope` 匹配的 Continuation，任一层被 pin 即返回原因码，否则 0
     #[jvm_native(unpinned)]
-    pub fn isPinned0(scope: ContinuationScope) -> Result<i32> {
+    fn isPinned0(scope: ContinuationScope) -> Result<i32> {
         Ok(exec_context::scope_pinned_reason(identity(scope)))
     }
 }

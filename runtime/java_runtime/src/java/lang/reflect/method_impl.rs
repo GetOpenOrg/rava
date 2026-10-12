@@ -33,6 +33,7 @@ use crate::prelude::*;
 use super::Method;
 use crate::java::lang::Class;
 use crate::java::lang::Object;
+use super::__MethodHw;
 
 crate::__process_static! {
     /// (声明类镜像身份, slot) → 分派键 (类名斜线形态, 方法名, 完整描述符)。
@@ -166,10 +167,10 @@ fn __member_key(m: &Method) -> Option<(&'static str, &'static str, &'static str)
     }
 }
 
-impl Method {
+impl __MethodHw for Method {
     /// 反射族内部：本方法的 L3 分派键 (声明类斜线名, 方法名, 完整描述符)。三分量均为
     /// `&'static`（表构造：元数据表行；非表形态：驻留池），调用方零分配消费。
-    pub(crate) fn __reflect_key(&self) -> Option<(&'static str, &'static str, &'static str)> {
+    fn __reflect_key(&self) -> Option<(&'static str, &'static str, &'static str)> {
         __member_key(self)
     }
 }

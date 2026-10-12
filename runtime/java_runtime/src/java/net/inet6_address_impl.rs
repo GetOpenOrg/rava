@@ -3,11 +3,12 @@
 use crate::java::net::Inet6Address__Methods as _;
 use crate::prelude::*;
 use super::inet6_address::Inet6Address;
+use super::__Inet6AddressHw;
 
-impl Inet6Address {
+impl __Inet6AddressHw for Inet6Address {
     /// native `init()`：缓存 JNI 字段 ID——无需。
     #[jvm_native]
-    pub fn init() -> Result<()> {
+    fn init() -> Result<()> {
         Ok(())
     }
 }

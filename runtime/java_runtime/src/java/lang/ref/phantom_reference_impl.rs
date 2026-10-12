@@ -7,12 +7,13 @@
 use crate::java::lang::r#ref::PhantomReference__Methods as _;
 use crate::prelude::*;
 use super::phantom_reference::PhantomReference;
+use super::__PhantomReferenceHw;
 
-impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> PhantomReference<T> {
+impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> __PhantomReferenceHw for PhantomReference<T> {
     /// native `refersTo0(Object)`：referent 引用身份比较（acmp 语义，null 同样成立）。
     /// 消费方：Reference.refersTo 经 refersToImpl 虚分派到本覆盖（TestReferenceTypes）。
     #[jvm_native]
-    pub fn refersTo0(&self, obj: Object) -> Result<bool> {
+    fn refersTo0(&self, obj: Object) -> Result<bool> {
         Ok(Into::<Object>::into(self.__get_referent()) == obj)
     }
 
@@ -20,7 +21,7 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_mo
     /// 同 `Reference.clear0`（无 GC，不入队）
     #[cfg(jdk_ge_25)]
     #[jvm_native]
-    pub fn clear0(&self) -> Result<()> {
+    fn clear0(&self) -> Result<()> {
         self.__set_referent(T::default());
         Ok(())
     }

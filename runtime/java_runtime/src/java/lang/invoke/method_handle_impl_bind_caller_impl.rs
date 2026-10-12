@@ -12,11 +12,12 @@ use crate::java::lang::invoke::MethodHandleImpl_BindCaller__Methods as _;
 use crate::prelude::*;
 use super::method_handle_impl_bind_caller::MethodHandleImpl_BindCaller;
 use crate::java::lang::Class;
+use super::__MethodHandleImpl_BindCallerHw;
 
-impl MethodHandleImpl_BindCaller {
+impl __MethodHandleImpl_BindCallerHw for MethodHandleImpl_BindCaller {
     /// `makeInjectedInvoker(Class targetClass)`：定义（登记）调用者类的注入调用器隐藏类并返回。
     #[jvm_native]
-    pub fn makeInjectedInvoker(targetClass: Class) -> Result<Class> {
+    fn makeInjectedInvoker(targetClass: Class) -> Result<Class> {
         let host = format!("{}", targetClass.__get_name()).replace('.', "/");
         Ok(Class::for_class(crate::injected_invoker::define(&host)))
     }
@@ -24,7 +25,7 @@ impl MethodHandleImpl_BindCaller {
     /// `generateInvokerTemplate()`：模板类字节只供 `makeInjectedInvoker` 定义隐藏类，该定义点
     /// 由 VM 承载 → 空模板（ASM 生成链不执行）。
     #[jvm_native]
-    pub fn generateInvokerTemplate() -> Result<JArray<i8>> {
+    fn generateInvokerTemplate() -> Result<JArray<i8>> {
         Ok(JArray::from(Vec::<i8>::new()))
     }
 }

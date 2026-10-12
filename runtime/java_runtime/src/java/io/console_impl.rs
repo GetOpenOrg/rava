@@ -9,24 +9,25 @@ use crate::java::io::Console__Methods as _;
 use crate::prelude::*;
 use super::console::Console;
 use crate::java::lang::String;
+use super::__ConsoleHw;
 
-impl Console {
+impl __ConsoleHw for Console {
     /// `istty()`：stdin 与 stdout 均连接终端（`isatty(0) && isatty(1)`）。
     #[jvm_native]
-    pub fn istty() -> Result<bool> {
+    fn istty() -> Result<bool> {
         // SAFETY: isatty 只查询文件描述符属性，无内存副作用
         Ok(unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 })
     }
 
     /// `encoding()`：Unix 实现恒返回 null。
     #[jvm_native]
-    pub fn encoding() -> Result<String> {
+    fn encoding() -> Result<String> {
         Ok(Default::default())
     }
 
     /// `ttyStatus()`：TTY_STDIN_MASK(1) | TTY_STDOUT_MASK(2) | TTY_STDERR_MASK(4)。
     #[jvm_native]
-    pub fn ttyStatus() -> Result<i32> {
+    fn ttyStatus() -> Result<i32> {
         // SAFETY: isatty 只查询文件描述符属性，无内存副作用
         let tty = |fd: i32| unsafe { libc::isatty(fd) == 1 };
         Ok((tty(0) as i32) | ((tty(1) as i32) << 1) | ((tty(2) as i32) << 2))

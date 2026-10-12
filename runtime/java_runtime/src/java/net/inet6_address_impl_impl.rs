@@ -7,6 +7,7 @@ use crate::prelude::*;
 use super::inet4_address_impl_impl::{host_arg, to_jbytes, unknown_host};
 use super::{Inet4Address, Inet6Address, Inet6AddressImpl, InetAddress};
 use crate::net_posix;
+use super::__Inet6AddressImplHw;
 
 /// `InetAddressResolver.LookupPolicy` 特征位
 const IPV4: i32 = 1 << 0;
@@ -22,10 +23,10 @@ fn family_of(characteristics: i32) -> i32 {
     }
 }
 
-impl Inet6AddressImpl {
+impl __Inet6AddressImplHw for Inet6AddressImpl {
     /// native `getLocalHostName()`：gethostname，失败为 "localhost"。
     #[jvm_native]
-    pub fn getLocalHostName(&self) -> Result<String> {
+    fn getLocalHostName(&self) -> Result<String> {
         Ok(String::from(net_posix::host_name()))
     }
 
@@ -33,7 +34,7 @@ impl Inet6AddressImpl {
     /// IPV4_FIRST / IPV6_FIRST 按族重排，否则保持系统顺序；IPv6 非零 scope 记入 scope_id。
     /// 失败抛 UnknownHostException（「host: gai_strerror」）。macOS 上本机名解析失败时取接口地址。
     #[jvm_native]
-    pub fn lookupAllHostAddr_str_i(&self, host: String, characteristics: i32) -> Result<JArray<InetAddress>> {
+    fn lookupAllHostAddr_str_i(&self, host: String, characteristics: i32) -> Result<JArray<InetAddress>> {
         let name = host_arg(&host)?;
         let v6_first = characteristics & IPV6_FIRST != 0;
         let addrs = match net_posix::resolve(&name, family_of(characteristics)) {
@@ -63,7 +64,7 @@ impl Inet6AddressImpl {
 
     /// native `getHostByAddr(byte[])`：getnameinfo(NI_NAMEREQD)；无名字抛 UnknownHostException（消息为 null）。
     #[jvm_native]
-    pub fn getHostByAddr(&self, addr: JArray<i8>) -> Result<String> {
+    fn getHostByAddr(&self, addr: JArray<i8>) -> Result<String> {
         let bytes: Vec<u8> = addr.to_vec().into_iter().map(|b| b as u8).collect();
         net_posix::reverse(&bytes).map(String::from).ok_or_else(|| unknown_host(None))
     }

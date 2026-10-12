@@ -9,10 +9,11 @@ use crate::java::lang::reflect::Proxy_ProxyBuilder__Methods as _;
 use crate::prelude::*;
 use super::proxy_proxy_builder::Proxy_ProxyBuilder;
 use crate::java::lang::Class;
+use super::__Proxy_ProxyBuilderHw;
 
-impl Proxy_ProxyBuilder {
+impl __Proxy_ProxyBuilderHw for Proxy_ProxyBuilder {
     #[jvm_native]
-    pub fn isProxyClass(c: Class) -> Result<bool> {
+    fn isProxyClass(c: Class) -> Result<bool> {
         Ok(format!("{}", c.__get_name()) == "java.lang.reflect.Proxy$Dyn")
     }
 }

@@ -7,23 +7,24 @@
 use crate::java::net::InetAddress__Methods as _;
 use crate::prelude::*;
 use super::inet_address::InetAddress;
+use super::__InetAddressHw;
 
-impl InetAddress {
+impl __InetAddressHw for InetAddress {
     /// native `init()`：缓存 JNI 类与字段 ID——无需。
     #[jvm_native]
-    pub fn init() -> Result<()> {
+    fn init() -> Result<()> {
         Ok(())
     }
 
     /// native `isIPv4Available()`：能创建 AF_INET 套接字。
     #[jvm_native]
-    pub fn isIPv4Available() -> Result<bool> {
+    fn isIPv4Available() -> Result<bool> {
         Ok(crate::net_posix::ipv4_supported())
     }
 
     /// native `isIPv6Supported()`：协议栈支持 IPv6（不看 preferIPv4Stack，Java 侧自行处理）。
     #[jvm_native]
-    pub fn isIPv6Supported() -> Result<bool> {
+    fn isIPv6Supported() -> Result<bool> {
         Ok(crate::net_posix::ipv6_supported())
     }
 }

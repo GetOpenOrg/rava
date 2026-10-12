@@ -8,10 +8,11 @@ use crate::jdk::internal::reflect::AccessorUtils__Methods as _;
 use crate::prelude::*;
 use super::accessor_utils::AccessorUtils;
 use crate::java::lang::{Class, RuntimeException};
+use super::__AccessorUtilsHw;
 
-impl AccessorUtils {
+impl __AccessorUtilsHw for AccessorUtils {
     #[jvm_native]
-    pub fn isIllegalArgument(_accessor_type: Class, e: RuntimeException) -> Result<bool> {
+    fn isIllegalArgument(_accessor_type: Class, e: RuntimeException) -> Result<bool> {
         Ok(!crate::reflect_dispatch::thrown_by_target(&Object::from(e)))
     }
 }

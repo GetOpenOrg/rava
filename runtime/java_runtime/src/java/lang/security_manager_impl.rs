@@ -8,6 +8,7 @@
 
 use crate::prelude::*;
 use super::*;
+use super::__SecurityManagerHw;
 
 fn _internal_error(msg: &str) -> JvmError {
     match crate::java::lang::InternalError::new_str(String::from(msg)) {
@@ -16,10 +17,10 @@ fn _internal_error(msg: &str) -> JvmError {
     }
 }
 
-impl SecurityManager {
+impl __SecurityManagerHw for SecurityManager {
     /// native `getClassContext()`：调用栈上各帧的持有类（自调用者起）。
     #[jvm_native]
-    pub fn getClassContext(&self) -> Result<JArray<Class>> {
+    fn getClassContext(&self) -> Result<JArray<Class>> {
         let frames = crate::vm_stack::capture_java_frames();
         // vframeStream 自 getClassContext 帧起（本 native 方法的手写帧；其上为数据面自身的 Rust 帧，不成 Java 帧）
         let Some(start) = frames.iter()

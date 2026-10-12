@@ -1,6 +1,8 @@
 use crate::java::lang::String__Methods as _;
 use crate::prelude::*;
 use super::string::String;
+use super::__StringHw;
+use super::__StringHw2;
 
 /// String 内容的驻留键：UTF-16 code units 序列（Java `String.intern` 按内容判等，
 /// 与 coder 无关——同一内容可能是 LATIN1 或 UTF16 存储，键必须统一到 code units）。
@@ -65,12 +67,12 @@ crate::__process_static! {
         RefCell::new(std::collections::HashMap::new());
 }
 
-impl String {
+impl __StringHw2 for String {
     /// 驻留表的内部访问形态（无 `Result` 包装，字面量构造路径共用）：返回该内容
     /// 的规范实例——表中已有则取同一实例（identity 相同），否则把 `self` 入表
     /// 成为规范实例。语义同 `intern()`。
     #[doc(hidden)]
-    pub fn __interned(self) -> String {
+    fn __interned(self) -> String {
         let key = __intern_key(&self);
         __STRING_INTERN_TABLE.with(|table| {
             if let Some(canon) = table.borrow().get(&key) {
@@ -87,7 +89,7 @@ impl String {
     /// `java/lang/String.intern:()Ljava/lang/String;`（S-6）：按内容返回常量池
     /// 规范实例——与相同内容的字面量是同一对象。
     #[jvm_native]
-    pub fn intern(&self) -> Result<String> {
+    fn intern(&self) -> Result<String> {
         Ok(Clone::clone(self).__interned())
     }
 }

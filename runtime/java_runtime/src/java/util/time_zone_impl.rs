@@ -9,15 +9,16 @@ use crate::java::util::TimeZone__Methods as _;
 use crate::prelude::*;
 use super::time_zone::TimeZone;
 use crate::java::lang::String;
+use super::__TimeZoneHw;
 
 fn zoneinfo_suffix(path: &str) -> Option<std::string::String> {
     path.find("zoneinfo/").map(|i| path[i + "zoneinfo/".len()..].to_owned())
 }
 
-impl TimeZone {
+impl __TimeZoneHw for TimeZone {
     /// `getSystemTimeZoneID(String javaHome)`：平台时区 ID（取不到 → null）。
     #[jvm_native]
-    pub fn getSystemTimeZoneID(_java_home: String) -> Result<String> {
+    fn getSystemTimeZoneID(_java_home: String) -> Result<String> {
         if let Ok(tz) = std::env::var("TZ") {
             let tz = tz.trim_start_matches(':');
             if !tz.is_empty() {
@@ -41,7 +42,7 @@ impl TimeZone {
     /// `getSystemGMTOffsetID()`：按本地 UTC 偏移构造 `GMT±hh:mm`（偏移为 0 → `GMT`）。
     /// 原生二进制不依赖 libc 的 localtime：偏移未知时取 0，与 TZ 未设置的容器环境一致。
     #[jvm_native]
-    pub fn getSystemGMTOffsetID() -> Result<String> {
+    fn getSystemGMTOffsetID() -> Result<String> {
         Ok(String::from("GMT"))
     }
 }

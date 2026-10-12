@@ -20,6 +20,7 @@ use crate::prelude::*;
 use super::var_handle::VarHandle;
 use super::var_handle_ext::*;
 use crate::jdk::internal::misc::Unsafe;
+use super::__VarHandleHw;
 
 /// 本 VarHandle 的字段偏移（不透明 id）。Field 家族 flavor 的 `fieldOffset` 是非擦除
 /// 平铺 long 字段，经 `__unsafe_long_cell` 按名协议直读；非 Field flavor → None。
@@ -158,9 +159,9 @@ fn _field_cas(c: _Carrier, holder: &Object, off: i64, expected: &Object, new: &O
     Ok(_same(c, &witness, &_norm(c, expected)?))
 }
 
-impl VarHandle {
+impl __VarHandleHw for VarHandle {
     /// native `get(Object...)`：plain 读（单线程下与 volatile 同一存储单元）。
-    pub fn get(&self, args: JArray<Object>) -> Result<Object> {
+    fn get(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_get(self, &args);
         }
@@ -169,7 +170,7 @@ impl VarHandle {
     }
 
     /// native `set(Object...)`：plain 写。
-    pub fn set(&self, args: JArray<Object>) -> Result<()> {
+    fn set(&self, args: JArray<Object>) -> Result<()> {
         if _is_array_flavor(self) {
             return _array_set(self, &args);
         }
@@ -178,7 +179,7 @@ impl VarHandle {
     }
 
     /// native `getVolatile(Object...)`：volatile 读。
-    pub fn getVolatile(&self, args: JArray<Object>) -> Result<Object> {
+    fn getVolatile(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_get(self, &args);
         }
@@ -187,7 +188,7 @@ impl VarHandle {
     }
 
     /// native `setVolatile(Object...)`：volatile 写。
-    pub fn setVolatile(&self, args: JArray<Object>) -> Result<()> {
+    fn setVolatile(&self, args: JArray<Object>) -> Result<()> {
         if _is_array_flavor(self) {
             return _array_set(self, &args);
         }
@@ -196,28 +197,28 @@ impl VarHandle {
     }
 
     /// native `getAcquire(Object...)`：acquire 读（单线程档位与 plain 同单元）。
-    pub fn getAcquire(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getVolatile(args)
     }
 
     /// native `setRelease(Object...)`：release 写。
-    pub fn setRelease(&self, args: JArray<Object>) -> Result<()> {
+    fn setRelease(&self, args: JArray<Object>) -> Result<()> {
         self.setVolatile(args)
     }
 
     /// native `getOpaque(Object...)`：opaque 读。
-    pub fn getOpaque(&self, args: JArray<Object>) -> Result<Object> {
+    fn getOpaque(&self, args: JArray<Object>) -> Result<Object> {
         self.getVolatile(args)
     }
 
     /// native `setOpaque(Object...)`：opaque 写。
-    pub fn setOpaque(&self, args: JArray<Object>) -> Result<()> {
+    fn setOpaque(&self, args: JArray<Object>) -> Result<()> {
         self.setVolatile(args)
     }
 
     /// native `compareAndSet(Object...)`：CAS（args = [holder, expected, new]），读-比-写在
     /// 存储单元内原子完成。
-    pub fn compareAndSet(&self, args: JArray<Object>) -> Result<bool> {
+    fn compareAndSet(&self, args: JArray<Object>) -> Result<bool> {
         if _is_array_flavor(self) {
             return _array_cas(self, &args);
         }
@@ -226,27 +227,27 @@ impl VarHandle {
     }
 
     /// native `weakCompareAndSet(Object...)`：weak CAS（无竞争下与非 weak 同义）。
-    pub fn weakCompareAndSet(&self, args: JArray<Object>) -> Result<bool> {
+    fn weakCompareAndSet(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `weakCompareAndSetPlain(Object...)`：weak plain CAS。
-    pub fn weakCompareAndSetPlain(&self, args: JArray<Object>) -> Result<bool> {
+    fn weakCompareAndSetPlain(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `weakCompareAndSetAcquire(Object...)`：weak acquire CAS。
-    pub fn weakCompareAndSetAcquire(&self, args: JArray<Object>) -> Result<bool> {
+    fn weakCompareAndSetAcquire(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `weakCompareAndSetRelease(Object...)`：weak release CAS。
-    pub fn weakCompareAndSetRelease(&self, args: JArray<Object>) -> Result<bool> {
+    fn weakCompareAndSetRelease(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `compareAndExchange(Object...)`：交换并返回旧值（见证）。
-    pub fn compareAndExchange(&self, args: JArray<Object>) -> Result<Object> {
+    fn compareAndExchange(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_exchange(self, &args, true);
         }
@@ -255,17 +256,17 @@ impl VarHandle {
     }
 
     /// native `compareAndExchangeAcquire(Object...)`：acquire 交换。
-    pub fn compareAndExchangeAcquire(&self, args: JArray<Object>) -> Result<Object> {
+    fn compareAndExchangeAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.compareAndExchange(args)
     }
 
     /// native `compareAndExchangeRelease(Object...)`：release 交换。
-    pub fn compareAndExchangeRelease(&self, args: JArray<Object>) -> Result<Object> {
+    fn compareAndExchangeRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.compareAndExchange(args)
     }
 
     /// native `getAndSet(Object...)`：原子交换（旧值返回）。
-    pub fn getAndSet(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndSet(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_exchange(self, &args, false);
         }
@@ -274,12 +275,12 @@ impl VarHandle {
     }
 
     /// native `getAndSetAcquire(Object...)`：acquire 交换。
-    pub fn getAndSetAcquire(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndSetAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndSet(args)
     }
 
     /// native `getAndSetRelease(Object...)`：release 交换。
-    pub fn getAndSetRelease(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndSetRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndSet(args)
     }
 
@@ -287,7 +288,7 @@ impl VarHandle {
     /// 返回旧值。数组元素在存储写锁内一次读-改-写；字段经读-CAS 循环（无竞争下一轮完成，
     /// 有竞争时重读重试——与 Unsafe.getAndAddInt 的字节码语义同）。引用 / 布尔族
     /// 无此操作（UnsupportedOperationException）。
-    pub fn getAndAdd(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndAdd(&self, args: JArray<Object>) -> Result<Object> {
         let c = _carrier(self);
         if matches!(c, _Carrier::Ref | _Carrier::Bool) {
             return Err(_unsupported("getAndAdd"));
@@ -307,60 +308,60 @@ impl VarHandle {
     }
 
     /// native `getAndAddAcquire(Object...)`：acquire 档位（单元内同 getAndAdd）。
-    pub fn getAndAddAcquire(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndAddAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndAdd(args)
     }
 
     /// native `getAndAddRelease(Object...)`：release 档位。
-    pub fn getAndAddRelease(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndAddRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndAdd(args)
     }
 
     /// native `getAndBitwiseOr(Object...)`：原子按位或，返回旧值（布尔 / 整数族；
     /// 引用 / 浮点族 UnsupportedOperationException）。
-    pub fn getAndBitwiseOr(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseOr(&self, args: JArray<Object>) -> Result<Object> {
         _get_and_bitwise(self, &args, _BitOp::Or)
     }
 
     /// native `getAndBitwiseOrAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseOr）。
-    pub fn getAndBitwiseOrAcquire(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseOrAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseOr(args)
     }
 
     /// native `getAndBitwiseOrRelease(Object...)`：release 档位。
-    pub fn getAndBitwiseOrRelease(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseOrRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseOr(args)
     }
 
     /// native `getAndBitwiseAnd(Object...)`：原子按位与，返回旧值（布尔 / 整数族；
     /// 引用 / 浮点族 UnsupportedOperationException）。
-    pub fn getAndBitwiseAnd(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseAnd(&self, args: JArray<Object>) -> Result<Object> {
         _get_and_bitwise(self, &args, _BitOp::And)
     }
 
     /// native `getAndBitwiseAndAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseAnd）。
-    pub fn getAndBitwiseAndAcquire(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseAndAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseAnd(args)
     }
 
     /// native `getAndBitwiseAndRelease(Object...)`：release 档位。
-    pub fn getAndBitwiseAndRelease(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseAndRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseAnd(args)
     }
 
     /// native `getAndBitwiseXor(Object...)`：原子按位异或，返回旧值（布尔 / 整数族；
     /// 引用 / 浮点族 UnsupportedOperationException）。
-    pub fn getAndBitwiseXor(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseXor(&self, args: JArray<Object>) -> Result<Object> {
         _get_and_bitwise(self, &args, _BitOp::Xor)
     }
 
     /// native `getAndBitwiseXorAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseXor）。
-    pub fn getAndBitwiseXorAcquire(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseXorAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseXor(args)
     }
 
     /// native `getAndBitwiseXorRelease(Object...)`：release 档位。
-    pub fn getAndBitwiseXorRelease(&self, args: JArray<Object>) -> Result<Object> {
+    fn getAndBitwiseXorRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseXor(args)
     }
 }
