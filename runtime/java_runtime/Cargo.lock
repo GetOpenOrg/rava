@@ -15,20 +15,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "rava_macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "java_runtime"
 version = "0.1.0"
 dependencies = [
- "rava_macros",
+ "libc",
  "parking_lot",
+ "rava_coro",
+ "rava_macros",
+ "rava_rawmem",
 ]
 
 [[package]]
@@ -86,6 +80,36 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "rava_coro"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "rava_macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rava_macros_core",
+ "syn",
+]
+
+[[package]]
+name = "rava_macros_core"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "rava_rawmem"
+version = "0.1.0"
 
 [[package]]
 name = "redox_syscall"

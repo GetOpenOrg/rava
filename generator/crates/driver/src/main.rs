@@ -26,6 +26,7 @@ mod mem_probe;
 mod profile_cmd;
 mod predefined;
 mod profile_emit;
+mod release_lto;
 mod status;
 
 use std::path::PathBuf;

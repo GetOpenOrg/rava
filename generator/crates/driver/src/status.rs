@@ -52,6 +52,8 @@ pub struct BuildStatus {
     pub heavy: Option<Heavy>,
     /// 内存感知作业数决定（编译段）
     pub mem: Option<crate::mem_budget::MemPlan>,
+    /// release 档 LTO 形态决定（编译段；非 release 档为 None）
+    pub release_lto: Option<crate::release_lto::Decision>,
     pub emit: Option<EmitSummary>,
     /// 编译失败现场（仅 cargo 阶段）
     pub failure: Option<Failure>,
@@ -80,6 +82,10 @@ impl BuildStatus {
             })),
             "heavy": self.heavy.as_ref().map(Heavy::to_json),
             "mem": self.mem.as_ref().map(crate::mem_budget::MemPlan::to_json),
+            "release_lto": self.release_lto.as_ref().map(|d| json!({
+                "mode": if d.mode == crate::release_lto::ReleaseLto::Fat { "fat" } else { "thin" },
+                "reason": d.reason, "pinned": d.pinned,
+            })),
             "emit": self.emit.as_ref().map(|e| json!({
                 "bin": e.bin,
                 "jdk_classes": e.jdk_classes,

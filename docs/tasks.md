@@ -353,3 +353,9 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 3. 每 e2e 全量运行后刷新基线数字
 4. 本文档不记历史——需要查完成记录去历史文档或 git log
 5. 一行一任务：父任务状态栏只写总体状态与关键提交，子任务各占一行；证据 / 下一步每格约 200 字以内，过程史写进计划文档或历史文档
+
+### 10-12 普通段（putInt/getInt）+25% 回退：二分完成、已修复（分支 plainseg-bisect，7977eca4）
+
+main 第 12 条（10-12 立条）处置完毕。**根因不是 nogc-escape 也不是闭包变化**：kr1 同作业四 sha 二分（psg-bis1）显示回退在 96fc1cf4..c6b126cc（1011h）区间已全量出现（普通段 64–65 → 87–90，+37%），fe923a2f（nogc-escape 合并前一刻）87–88 与 5df7e9ba（合并后）87–90 同水位——nogc-escape 与 1011i/j 内容对普通段零贡献；生成树对照（psg-gen1）证明直接路径生成物逐字节一致、唯一代码生成差异是 build-memsafe（0e3cd83d，用户 10-06 定）把 `[profile.release]` 的 lto 从 fat 改 thin。机制：Unsafe 直接内存每次调用经 4–6 层跨 4 crate 包装，fat LTO 整链内联、thin 按模块导入决策不再稳定内联；用户看到的 64→74 是「thin +24 ms、1011k rava_rawmem 改善 −14 ms」的净额，sound-rem 的 +8% 是同因的 thin 摘要漂移。**修复（7977eca4）**：driver 编译段 `--release` 时按内存余量决定 lto——fat 链接估计（mem_budget ReleaseMax 模型）≤ 探测可用内存（含 cgroup）× 50% 就地把工作区 Cargo.toml 改回 fat，不足保持 thin（10-06 约束原样成立）；`--release-lto fat|thin|auto` 钉死（rava build/compile 与 run_tests 同名透传）；auto fat 链接 OOM 先降级 thin 再退半作业数；选择记 build_status.json。driver 单测 4 例。验收：psg-verify1（kr1 三段 vs 基线 96fc1cf4）、psg-spot1（直接内存 6 测 + PartitionInteger dev 超时为已知既有，release 复跑 psg-part1）、psg-utdrv（driver 单测）。工具入库：`scripts/direct_mem_bench_multi.sh`（多 sha 同作业二分）、`scripts/direct_mem_bench_profiles.sh`（同检出 thin/fat 两档对照）、`scripts/gen_diff_bench.sh`（多 sha 生成物对照）。详见分诊报告「六」与 build-memsafe 计划「六」。
+
+（psg-verify2 补记，b46fdb7d）kr1 验收：普通段 **63–65（中位 63，判据 ≤66 ✓，回到 fat 基线水位）**、CAS **357–368（判据与 446 持平 ✓，且优于 fat 基线 404–413——inline 后 CAS 链 getIntVolatile/compareAndSetInt 也收入）**、批量 7–8 ✗（判据 ≤5；branch 无 sound-rem 的批量段后续改进，thin 下批量链未内联）。7a84d579 补批量链（native_memory / rava_rawmem 的 read/write/fill/copy 与 memory.rs setMemory0/copyMemory0）#[inline]，psg-verify3 复测中；psg-spot2（b46fdb7d）直接内存五测复跑通过中。合并者请以 verify3 / spot2 结果关闭或续派批量段。

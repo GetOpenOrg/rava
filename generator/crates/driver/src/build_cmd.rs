@@ -502,6 +502,7 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
         build_timeout: o.build_timeout,
         build_timeout_scale: None,
         build_mem_mb: o.build_mem_mb,
+        release_lto: o.release_lto.clone(),
         keep_artifacts: o.keep_artifacts,
     };
     let exe = compile_stage(out, repo, &emit, &c, st)?;

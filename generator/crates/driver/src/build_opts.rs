@@ -103,6 +103,8 @@ pub struct BuildOpts {
     pub build_timeout: Option<u64>,
     /// 编译可用内存（MB）：显式给定时代替探测（内存感知作业数，见 `mem_budget`）
     pub build_mem_mb: Option<u64>,
+    /// release 档 LTO 形态（`--release-lto fat|thin|auto`，缺省 auto；见 [`crate::release_lto`]）
+    pub release_lto: Option<String>,
     /// cargo 构建档位（`--release` / `--release-max` / `--release-small` / `--dev-opt`，缺省 dev）
     pub build_profile: crate::cargo::BuildProfile,
     /// 保留本例编译产物（缺省链接后删中间产物、运行后删可执行文件，见 [`crate::artifacts`]）
@@ -269,6 +271,11 @@ impl BuildOpts {
                     o.build_timeout = Some(v.parse().map_err(|_| format!("--build-timeout 需为秒数：{v}"))?)
                 }
                 "--build-mem-mb" => o.build_mem_mb = Some(v.parse().map_err(|_| format!("--build-mem-mb 需为 MB 数：{v}"))?),
+                "--release-lto" => {
+                    crate::release_lto::FLAG_VALUES.contains(&v.as_str())
+                        .then(|| o.release_lto = Some(v.clone()))
+                        .ok_or_else(|| format!("--release-lto 需为 fat|thin|auto：{v}"))?;
+                }
                 "--emit-jobs" => o.emit_jobs = v.parse().map_err(|_| format!("--emit-jobs 需为数字：{v}"))?,
                 "--java-home" => o.java_home = Some(PathBuf::from(v)),
                 "--runtime" => o.runtime = Some(PathBuf::from(v)),

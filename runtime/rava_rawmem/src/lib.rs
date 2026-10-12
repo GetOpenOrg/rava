@@ -125,6 +125,7 @@ fn head_len(addr: usize, n: usize) -> usize {
 ///
 /// # Safety
 /// 见模块头注的地址前提。
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 pub unsafe fn read(addr: usize, dst: &mut [u8]) {
     let n = dst.len();
     let h = head_len(addr, n);
@@ -167,10 +168,10 @@ pub unsafe fn read(addr: usize, dst: &mut [u8]) {
     }
 }
 
-/// 写 `src`：头 / 尾不足一字的段经同字 CAS 合并，中间整字逐字 Relaxed 写（8 字 ×8 展开）。
-///
+/// 写 `src`：头 / 尾不足一字的段经同字 CAS 合并，中间整字逐字 Relaxed 写（8 字 ×8 展开）。///
 /// # Safety
 /// 见模块头注的地址前提。
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 pub unsafe fn write(addr: usize, src: &[u8]) {
     let n = src.len();
     let h = head_len(addr, n);
@@ -219,10 +220,10 @@ pub unsafe fn write(addr: usize, src: &[u8]) {
     }
 }
 
-/// `[addr, addr + n)` 填 `value`（Unsafe.setMemory0）。整字段 8 字 ×8 展开。
-///
+/// `[addr, addr + n)` 填 `value`（Unsafe.setMemory0）。整字段 8 字 ×8 展开。///
 /// # Safety
 /// 见模块头注的地址前提。
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 pub unsafe fn fill(addr: usize, n: usize, value: u8) {
     let full = u64::from_ne_bytes([value; WORD]);
     let h = head_len(addr, n);
@@ -264,7 +265,7 @@ pub unsafe fn fill(addr: usize, n: usize, value: u8) {
 ///
 /// # Safety
 /// 两地址均 8 字节对齐且满足模块头注的地址前提。
-#[inline]
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 unsafe fn copy_word_block(s: usize, d: usize) {
     // SAFETY: 由调用方保证
     let a0 = unsafe { word_aligned(s) }.load(Ordering::Relaxed);
@@ -286,7 +287,6 @@ unsafe fn copy_word_block(s: usize, d: usize) {
         word_aligned(d + 7 * WORD).store(a7, Ordering::Relaxed);
     }
 }
-
 /// 拷贝 `n` 字节（memmove 语义，区间可重叠）。
 ///
 /// 源与目标字内偏移相同时（`allocateMemory` 区间之间、缓冲区同偏移拷贝的常见情形）走逐字快路径：
@@ -385,7 +385,7 @@ pub unsafe fn copy(src: usize, dst: usize, n: usize) {
 ///
 /// # Safety
 /// 见模块头注的地址前提。
-#[inline]
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 pub unsafe fn load(addr: usize, width: usize) -> u64 {
     let off = addr & (WORD - 1);
     if off + width <= WORD {
@@ -404,7 +404,7 @@ pub unsafe fn load(addr: usize, width: usize) -> u64 {
 ///
 /// # Safety
 /// 见模块头注的地址前提。
-#[inline]
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 pub unsafe fn store(addr: usize, width: usize, v: u64) {
     let off = addr & (WORD - 1);
     if off == 0 && width == WORD {
@@ -430,6 +430,7 @@ pub unsafe fn store(addr: usize, width: usize, v: u64) {
 ///
 /// # Safety
 /// 见模块头注的地址前提。
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 pub unsafe fn update<F: FnMut(u64) -> Option<u64> + ?Sized>(addr: usize, width: usize, op: &mut F) -> Result<u64, Error> {
     if width == 0 || width > WORD || !width.is_power_of_two() || addr % width != 0 {
         return Err(Error::Misaligned { addr, width });

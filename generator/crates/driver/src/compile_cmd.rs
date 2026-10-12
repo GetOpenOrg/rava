@@ -12,6 +12,7 @@ use crate::build_cmd::repo_root;
 use crate::build_opts::Stage;
 use crate::cargo::{self, BuildProfile, CargoOpts, Heavy};
 use crate::closure_cmd::find_runtime_dir;
+use crate::release_lto;
 use crate::status::{BuildStatus, EmitSummary, STATUS_FILE};
 use crate::Args;
 
@@ -25,6 +26,8 @@ pub struct CompileArgs {
     pub build_timeout_scale: Option<u32>,
     /// 编译可用内存（MB，`--build-mem-mb`）：给定时代替探测
     pub build_mem_mb: Option<u64>,
+    /// release 档 LTO 形态（`--release-lto fat|thin|auto`，缺省 auto；见 [`crate::release_lto`]）
+    pub release_lto: Option<String>,
     /// 保留中间产物（缺省链接成功后只留可执行文件）
     pub keep_artifacts: bool,
 }
@@ -40,11 +43,32 @@ pub fn compile_stage(out: &Path, repo: &Path, emit: &EmitSummary, c: &CompileArg
         profile: c.profile,
         timeout: c.build_timeout.map(Duration::from_secs).or_else(|| c.build_timeout_scale.map(|k| heavy.default_timeout() * k)),
     };
+    // release 档按内存余量选 LTO 形态（fat / thin，见 release_lto 模块头）；显式 --release-max 档不经此
+    let mut fat_auto = false;
+    if c.profile == BuildProfile::Release {
+        let d = release_lto::decide_for_scratch(c.release_lto.as_deref(), out, mem.avail_mb);
+        println!("{}", release_lto::log_line(&d));
+        if d.mode == release_lto::ReleaseLto::Fat {
+            release_lto::patch_workspace(out, release_lto::ReleaseLto::Fat)?;
+            fat_auto = !d.pinned; // 显式钉死 fat 的不在 OOM 时降级
+        }
+        st.release_lto = Some(d);
+    }
     // 估计是上包络，实测仍 OOM（rustc 被 SIGKILL）时作业数退半重编：已编完的 crate 由 cargo 缓存命中，
-    // 只重编被杀的与未编的；退到 1 作业仍 OOM 即单进程峰值超出本机内存，如实报失败
+    // 只重编被杀的与未编的；退到 1 作业仍 OOM 即单进程峰值超出本机内存，如实报失败。
+    // auto 选出的 fat LTO 链接 OOM 时先降级 thin 重编（fat 链接是单进程峰值，退半作业数救不了）
     let r = loop {
         let r = cargo::compile(out, &emit.bin, &heavy, &mem, &opts);
         match &r {
+            Err(f) if f.oom() && fat_auto => {
+                fat_auto = false;
+                release_lto::patch_workspace(out, release_lto::ReleaseLto::Thin)?;
+                if let Some(d) = st.release_lto.as_mut() {
+                    d.mode = release_lto::ReleaseLto::Thin;
+                    d.reason.push_str("；链接 OOM 降级 thin");
+                }
+                println!("[lto] fat LTO 链接 OOM，降级 thin LTO 重编");
+            }
             Err(f) if f.oom() && mem.halve() => println!("[cargo-env] {}；作业数退半为 {} 重编", f.summary(), mem.jobs),
             _ => break r,
         }
@@ -76,7 +100,7 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
         }
         match a.as_str() {
             "--keep-artifacts" => c.keep_artifacts = true,
-            "--target-dir" | "--build-timeout" | "--build-timeout-scale" | "--build-mem-mb" | "--runtime" => {
+            "--target-dir" | "--build-timeout" | "--build-timeout-scale" | "--build-mem-mb" | "--runtime" | "--release-lto" => {
                 let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
                 match a.as_str() {
                     "--target-dir" => c.target_dir = Some(PathBuf::from(v)),
@@ -85,6 +109,11 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
                         c.build_timeout_scale = Some(v.parse().ok().filter(|k| *k >= 1).ok_or_else(|| format!("--build-timeout-scale 需为正整数：{v}"))?)
                     }
                     "--build-mem-mb" => c.build_mem_mb = Some(v.parse().map_err(|_| format!("--build-mem-mb 需为 MB 数：{v}"))?),
+                    "--release-lto" => {
+                        crate::release_lto::FLAG_VALUES.contains(&v.as_str())
+                            .then(|| c.release_lto = Some(v.clone()))
+                            .ok_or_else(|| format!("--release-lto 需为 fat|thin|auto：{v}"))?;
+                    }
                     _ => c.build_timeout = Some(v.parse().map_err(|_| format!("--build-timeout 需为秒数：{v}"))?),
                 }
             }

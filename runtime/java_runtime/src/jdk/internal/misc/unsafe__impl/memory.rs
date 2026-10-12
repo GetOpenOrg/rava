@@ -23,11 +23,13 @@ impl Unsafe {
         Ok(())
     }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
     #[jvm_native]
     pub fn setMemory0(&self, o: Object, offset: i64, bytes: i64, value: i8) -> Result<()> {
         crate::native_memory::fill(&o, offset, bytes, value)
     }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
     #[jvm_native]
     pub fn copyMemory0(&self, src_base: Object, src_offset: i64, dst_base: Object, dst_offset: i64, bytes: i64) -> Result<()> {
         crate::native_memory::copy(&src_base, src_offset, &dst_base, dst_offset, bytes, 1)
