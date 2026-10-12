@@ -43,6 +43,7 @@ for p in json.load(sys.stdin)["packages"]:
 
 : > "$OUT/rows.txt"
 build_rava "$ROOT"
+cd "$ROOT"
 for t in $TESTS; do
   f=$(find tests/e2e -name "$t.java" | head -1)
   build/analyzer-target/release/rava build "$f" --java-home "$JAVA_HOME" \
@@ -56,6 +57,7 @@ git -C "$ROOT" worktree add "$BASE_WT" "$BASE_REF" > /dev/null 2>&1 || git -C "$
 build_rava "$BASE_WT"
 cd "$BASE_WT"
 for t in $TESTS; do
+  cd "$BASE_WT"
   f=$(find tests/e2e -name "$t.java" | head -1)
   build/analyzer-target/release/rava build "$f" --java-home "$JAVA_HOME" \
     --runtime runtime/java_runtime --clean --stop-after emit --out "$OUT/base.$t" \
