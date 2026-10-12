@@ -801,6 +801,8 @@ S0 ≤20 万上下文 / ≤16 GiB 的目标未达成，20 万上下文量级在�
 - 语料四例 × 种子 0/1/2 回归（作业 `g1c2-scapreg` job 01，T=16384 对 T=0 `--diff`）：**集合逐项一致**
   （唯一差异 `summary.boot_image.eval_ms` 计时抖动，`closure_bench.sh --diff` 此前不剔该字段、已修）；
   `summary.perf.site_cap` 确认零触发（四例最大单点变体 228）。
+- 剖析计量本身（35994a96 计数分配器 + f9de87f1 待推增量字节计量）不改变输出：f9de87f1 对 693b6c50 在
+  HelloWorld / DeepCopy（种子 0）上规范化 JSON 逐项相同（本机 heavy_lock 复核）。
 - **机制否定（负结果，三处实测同档）**：分配点变体数——语料扫描（作业 `g1c2-objscan`，全语料单例闭包
   1082 例取 final dump `objsite` 行，3 分片 × 并行 3；1074 例有数，8 例 rc=1 为 §4.12 已知的 JUnit /
   TestUnnamedVar 类路径族，重例本次全部跑完无缺失）**最大 302**（`TestRandomFactoryAll` 的
