@@ -35,6 +35,10 @@ def load(p):
     d = json.load(open(p, encoding='utf-8'))
     d.get('summary', {}).pop('elapsed_ms', None)
     d.get('summary', {}).pop('perf', None)
+    # 计时字段不进对照（boot_image.eval_ms 一类随机器波动，与集合口径无关）
+    bi = d.get('summary', {}).get('boot_image')
+    if isinstance(bi, dict):
+        bi.pop('eval_ms', None)
     return canon(d)
 def key(v):
     if isinstance(v, dict):
