@@ -47,8 +47,9 @@ emit_side() {  # <检出目录> <rava> <tag>
     # 用户类的文件名可以 `_m` 结尾（Java 名 FooM），不计入）
     find "$OUT/$tag.$t"/java_base_decl*/src -name "*_m.rs" 2>/dev/null | wc -l \
       > "$OUT/$tag.$t.marker-count.txt"
-    find "$OUT/$tag.$t"/java_base_decl*/src -name "*_m.rs" 2>/dev/null | xargs -r du -cb \
-      | tail -1 | awk '{print $1}' > "$OUT/$tag.$t.marker-bytes.txt"
+    # 字节数按文件求和（xargs 分批时 du 每批各出总行，tail -1 只取末批——大类集会少计）
+    find "$OUT/$tag.$t"/java_base_decl*/src -name "*_m.rs" -printf '%s\n' 2>/dev/null \
+      | awk '{s+=$1} END{print s+0}' > "$OUT/$tag.$t.marker-bytes.txt"
   done
 }
 

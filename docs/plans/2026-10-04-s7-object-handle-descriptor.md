@@ -1080,17 +1080,24 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     个类文件只多一行 `pub use super::<m>::<Name>;`、48 个包 mod.rs 只多标记模块行、8 个
     Cargo.toml 只差时间戳版本号，另 5 个为 vendor 宏 crate 源码（本轮宏改动）——**方法体与声明层
     块文本逐字节不变**。
-  - **服务器验收（tag 前缀 s7k6b-，基线 31e4762d）**：`s7k6b-macro` / `s7k6b-macro2`（宏单测）✅
-    plan 41/41、缺省 35/35（jp2，rc=0）；`s7k6b-seed`（`scripts/diag/s7k6_seed_sets.sh 31e4762d`，
-    四例 × 种子 0/1/2 闭包集合）、`s7k6b-det`（`closure_independent_of_*` 两项）、`s7k6b-seg`
-    （新 `scripts/diag/s7k6b_segments.sh`——三例各段类文件集合逐项对照 + 标记文件体量统计）、
-    `s7k6b-peak`（`scripts/diag/s7k6_peak.sh 31e4762d`，三例逐 crate 固定切段重建峰值）结果见下
-    「K6 服务器验收」节。**本机峰值 A/B**（`rustc_profile.sh`，`-Z time-passes` 的 rustc 自计
-    RSS，同机隔离）：HelloWorld 底段 1331 → 1444 MB（**+8.5%**）、CollectorsDemo 底段
-    1413 → 1453 MB（**+2.8%**），均在 ±10% 预算内；增量来源＝标记文件对块文本的复制（解析 /
-    展开成本，无新增展开项——标记项与拆前同类项相同）。标记文件体量：HelloWorld 542 个 /
-    6.15 MB（均 11.3 KB，含完整文件头——块属性串携带全部祖先 / 接口名，按词剪枝剪不下去；
-    K4 搬 crate 时可再剥离方法签名与未用名，K8 档案验收时复测）。
+  - **服务器验收（tag 前缀 s7k6b-，基线 31e4762d）**：
+    - `s7k6b-macro` / `s7k6b-macro2`（宏单测，jp2）✅ **plan 41/41、缺省 35/35**（rc=0）。
+    - `s7k6b-seg`（kr2）首跑脚本 cwd 漂移（`seg_listing` 改 cwd 后第二用例 find 失败——单用例
+      冒烟未覆盖，与 s7k6_peak 首跑同类）；修复（子壳化 + 基线 worktree 复用 checkout）后
+      `s7k6b-seg2` ✅ **三例切段逐类一致**（HelloWorld 788 / CollectorsDemo 809 / DeepCopy 2681
+      个段内类文件全同）；标记文件 HelloWorld 542 个 / 6.15 MB、CollectorsDemo 559 个 /
+      6.42 MB、DeepCopy 2215 个（字节数脚本首版 xargs 分批少计，修为逐文件求和，4e182e4e）。
+    - `s7k6b-seed`（jp1，`scripts/diag/s7k6_seed_sets.sh 31e4762d`，四例 × 种子 0/1/2 闭包集合）、
+      `s7k6b-det`（us1，`closure_independent_of_*` 两项）、`s7k6b-peak`（sg1，`s7k6_peak.sh
+      31e4762d`，三例逐 crate 固定切段重建峰值）交回时在跑 / 排队（集群被 JDK25 扫尾占用），
+      结果回收法见下「K6 交接」。
+    - **本机峰值 A/B**（`rustc_profile.sh`，`-Z time-passes` 的 rustc 自计 RSS，同机隔离）：
+      HelloWorld 底段 1331 → 1444 MB（**+8.5%**）、上段 decl_1 613 → 644 MB（**+5.1%**）、
+      CollectorsDemo 底段 1413 → 1453 MB（**+2.8%**），均在 ±10% 预算内；增量来源＝标记文件对
+      块文本的复制（解析 / 展开成本，无新增展开项——标记项与拆前同类项相同）。
+    - **标记文件体量**：HelloWorld 542 个 / 6.15 MB（均 11.3 KB，含完整文件头——块属性串携带
+      全部祖先 / 接口名，按词剪枝剪不下去；K4 搬 crate 时可再剥离方法签名与未用名，K8 档案
+      验收时复测）。
   - **待验证清单（交主会话合批抽查，批级）**：K3 七例集（HelloWorld、CollectorsDemo、DeepCopy、
     TestDynamicProxy、TestAnnoReflect、TestSerialLookupPairing、TestXmlTransform）＋ K6pre 新增例
     （PolymorphicCopy、ArraysStream、HashMapStream、StreamToUnmodifiableCollections、
