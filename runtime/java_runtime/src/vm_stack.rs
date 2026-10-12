@@ -1,3 +1,4 @@
+use crate::jdk::internal::loader::__EmbeddedClassPathHw as _;
 //! 栈遍历数据面（运行时基础设施）：真实 Rust 栈 → Java 帧序列，全部栈帧消费方的唯一来源。
 //!
 //! HotSpot 的 vframeStream 逐帧给出 (Method*, bci)；原生二进制的等价物是链接期预解析的地址表

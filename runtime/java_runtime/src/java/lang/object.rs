@@ -3,6 +3,7 @@
 
 use crate::sync_model::__Shared as Rc;
 use crate::obj_ref::__Obj;
+use crate::java::lang::__ClassHw as _;
 // 类视图重建的共用部件（定义在 object_ext，宏生成的 `From<Object>` / `__virtual_view` 转交到这里）
 pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing, __PartsFn};
 

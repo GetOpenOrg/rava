@@ -16,6 +16,7 @@ use rava_coro::pins::Pins;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ptr;
+use crate::jdk::internal::vm::__ContinuationHw as _;
 
 pub use rava_coro::pins::{PINNED_CRITICAL_SECTION, PINNED_MONITOR, PINNED_NATIVE, PINNED_NONE};
 
