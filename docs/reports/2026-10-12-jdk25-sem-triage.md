@@ -227,15 +227,44 @@ FractionReduction 已实证转过。分类与验收以 release 为准；dev 档�
 - **TestModuleLayerDefine（AbstractCollection.spliterator 存根）**：链外方法存根，JDK25 闭包形状差一轮
   取证；第一轮报告的 module-unnamed-handwritten（e50d4ba3）不覆盖本形态。未修。
 
-## 4. 验收（j25r-fixv @ 979b759a，作业排队中——完成后回填）
+## 4. 验收（截至本报告收笔 2026-10-13 07:30，作业部分仍在跑）
 
-| 项 | 状态 |
-|---|---|
-| 每簇代表例 JDK25 PASS（13 例：XmlDomParse/SecureRandomApi/SerialEnumNoInit + GetFields/BoxedValueSemantics/FieldDemo + CollectionsFactories/ListOf + PatternSlotReuse + CheckOutputDeviceIsATerminal + ClassNestNatives/FilesApi/FileIODemo） | 🔄 j25r-fixv 作业 1 |
-| JDK21 回归 7 例（FunctionalCompositionTest/PatternSlotReuse/GetFields/CheckOutputDeviceIsATerminal/CollectionsFactories/HelloWorld/ReflectInvokePerReceiver） | 🔄 j25r-fixv 作业 2 |
-| generator cargo check（--release --tests，heavy_lock） | ✅ 全部修复提交过 |
-| java_runtime | 服务器构建覆盖（本机无 closure_input 不可检；rustfmt 解析过） |
+| 项 | 状态 | 证据 |
+|---|---|---|
+| JDK21 回归 7 例 | ✅ **6/7 PASS**（j25r-fixv2/02 @ 856297e7，kr2） | HelloWorld PASS；**FunctionalCompositionTest PASS**（escape 修复例叠 SAM 桥接不回归）；TestPatternSlotReuse PASS（condy 标签修复）；TestGetFields PASS（16m59 构建，Keep 修复下反射面不回归）；TestCollectionsFactories PASS（folds 修复）；TestReflectInvokePerReceiver PASS |
+| JDK21 唯一失败 | ⚠️ CheckOutputDeviceIsATerminal `E0599: new_str not found for IllegalArgumentException`（编译期）——归属待定：纯净基线探针（rr-compile-…@1b644fbc）在跑，若纯基线同败则为既有缝（手写层 IAE(String) 构造器请求缺位，同 method-trait-handwritten-seam 一类），非本轮回归 | fixv2/02 第 4 例；修不修归下一棒按探针结果 |
+| JDK25 代表例 13 例 | 🔄 j25r-fixv/01 + j25r-fixv2/01 排队/在跑（服务器拥挤） | 先行信号：j25r-fixv/02（979b759a，含 S_ISSOCK 笔误）上 TestPatternSlotReuse / TestCollectionsFactories 已 PASS——condy 与 folds 修复在 JDK21 侧实证有效 |
+| S_ISSOCK 笔误（中间态回归） | ✅ 已修（856297e7） | j25r-fixv/02 上 4 例 E0425（libc 无 S_ISSOCK 函数，java_runtime 手写文件按闭包裁剪编译，含 UnixFileDispatcherImpl 的用例全挂）→ 改掩码比较后 fixv2/02 同 4 例全 PASS |
+| generator cargo check（--release --tests，heavy_lock） | ✅ 全部修复提交过 | e05dcd0a / 979b759a / 856297e7 |
+| java_runtime | 服务器构建覆盖 | 本机无 closure_input 不可检；多例端到端构建实编（fixv/fixv2） |
 
-## 5. j25r-run1 两组清单（回填）
+### 4.1 已知中间过程事件
 
-（等 14 作业完成）
+- j25r-fixv/01（JDK25 13 例代表）与 j25r-fixv2/01 在 979b759a/856297e7 上排队（kr2/sg2/us1/jp1 长期被其他线作业占满，本轮 17:40—次日 06:00 间累计空转约 3 小时）；两作业完成后由下一棒按 §6 流程回收。
+- j25r-run1 复跑（纯净 1b644fbc）首例 DataEncryptionStandard 转译错误 34m52s（11G 作业槽，与第一轮「DES 转译 OOM」同族，资源类非语义类）。
+
+## 5. j25r-run1 两组清单（14 作业 @ 1b644fbc，截至收笔仅零星起跑——未完）
+
+复跑被服务器拥挤严重拖延（其余线作业长期占满 kr2/sg2/us1/jp1）。收笔时状态：作业 01（11 例组）
+在 jp1 起跑（首例 DataEncryptionStandard 转译错误 34m52s，资源类），其余 13 作业排队/在跑。
+**两组清单的终值由下一棒回收**（流程见 §6）；本地聚类（§1）+ 第一轮经验给预期：
+已消解至少 = escape 修复 7 例（栈溢度族）+ folds 2 例中的可析部分 + 2 幽灵例转真实新例；
+仍失败预期主体 = E0308 65 例（纯净基线上必仍在——修复在 j25-r2-fix）+ MH 族 + 超时族 + 版本差异族。
+
+## 6. 交接（下一棒从这里继续）
+
+1. **回收复跑与验收作业**（盯 summary.json，勿裸 pgrep）：
+   `cluster_results/job/{j25r-run1,j25r-fixv,j25r-fixv2}/summary.json`；产物 `j25r2-g*-logs.tgz` /
+   `j25rf2-*-logs.tgz` 解包后用 `/tmp/j25r_collect.py`（已备）聚合成两组清单，回填报告 §2/§5。
+   服务器检出按 tag 自动清理（checkouts.json）。
+2. **分支状态**：`j25-r2`（远端）= 1b644fbc 纯净基线（勿在 run1 完成前推——作业检出追分支头）；
+   本地 j25-r2 = j25-r2-fix = **856297e7**（双远端已推核对）= 全部修复 + 文档。run1 完成后把远端
+   j25-r2 快进到 856297e7（或合批直接采用 j25-r2-fix）。
+3. **CheckOutputDeviceIsATerminal 的 E0599 归属**：探针 rr-compile-…@1b644fbc（纯净）与
+   @856297e7（修复）各一在跑；同败 = 既有手写层/构造器请求缝（登记 failure_patterns 的话归
+   method-trait-handwritten-seam 邻类），只败修复 = 本轮回归（查 Keep/folds 改动对闭包的间接影响）。
+   该例 JDK25 侧的流编码修复验收也被此编译错挡住——先定归属再修。
+4. **未修簇**（§3.7）：版本差异 4 例（等主会话裁 expected 口径）、getClassContext 多帧 2 例、
+   VarHandle ISE 3 例（用 run1 产物取 flavor 实例的按名字段面证据）、超时 5 例（run1 600s 档 +
+   gdb 挂点）、AbstractCollection.spliterator 存根 1 例。
+5. **junit 8 例 OOM** 归 G1 线不变；DES/DeepCopy 类 11G 槽转译 OOM 在 run1 将再现，归大槽重跑。
