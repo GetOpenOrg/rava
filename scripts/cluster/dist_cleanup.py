@@ -17,6 +17,7 @@
   uv run --group cluster python scripts/cluster/dist_cleanup.py [--servers ...] [--force]   # --force 忽略 1 小时节流
 """
 
+import atexit
 import json
 import shlex
 import sys
@@ -122,8 +123,20 @@ def cleanup_server(server: dict, keep_tags: set[str], dry_run: bool = False, for
     return f"[{label}] 启动清理 " + ("; ".join(summary) or f"无输出 rc={rc}")
 
 
+_CLEANUP_THREAD: threading.Thread | None = None
+
+
+def _join_cleanup_at_exit(timeout: float = 120.0):
+    # 解释器终结前先等清理线程退出：守护线程若在关停期仍持有 stdout 缓冲锁，
+    # 会触发 _enter_buffered_busy Fatal error（--reset-failed 等早退路径 rc=134 的根因）
+    t = _CLEANUP_THREAD
+    if t is not None and t.is_alive():
+        t.join(timeout=timeout)
+
+
 def start_background_cleanup(servers: list[str] | None = None):
     """分发脚本启动时调用：后台守护线程逐台清理，结果写日志，不阻塞派发。"""
+    global _CLEANUP_THREAD
     keep = _active_job_tags()
     picked = [s for s in SERVERS if not servers or s["label"] in servers]
 
@@ -132,7 +145,12 @@ def start_background_cleanup(servers: list[str] | None = None):
             for msg in ex.map(lambda s: cleanup_server(s, keep), picked):
                 _log(msg)
 
-    threading.Thread(target=_run, name="startup-cleanup", daemon=True).start()
+    t = threading.Thread(target=_run, name="startup-cleanup", daemon=True)
+    _CLEANUP_THREAD = t
+    t.start()
+
+
+atexit.register(_join_cleanup_at_exit)
 
 
 if __name__ == "__main__":
