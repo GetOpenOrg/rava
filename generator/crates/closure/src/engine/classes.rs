@@ -621,13 +621,29 @@ impl<'a> Engine<'a> {
                 room -= 1;
             }
         }
-        for seg in segs.iter().take(room) {
-            chain.push('#');
-            chain.push_str(seg);
+        // 宽分配点封顶（`SITE_CAP`）：该分配点（含并入的调用点段，即链首段）的变体数已超阈值时，
+        // 新分配不再展开外层堆链——name 仍带 cls 前缀（类型不丢），不同外层上下文在该点分配的对象并入
+        // 同一分配点段对象。旧对象保留原链、已建方法节点不动；封顶只看单调的变体计数（集合只增）。
+        // 阈值取语料实测上界之上（objscan），语料零触发；宽语料上对象数按分配点封顶，堆上下文链不再相乘
+        let capped = self.site_cap > 0 && self.site_capped.contains(chain.as_str());
+        if !capped {
+            for seg in segs.iter().take(room) {
+                chain.push('#');
+                chain.push_str(seg);
+            }
         }
         let name = format!("{cls}{chain}");
         if let Some(&id) = self.ids.get(name.as_str()) {
             return id;
+        }
+        if self.site_cap > 0 && !capped {
+            // 新变体：计数；超过阈值即封顶该分配点（此后新分配按分配点段合并，计数随之冻结）
+            let site: Rc<str> = Rc::from(chain.split('#').next().unwrap_or(&chain));
+            let n = self.site_variants.entry(site.clone()).or_insert(0);
+            *n += 1;
+            if *n as usize > self.site_cap {
+                self.site_capped.insert(site);
+            }
         }
         let tid = self.id(cls);
         let id = self.id(&name);

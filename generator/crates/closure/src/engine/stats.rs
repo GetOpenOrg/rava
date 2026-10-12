@@ -431,6 +431,13 @@ impl<'a> Engine<'a> {
         // 选择性上下文（ctx_flat.rs）：档位、继承 / 接收者来源并入本体的次数、判为平的成员数、
         // 略去的静态反射成员「接收者」派发数（reflect_call_pool.rs）
         v["ctx_flat"] = json!([self.ctx_flat_mode, self.ctx_flat_hits, self.ctx_flat_memo.values().filter(|&&f| f).count(), self.rcall_stats.static_recvs]);
+        // 宽分配点封顶（classes.rs `obj_at`）：[封顶分配点数, 有变体的分配点数, 单点最大变体数, 阈值]
+        v["site_cap"] = json!([
+            self.site_capped.len(),
+            self.site_variants.len(),
+            self.site_variants.values().copied().max().unwrap_or(0),
+            self.site_cap
+        ]);
         v
     }
 }

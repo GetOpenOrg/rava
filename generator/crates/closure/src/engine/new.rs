@@ -105,6 +105,11 @@ impl<'a> Engine<'a> {
             objs: HashMap::default(),
             obj_chain: HashMap::default(),
             seg_cls: HashMap::default(),
+            // 宽分配点封顶（engine.rs `SITE_CAP`）：RAVA_SITE_CAP 覆盖（0 = 关闭）。
+            // 缺省阈值取语料分配点变体数实测上界之上，语料零触发（行为与关闭一致）
+            site_variants: HashMap::default(),
+            site_capped: HashSet::default(),
+            site_cap: std::env::var("RAVA_SITE_CAP").ok().map_or(SITE_CAP, |v| v.parse().unwrap_or(SITE_CAP)),
             ctx_heap: HashMap::default(),
             containers: HashMap::default(),
             dflt_alloc: HashSet::default(),

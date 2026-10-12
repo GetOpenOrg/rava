@@ -205,6 +205,11 @@ const PARITIES: [u8; 2] = [0, 1];
 const NOCTX: u32 = u32::MAX;
 /// 容器对象的堆上下文深度（分配点链长度，含自身）：`KeyIterator` ← `KeySet` ← `HashMap` 需要两层才能按 map 分开
 const HEAP_DEPTH: usize = 2;
+/// 宽分配点阈值：同一分配点（链首段）的变体（不同外层堆链）数超过它后，该分配点的新分配不再展开堆链
+/// （`obj_at` 只留分配点段；旧对象保留原链）。阈值取语料实测上界之上（objscan，性能计划 §4.14），
+/// 语料零触发；宽语料（S0 / sb3）上抽象对象数按分配点封顶，方法上下文随之有界。
+/// `RAVA_SITE_CAP` 覆盖（0 = 关闭）；触发只看单调的变体计数，语料不触发时行为与关闭完全一致
+const SITE_CAP: usize = 1 << 14;
 
 /// 字段泛型签名是否引用类型变量（`T<名>;`）：类名标识符内的字母不算
 fn has_type_var(sig: &str) -> bool {
@@ -312,6 +317,13 @@ pub struct Engine<'a> {
     obj_chain: HashMap<u32, Rc<str>>,
     /// 抽象对象分配点（链首段）→ 所分配的类 id：由链第二段求属主对象的类（`obj_at` 内部分配判定）
     seg_cls: HashMap<Rc<str>, u32>,
+    /// 分配点（链首段，含并入的调用点段）→ 已建变体数（不同外层堆链 / 类）。封顶后计数冻结：
+    /// 新分配并入分配点段对象，不再产生新变体（`obj_at` 宽分配点封顶）
+    site_variants: HashMap<Rc<str>, u32>,
+    /// 已封顶的宽分配点：变体数超 `SITE_CAP` 后新分配不再展开外层堆链（对象数按分配点封顶）
+    site_capped: HashSet<Rc<str>>,
+    /// 宽分配点阈值（`RAVA_SITE_CAP` 覆盖；0 = 关闭）。语料上取实测上界之上、零触发（objscan，性能计划 §4.14）
+    site_cap: usize,
     /// 形参常量克隆上下文 → 其堆上下文（外层上下文，`NOCTX` 即无）：克隆只以调用点区分节点，分配点链与外层相同（`ctxsel.rs`）
     ctx_heap: HashMap<u32, u32>,
     /// 容器形态判定缓存（类型 id）
