@@ -64,6 +64,14 @@ impl Class {
         Ok(false)
     }
 
+    /// native `getClassFileVersion0()`（JDK 24+）：类文件主版本号。语料全部类出自同一构建 JDK
+    ///（jmod 类与用户类同编），主版本 = 特性版本 + 44（JDK 21→65、25→69）；数组 / 基本类型同答
+    ///（消费方 `Class.desiredAssertionStatus` 只做版本下限判定，非可观察输出）。
+    #[jvm_native]
+    pub fn getClassFileVersion0(&self) -> Result<i32> {
+        Ok(crate::jdk_feature() as i32 + 44)
+    }
+
     /// native `isHidden()`：隐藏类判定，读 java_meta 隐藏类表（lambda 调用点隐藏类由生成器按站点
     /// 声明，元数据与其余类同表）；数组 / 基本类型 / 普通类 → false。
     #[jvm_native]

@@ -19,7 +19,12 @@ pub const USER_META_MOD: &str = "rava_user_meta";
 pub const META_TABLES: &str = "closure_input/meta_tables.rs";
 
 /// 档案侧表：扫描各 crate 根（JDK 模块 crate 与 lib crate 的 `src`）下的落盘 `.rs` 文件。
-/// 成员表按档案的反射事实裁剪（`ReflectFacts::meta_methods` / `meta_fields`，见 `rava_meta_tables::Keep`）
+/// 成员表按档案的反射事实裁剪（`ReflectFacts::meta_methods` / `meta_fields`，见 `rava_meta_tables::Keep`）。
+/// 手写边界类（壳带 `#[impl_methods]` 标记，成员体由手写层维护）的方法表不裁剪：其 MemberName
+/// 解析可在运行期以计算名触达（JDK 25 `DirectMethodHandle.unsafeMethodName` 按包装类型拼接
+/// `get/putX[Volatile]` 解析 `jdk.internal.misc.Unsafe` 访问器，名字出自 switch-map 数组 +
+/// StringBuilder，分析器推不出按名事实），Keep 裁剪会把行清零 → `MethodHandleNatives.resolve`
+/// 运行期 NoSuchMethodError（JDK 25 反射 Field.get / VarHandle / MH 字段访问族 25 例）。
 pub(super) fn write_archive(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, roots: &[&Path]) -> Result<()> {
     let mut texts: Vec<String> = Vec::new();
     for root in roots {
@@ -28,9 +33,17 @@ pub(super) fn write_archive(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, r
             texts.push(t);
         }
     }
-    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
     let r = &ctx.input.reflect;
-    let keep = rava_meta_tables::Keep { methods: &r.meta_methods, fields: &r.meta_fields };
+    let mut keep_methods = r.meta_methods.clone();
+    for t in &texts {
+        if t.contains("#[impl_methods") {
+            if let Some(name) = t.lines().find_map(|l| l.split("binary_name").nth(1).and_then(|rest| rest.split('"').nth(1))) {
+                keep_methods.insert(name.to_string());
+            }
+        }
+    }
+    let keep = rava_meta_tables::Keep { methods: &keep_methods, fields: &r.meta_fields };
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
     w.write(&out_dir.join(META_TABLES), &rava_meta_tables::render(&refs, rava_meta_tables::Side::Archive(keep)))
 }
 

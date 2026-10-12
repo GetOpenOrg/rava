@@ -142,6 +142,41 @@ impl UnixFileDispatcherImpl {
         handle(r as i64, "lseek64 failed")
     }
 
+    /// native `available0(FileDescriptor)`：不经阻塞可读字节数（JNI `FileDispatcherImpl.available0`
+    /// → io_util_md.c `handleAvailable`）：字符设备 / FIFO / socket 取 `ioctl(FIONREAD)`，
+    /// 其余 = fstat 的 st_size − lseek(SEEK_CUR)；失败抛 IOException("Handle not readable")。
+    /// `FileChannelImpl.available` 的后端。
+    #[jvm_native]
+    pub fn available0(fdo: FileDescriptor) -> Result<i32> {
+        let fd = fd_of(&fdo);
+        if crate::jdk_resources::is_virtual(fd) {
+            return Ok(crate::jdk_resources::virtual_available(fd).min(i32::MAX as i64) as i32);
+        }
+        // SAFETY: st 为栈上 stat 结构；lseek / ioctl 只作用于 fd
+        unsafe {
+            let mut st: libc::stat = std::mem::zeroed();
+            if libc::fstat(fd, &mut st) < 0 {
+                return handle(-1, "Handle not readable").map(|v| v as i32);
+            }
+            let mode = st.st_mode;
+            if (mode & libc::S_IFMT) == libc::S_IFCHR
+                || (mode & libc::S_IFMT) == libc::S_IFIFO
+                || libc::S_ISSOCK(mode)
+            {
+                let mut n: libc::c_int = 0;
+                if libc::ioctl(fd, libc::FIONREAD as _, &mut n) < 0 {
+                    return handle(-1, "Handle not readable").map(|v| v as i32);
+                }
+                return Ok(n.max(0));
+            }
+            let pos = libc::lseek(fd, 0, libc::SEEK_CUR);
+            if pos < 0 {
+                return handle(pos as i64, "Handle not readable").map(|v| v as i32);
+            }
+            Ok((st.st_size.saturating_sub(pos)).min(i32::MAX as libc::off_t) as i32)
+        }
+    }
+
     /// native `size0(FileDescriptor)`：fstat(2) 的 st_size。
     #[jvm_native]
     pub fn size0(fdo: FileDescriptor) -> Result<i64> {
