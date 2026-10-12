@@ -110,6 +110,71 @@ BenchReflectArg，ns/调用，中位）：
 其引发的分配，约十分之一在分派协议本身（含两遍 static 判定）；装箱本身（valueOf）约 6%。
 类字面量段 155×（496 ns/迭代：两次镜像比较 + isInstance）与 ldc 段 4× 相对次要。
 
+### 3. 分派键免重建（2026-10-12，分支 invoke-key-opt，commit c0713ed8）
+
+§七.1 所记「最大单项」已实施，形态比当时设想的两条路线（身份侧表 / 发射层预计算）更直接：
+**表构造的成员对象 slot 即声明类方法元数据表的行号**（`Class.__method_from_meta` /
+`__table_method` / `__table_declared_ctors` / Proxy$Dyn 接口方法直构一律如此写入；字节码侧
+唯一构造点 `Method.copy()` / `Constructor.copy()` 原样转传 slot）。据此 `__member_key`
+（method_impl.rs / constructor_impl.rs）按下式免重建：
+
+- **首用解析**：(clazz 身份, slot) → 类方法表行二分（同 `meta::row` 口径）→ `rows[slot]`
+  的静态 `name` / `descriptor`——与发射层分派闭包键、`is_static_descriptor` 同一真源
+  （parameterTypes / returnType 本就从该描述符还原，直取即恒等往返），并与 Method 的
+  名字段核对（防伪 slot；不符判非表形态）。`__reflect_key` 返回三元组改为全 `&'static str`。
+- **进程级缓存**：判定结果按 (clazz 身份, slot) 记入 `__process_static!` + RwLock 表；
+  此后每次 invoke 只做一次哈希取静态引用——**零 Java String→Rust 转换、零分配**。
+  回收论证：类镜像是进程级规范对象（CLASSES / PRIMITIVES 驻留表或引导映像 `&'static`
+  永久持有），身份无回收复用；条目数 ≤ 被 invoke 的不同声明数（编译期有界）。
+- **非表形态**（核对不符 / 表外类 / slot 越界）恒走原重建路径（逐字保留），结果驻留
+  `&'static`（同一键一份；现实语料全部构造点为表构造，池为空）。键只依赖声明三元组
+  （final 字段承载），与 setAccessible 等访问标志无涉。
+
+同机 A/B（sg1，作业 ikopt-base（batch-1012 = 99de3268）→ ikopt-after（c0713ed8）顺序执行，
+各 5 次取中位；JVM 参照同机同刻）：
+
+| 测点 | 基线 batch-1012 | invoke-key-opt | 变化 |
+|---|---:|---:|---:|
+| RldcSegments invoke 段（1M 迭代 ×2 调用） | 3030.3 ms（**1.515 µs/调用**） | 1292.5 ms（**0.646 µs/调用**） | **−57.4%** |
+| BenchReflectArg idRef（协议底座） | 1636 ns | 587 ns | −64.1% |
+| BenchReflectArg idInt / idInt2 | 1568 / 1907 ns | 663 / 829 ns | −57.7% / −56.5% |
+| class 段（未瞄准） | 553.9 ms | 531.0 ms | −4.1% |
+| ldc 段 | 32.8 ms | 33.8 ms | 持平 |
+| TestReflectLdcHotLoop 整例（**debug 档**，perf_hotpath 口径） | 42.92 s | 25.18 s | −41.3% |
+| JVM invoke 参照 | 35.5 ns/调用 | 34.4 ns/调用 | rava/JVM 由 43× 降至 19× |
+
+剖析簇前后（F997 自采样，% 全样本，同机同构建口径）：
+
+| 簇 | 基线 | 优化后 |
+|---|---:|---:|
+| member_key String 构建/转换簇（Display::fmt + units + fmt::write + write_str + format_inner + `__type_desc`） | ≈ 15.0% | ≈ 8.2%（`__type_desc` 1.20%→出 top45；units 2.50→0.95；write_str 0.80→0.33） |
+| 分配器簇（malloc + cfree + realloc + raw_vec） | ≈ 15.3%（malloc 6.55 / cfree 3.77 / realloc 1.43 / raw_vec 2.27） | ≈ 7.3%（malloc 4.00 / cfree 1.62 / realloc 0.76 / raw_vec 0.91） |
+| varargs `Store::to_vec` | 1.23% | 0.62% |
+| `Method_Direct::invoke0` self（含 member_key 内联） | 6.40% | 4.86% |
+| `is_static_descriptor` | 2.88% | 4.72%（占比升系总分母缩小，绝对量近似持平） |
+| **新增：键缓存哈希**（`RandomState::hash_one` + Sip13 `Hasher::write`） | — | ≈ 2.4% |
+
+要点：
+
+- **member_key 簇退出剖析 top 的 invoke 部分**：剩余 Display::fmt 5.38% 的主要需求方是
+  `Class.isPrimitive` 的类名 `format!`（children 视图 12.59% 在 fmt 下——class 段的
+  `isInstance` → `isAssignableFrom` → isPrimitive 链），属类字面量段（155× 那一项），
+  非 invoke 段；`__type_desc` 归零、member_key 的转换/分配份额随之消失。
+- **分配器簇（第二热点）占比减半**（~15.3% → ~7.3%，少了每次调用约 5 次分配），只写
+  数字；剩余需求方为 varargs 数组、返回装箱（valueOf 缓存外）与缓存哈希表节点。
+- **键缓存的自身代价** ≈ 2.4%（usize 键 SipHash + 读锁）；如需再压，可用乘法散列的
+  轻哈希器替换 RandomState（未做）。
+- **口径更正（§二.2 遗留的 10 倍差）**：`perf_hotpath.sh` 不带 `--release`（debug 档），
+  `perf_rt_bench.sh` 带 `--release`——43f37f63（us1）的 43 µs/迭代与本报告 kr1 的
+  4.3 µs/迭代是 **debug vs release 口径差**（sg1 上 debug 整例 42.9 s / release 分段
+  合计 3.6 s，同构 10 倍），非 lineage 或机差，§七.0 该遗留闭合。
+- 回归：rtpp-verify4 七例清单 + TestWidenFacesInvoke / TestWrapperValueFaces 共 9 例
+  PASS（作业 ikopt-verify，kr2；PartitionInteger run 50.18 s 与基线 48–50 s 持平）；
+  java_runtime 的编译验证由 9 例端到端发射构建承载（本机裸检出不可 cargo check，
+  E0583 既有形态），另以 batch-1012 系 spot 检出的发射 crate 替换两文件后整 workspace
+  cargo check 通过。作业索引：ikopt-base / ikopt-after（sg1，计时与剖析）、
+  ikopt-verify（kr2，回归），结果在 `cluster_results/job/ikopt-*/`。
+
 ## 三、对象 2：rd::unbox_* 解析 __obj_str 文本
 
 ### 1. 开销形态（基线）
@@ -289,6 +354,8 @@ TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
    应答 0——P-B 的 Float 位形取值因此被否决；这本身是一个可疑的翻译面缺陷（或 hashCode
    桥接缺口），值得单独立测例核查（`Float.valueOf(3.0f).hashCode()` 期望 1077936128）。
    另外 43f37f63（us1）43 µs/迭代与本测 4.3 µs/迭代差约 10 倍未闭合（§二）。
+   → **10-12 已闭合**：debug（perf_hotpath 口径）vs release（perf_rt_bench 口径）之差，
+   非 lineage / 机差，见 §二.3 口径更正块。
    → **10-12 fix-widen 已收口**：同簇根因 = 闭包外根虚方法槽为存根（hashCode → Ok(0)、
    toString → 二进制名），非 floatToIntBits 缺陷；`Float.valueOf(3.0f).hashCode()` 直呼
    （入链）= 1077936128 正确，见 TestWrapperValueFaces 与 §三.4 更正块。unbox 取值改
@@ -300,12 +367,13 @@ TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
    P-A 协议臂，随反射建模 / S7 K 系排期。
 
 1. **Method.invoke 分派键重建（最大单项，String 簇 ~17% + 其分配 ~16% 的一部分）**：
-   `__member_key`（`method_impl.rs:36`）每次 invoke 从 clazz/name/parameterTypes 重建
-   (类名, 方法名, 描述符)。两条候选路线，均超出「低风险微修复」边界，建议随反射建模线排期：
-   - 运行时侧：Method 对象身份键侧表缓存（`__identity` 为键、值 pin 一份 Method 防
-     地址复用，容量上限 + 超限不再插入；Method 元数据字段为 final，JDK 自身的
-     `methodAccessor` 缓存同假设）；
-   - 发射层（生成器域）：`getDeclaredMethod` 族构造 Method 时一次性预计算分派键。
+   → **10-12 已实施**（分支 invoke-key-opt，c0713ed8）：表构造成员对象的 slot 即方法表
+   行号，(clazz 身份, slot) 首用经表行直取 `&'static` 键 + 进程级缓存，非表形态回落
+   原重建（驻留）。同机 A/B：invoke 段 1.515 → 0.646 µs/调用（−57.4%）、idRef
+   1636 → 587 ns、分配器簇占比 ~15.3% → ~7.3%；键缓存自身哈希代价 ≈ 2.4%。详见
+   §二.3。当时的两条候选路线（身份侧表 / 发射层预计算）均不再需要。
+   - 后续可再压的小项（未做）：缓存哈希器换轻量乘法散列；`is_static_descriptor` 的
+     类方法表内线性 find（描述符配对）换 (name, descriptor) 二分索引。
 2. **unbox 结构化承载终态（P-A）**：随 S7 K 系 vtable / 方法 trait 形态演进一并设计
    （`ObjectVTable` 原生值视图臂），Long/Double 也能直取值；P-B 已收割无协议改动的部分。
 3. **PartitionInteger / stream 管线**：72 倍的主干是「每叶子管线构建（25–30%）+ 每元素
