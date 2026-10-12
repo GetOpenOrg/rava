@@ -603,6 +603,8 @@ def _fail_category(log: str) -> str:
 # 通过测试另删 scratch 与残留失败日志；失败测试的 scratch 源码与日志保留供分析。
 
 KEEP_ARTIFACTS = False
+# --release-lto 透传（None = auto，交给 rava 按内存余量决定）
+RELEASE_LTO: "str | None" = None
 
 
 def _read_json(p: Path) -> dict:
@@ -693,6 +695,8 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     prof = _profile_dir(_to_bin_name(class_name))
     if prof in RELEASE_DIRS:
         cmd.append(RELEASE_DIRS[prof])
+    if RELEASE_LTO is not None and prof == "release":
+        cmd += ["--release-lto", RELEASE_LTO]
     elif prof == DEV_OPT_DIR:
         cmd.append("--dev-opt")
     if KEEP_ARTIFACTS:
@@ -1666,8 +1670,10 @@ def main():
                     help="实验：改用指定 JDK home（非参考构建，输出标记；与 --jdk 互斥）")
     ap.add_argument("--show-jdk",        action="store_true",
                     help="只解析并打印本次语料 JDK（JAVA_HOME / 主版本 / 是否参考构建）后退出，不跑测试")
-    ap.add_argument("--release",         action="store_true", help="release 档位构建运行（opt 3 + thin LTO，内存受限缺省发布档；默认 dev）")
+    ap.add_argument("--release",         action="store_true", help="release 档位构建运行（opt 3 + thin LTO 缺省，内存余量足够时自动 fat（见 --release-lto）；默认 dev）")
     ap.add_argument("--release-max",     action="store_true", help="release-max 大机器打包档（opt 3 + fat LTO + codegen-units 1）")
+    ap.add_argument("--release-lto",     choices=("fat", "thin", "auto"), default=None, metavar="M",
+                    help="release 档 LTO 形态钉死/复现用（透传 rava compile --release-lto；缺省 auto：内存余量足够时 fat，不足 thin）")
     ap.add_argument("--release-small",   action="store_true", help="release-small 体积档（继承 release-max，opt-level \"s\"）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
@@ -1731,8 +1737,9 @@ def main():
     if args.failed and args.skip_failed:
         sys.exit("--failed 与 --skip-failed 互斥：前者只跑清单、后者跳过清单。")
 
-    global OUT, SHARED_TARGET, LOGS_DIR, JDK_LAYER, KEEP_ARTIFACTS
+    global OUT, SHARED_TARGET, LOGS_DIR, JDK_LAYER, KEEP_ARTIFACTS, RELEASE_LTO
     KEEP_ARTIFACTS = args.keep_artifacts
+    RELEASE_LTO = args.release_lto
     if args.out_dir is not None:
         OUT = Path(args.out_dir)
         if not OUT.is_absolute():

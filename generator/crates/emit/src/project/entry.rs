@@ -342,6 +342,8 @@ pub fn write_cargo_files(
     // 用户 10-06 定）：opt 3 + thin LTO + codegen-units 1——跨 crate 优化分模块并行进行，
     // 单个 rustc 峰值随最大 crate 而非全程序增长；并行作业数另由内存感知规则限定（driver mem_budget）。
     // release-max 档（见 RELEASE_MAX_PROFILE）：大机器打包，opt 3 + fat LTO + codegen-units 1。
+    // 发射恒写 thin；driver 编译段在内存余量足够时把 [profile.release] 的 lto 就地升为 fat（`--release-lto`，
+    // 见 driver release_lto：thin 下跨 crate 调用链不再整链内联，直接内存热路径回退约 15%），产物仍在 target/release/。
     // release-small 档（见 RELEASE_SMALL_PROFILE）：继承 release-max，opt-level "s"（不设 "z" 档，用户 10-05 定）
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
