@@ -8,8 +8,12 @@
 
 use super::*;
 
-/// 驻留表清理的表长下限（之后每次清理后表长翻倍时再清）
+/// 驻留表清理的表长下限；清理后的再清理阈值 = 清理后表长 × (1 + 1/`SWEEP_GAIN`)（§4.16：清理只回收
+/// 引用数为 1 的死条目，旧翻倍阈值让死条目积到与活内容等量——uniq 计数 15万↔25万 波动即此；
+/// 收紧到 +1/4 后死条目上界从 1.0× 降到 0.25×，retain O(表长) 在数十万条目级微秒到毫秒）
 const SWEEP_AT: usize = 4096;
+/// 清理后再清理的表长增额（1/`SWEEP_GAIN`）
+const SWEEP_GAIN: usize = 4;
 
 /// 元素哈希（open 与 classes 区分）
 #[inline]
@@ -118,7 +122,7 @@ impl SetStore {
         if self.table.len() >= self.sweep_at.max(SWEEP_AT) {
             self.stats[2] += 1;
             self.table.retain(|e| Rc::strong_count(&e.1) > 1);
-            self.sweep_at = self.table.len() * 2;
+            self.sweep_at = self.table.len() + self.table.len() / SWEEP_GAIN;
         }
     }
     /// 驻留表中的不同内容份数（观测）
