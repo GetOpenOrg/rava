@@ -231,19 +231,12 @@ impl MemberHw {
     }
 }
 
-/// 一个手写源根：源码树 + 该根 `lib.rs` 的 prelude 导出（§9.9 K4 阶段 3 起两处真源：
-/// java_runtime 与 java_marker——后者的 INFRA 文件按本根的 prelude 解析名字）
-struct HwRoot {
-    src: PathBuf,
-    /// `lib.rs` 的 `mod prelude` 导出（手写文件 `use crate::prelude::*` 引入）
-    prelude: HashMap<String, Vec<String>>,
-}
-
 pub struct Handwritten {
-    /// 手写源根（java_runtime 在前；java_marker 在后，可缺省）
-    roots: Vec<HwRoot>,
+    src: PathBuf,
     /// 条件编译求值环境（参考 JDK）：cfg 为假的手写部分不建模
     cfg: HwCfg,
+    /// `lib.rs` 的 `mod prelude` 导出（手写文件 `use crate::prelude::*` 引入）
+    prelude: HashMap<String, Vec<String>>,
     cache: RefCell<HashMap<String, Rc<ClassHw>>>,
     /// 模块单元（见 `units.rs`；首次使用时载入）
     units: RefCell<Option<Rc<BTreeMap<String, Rc<ClassHw>>>>>,
@@ -285,8 +278,9 @@ fn class_type_refs(
 /// 只取手写文件类型路径的只读扫描器（无缓存、可跨线程共享）：与 [`Handwritten::class`] 的
 /// `type_refs` 同源同值，供落盘阶段按目录并行判定共置手写的模块依赖
 pub struct HwTypeRefs {
-    roots: Vec<HwRoot>,
+    src: PathBuf,
     cfg: HwCfg,
+    prelude: HashMap<String, Vec<String>>,
 }
 
 /// 手写层全部顶层 pub item 名（类型 / 常量 / 静态 / 函数 / pub mod）。
@@ -339,32 +333,16 @@ pub fn pub_item_names(src: &Path) -> BTreeSet<String> {
     out
 }
 
-/// 手写源根清单（java_runtime 在前；java_marker 在后，crate 缺席时略）：§9.9 K4 阶段 3 起
-/// 标记层基础（object 三件 / error / handle / array / desc 等）在 java_marker 真源，闭包的
-/// 手写扫描按同一路径规则双根解析——种子与回调边不因搬移漂移。
-fn hw_roots(runtime_dir: &Path, cfg: HwCfg) -> Vec<HwRoot> {
-    let mut roots = vec![HwRoot { src: runtime_dir.join("src"), prelude: load_prelude(runtime_dir, cfg) }];
-    let marker_dir = runtime_dir.parent().unwrap_or(Path::new("")).join("java_marker");
-    if marker_dir.join("Cargo.toml").is_file() {
-        roots.push(HwRoot { src: marker_dir.join("src"), prelude: load_prelude(&marker_dir, cfg) });
-    }
-    roots
-}
-
 impl HwTypeRefs {
     /// `runtime_dir` = runtime/java_runtime；`jdk_major` = 参考 JDK 主版本（None：cfg 一律保留）
     pub fn new(runtime_dir: &Path, jdk_major: Option<u32>) -> Self {
         let cfg = HwCfg { jdk_major };
-        HwTypeRefs { roots: hw_roots(runtime_dir, cfg), cfg }
+        HwTypeRefs { src: runtime_dir.join("src"), cfg, prelude: load_prelude(runtime_dir, cfg) }
     }
 
     /// 同 `Handwritten::class(cls).type_refs`（解析错误忽略）
     pub fn class(&self, cls: &str) -> BTreeSet<TypeRef> {
-        let mut out = BTreeSet::new();
-        for r in &self.roots {
-            out.extend(class_type_refs(&r.src, self.cfg, &r.prelude, cls, &mut Vec::new()));
-        }
-        out
+        class_type_refs(&self.src, self.cfg, &self.prelude, cls, &mut Vec::new())
     }
 }
 
@@ -423,9 +401,11 @@ impl Handwritten {
                 }
             }
         }
+        let prelude = load_prelude(runtime_dir, cfg);
         Handwritten {
-            roots: hw_roots(runtime_dir, cfg),
+            src: runtime_dir.join("src"),
             cfg,
+            prelude,
             cache: RefCell::new(HashMap::new()),
             units: RefCell::new(None),
             file_rets: RefCell::new(HashMap::new()),
@@ -448,26 +428,20 @@ impl Handwritten {
         let (pkg, simple) = cls.rsplit_once('/').unwrap_or(("", cls));
         let mut hw = ClassHw::default();
         let mut raw = FileFns::default();
-        for root in &self.roots {
-            for suf in SUFFIXES {
-                let path = root.src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
-                let Ok(content) = layout::read_unit(&root.src, &path) else { continue };
-                // 自动生成的类文件碰巧以 _impl.rs 结尾（类名含 Impl / Ext）：生成类文件恒含限定宏调用
-                if content.contains(GENERATED_MARK) {
-                    continue;
-                }
-                match self.cfg.parse_file(&content) {
-                    Ok(file) => scan_file(&file, &root.prelude, &mut raw),
-                    Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
-                }
-                hw.files.extend(layout::unit_files(&root.src, &path));
+        for suf in SUFFIXES {
+            let path = self.src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
+            let Ok(content) = layout::read_unit(&self.src, &path) else { continue };
+            // 自动生成的类文件碰巧以 _impl.rs 结尾（类名含 Impl / Ext）：生成类文件恒含限定宏调用
+            if content.contains(GENERATED_MARK) {
+                continue;
             }
+            match self.cfg.parse_file(&content) {
+                Ok(file) => scan_file(&file, &self.prelude, &mut raw),
+                Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
+            }
+            hw.files.extend(layout::unit_files(&self.src, &path));
         }
-        let mut type_refs = BTreeSet::new();
-        for root in &self.roots {
-            type_refs.extend(class_type_refs(&root.src, self.cfg, &root.prelude, cls, &mut self.errors.borrow_mut()));
-        }
-        hw.type_refs = type_refs;
+        hw.type_refs = class_type_refs(&self.src, self.cfg, &self.prelude, cls, &mut self.errors.borrow_mut());
         close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
         hw.objects = objects::close(&raw);
         hw.rets = std::mem::take(&mut raw.rets);

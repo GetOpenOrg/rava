@@ -148,7 +148,7 @@ fn run_java_thread(t: &Thread) {
     // 档案内无覆盖者时 run 的槽位被裁剪（plain），trait 上不存在该方法，方法调用形态两种情况都成立。
     let result = t.run();
     if let Err(e) = result {
-        crate::error::dispatch_uncaught(&e, t);
+        e.dispatch_uncaught(t);
     }
     t.__set_eetop(0);
     let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);

@@ -80,18 +80,12 @@ impl Handwritten {
         if let Some(u) = self.units.borrow().as_ref() {
             return u.clone();
         }
-        // 两处真源（§9.9 K4 阶段 3）：java_marker 的 INFRA 文件（error / array / handle /
-        // object 三件……）同为本扫描的模块单元；java_marker 的生成标记文件含生成标记，跳过
         let mut files = Vec::new();
-        for root in &self.roots {
-            walk(&root.src, &mut files);
-        }
-        let root_of = |path: &Path| self.roots.iter().find(|r| path.starts_with(&r.src));
+        walk(&self.src, &mut files);
         let mut out = BTreeMap::new();
         for path in files {
-            let Some(root) = root_of(&path) else { continue };
-            let Some(host) = unit_host(&root.src, &path) else { continue };
-            let Ok(content) = layout::read_unit(&root.src, &path) else { continue };
+            let Some(host) = unit_host(&self.src, &path) else { continue };
+            let Ok(content) = layout::read_unit(&self.src, &path) else { continue };
             if content.contains(GENERATED_MARK) {
                 continue;
             }
@@ -103,9 +97,9 @@ impl Handwritten {
                 }
             };
             let mut raw = FileFns::default();
-            scan_file(&file, &root.prelude, &mut raw);
+            scan_file(&file, &self.prelude, &mut raw);
             close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
-            let mut hw = ClassHw { files: layout::unit_files(&root.src, &path), ..Default::default() };
+            let mut hw = ClassHw { files: layout::unit_files(&self.src, &path), ..Default::default() };
             defined_types(&file.items, &mut hw.types);
             hw.objects = objects::close(&raw);
             hw.rets = std::mem::take(&mut raw.rets);
@@ -158,19 +152,11 @@ impl Handwritten {
         let rets = match cached {
             Some(r) => r,
             None => {
-                // 共置手写文件按两处真源解析（java_marker 侧命中则用其根与 prelude）
-                let hit = self.roots.iter().find_map(|root| {
-                    let p = root.src.join(format!("{m}.rs"));
-                    layout::read_unit(&root.src, &p).ok().map(|c| (c, root))
-                });
-                let mut r = stype::LocalRets::default();
-                if let Some((content, root)) = hit {
-                    if let Ok(file) = self.cfg.parse_file(&content) {
-                        if !content.contains(GENERATED_MARK) {
-                            r = file_rets(&file, &root.prelude);
-                        }
-                    }
-                }
+                let content = layout::read_unit(&self.src, &self.src.join(format!("{m}.rs"))).unwrap_or_default();
+                let r = match self.cfg.parse_file(&content) {
+                    Ok(file) if !content.contains(GENERATED_MARK) => file_rets(&file, &self.prelude),
+                    _ => Default::default(),
+                };
                 let r = Rc::new(r);
                 self.file_rets.borrow_mut().insert(m.clone(), r.clone());
                 r

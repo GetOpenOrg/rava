@@ -3,36 +3,23 @@ name = "java_marker"
 version = "0.1.0"
 edition = "2021"
 
-# 标记层基础（S7 计划 §9.9 K4 阶段 3）：承载 `java_class!` 标记层依赖的全部手写真源——
-# obj_ref / sync_model / class_desc / field_desc / handle / error（标记面）/ 数组系统 /
-# java/lang/Object 三件 / java_fmt，无 Java 行为。行为（异常构造、根类方法体、监视器、
-# 类镜像、栈界检查、释放计深、安全点、字节序原语）经 `unsafe extern "Rust"` 链接期声明
-# 转交行为层（java_runtime 侧 marker_hooks.rs 定义，与 `rava_layer` 拆层同一机制），
-# 故本 crate 不依赖任何声明层 crate，可置于声明链之下。引用生成类（Class / String 的
-# 标记类型，只在 scratch 的生成标记文件中存在）→ 真源 standalone check 非绿（口径见
-# §9.9 K4 阶段 3）。
+# 标记层基础（S7 计划 §9.9 K4）：只承载与签名无关的运行时基础设施——对象引用计数指针
+# （obj_ref）与同步模型原语（sync_model），无 Java 行为。行为（区域登记、监视器侧表）
+# 经 `unsafe extern "Rust"` 链接期声明转交行为层（java_runtime 侧定义，与 `rava_layer`
+# 拆层同一机制），故本 crate 不依赖任何 JDK / 声明层 crate，可置于声明链之下。
 
 [lib]
 name = "java_marker"
 path = "src/lib.rs"
 
 [dependencies]
-# __RefSlot 的 OS 读写锁守卫（sync_model mt 模块；数组字节视图的跨元素互斥分条）
+# __RefSlot 的 OS 读写锁守卫（sync_model mt 模块）
 parking_lot = "0.12"
-# `object_ext` / `object_impl` 的 `#[jvm_ext]` / `#[jvm_native]` 属性（阶段 3 随迁）
-rava_macros = { path = "../rava_macros" }
 
 [lints.rust]
-# 手写层的既有形态（内部名 `__` 前缀、测试外未用项等）；与 java_runtime 同口径
-unused_parens = "allow"
-unused_braces = "allow"
+# 手写层的既有形态（内部名 `__` 前缀、测试外未用项等）
 dead_code = "allow"
-unused_assignments = "allow"
-unused_variables = "allow"
-unused_mut = "allow"
 unused_imports = "allow"
 non_snake_case = "allow"
 non_camel_case_types = "allow"
 non_upper_case_globals = "allow"
-unreachable_code = "allow"
-unreachable_patterns = "allow"

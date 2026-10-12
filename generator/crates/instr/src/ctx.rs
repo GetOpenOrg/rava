@@ -92,24 +92,11 @@ impl InstrFacts {
                 root_protected_void.insert((m.name.clone(), params));
             }
         }
-        // 手写根类 API 名面扫两处真源（§9.9 K4 阶段 3）：object{,_ext,_impl}.rs 随标记层基础
-        // 迁入 java_marker（根类无伴生文件时该侧命中；真源未迁的旧布局回退本侧）
         let mut root_api = BTreeSet::new();
-        let mut roots = vec![runtime_src.to_path_buf()];
-        if let Some(marker_src) = runtime_src
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("java_marker").join("src"))
-            .filter(|p| p.is_dir())
-        {
-            roots.push(marker_src);
-        }
-        for root in &roots {
-            let lang = root.join("java").join("lang");
-            for f in ["object_impl.rs", "object_ext.rs", "object.rs"] {
-                if let Ok(text) = closure::handwritten::layout::read_unit(root, &lang.join(f)) {
-                    root_api.extend(scan_fn_names(&text, true));
-                }
+        let lang = runtime_src.join("java").join("lang");
+        for f in ["object_impl.rs", "object_ext.rs", "object.rs"] {
+            if let Ok(text) = closure::handwritten::layout::read_unit(runtime_src, &lang.join(f)) {
+                root_api.extend(scan_fn_names(&text, true));
             }
         }
         InstrFacts {

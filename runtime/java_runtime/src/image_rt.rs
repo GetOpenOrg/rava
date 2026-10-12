@@ -105,6 +105,6 @@ pub fn field_offset(decl: &str, name: &str) -> i64 {
 /// 启动序列的异常出口：引导期抛出的异常不可恢复（与 JVM 初始化失败同为致命）
 pub fn run(f: impl FnOnce() -> Result<()>) {
     if let Err(e) = f() {
-        crate::error::report_uncaught(&e);
+        e.report_uncaught();
     }
 }

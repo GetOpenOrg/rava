@@ -10,7 +10,7 @@
 
 use crate::java::lang::ObjectVTable;
 use crate::obj_ref::__Obj;
-use crate::marker_hooks as hooks;
+use crate::exec_context::release_slot;
 use std::ptr::NonNull;
 
 /// 对象句柄：持有对象（运行时类的存储）或为 null。
@@ -112,19 +112,37 @@ impl Drop for __Handle {
 // 句柄与 Object 释放最后一个强引用时经此计深：深度未超阈值就地释放；超阈值把该对象移入线程本地
 // 待释放队列，由最外层释放循环清空——任意链长下释放栈深有界（阈值 × 单层 drop 帧）。
 // 释放中不会让出（drop glue 不执行 Java 代码），载体线程的线程局部即当前栈的状态。
-//
-// 计深与待释放队列（`exec_context::release_slot`）是行为层线程局部状态，经链接期钩子
-// `__rava_marker_release` 转交（§9.9 K4 阶段 3；java_runtime `marker_hooks.rs` 定义）。
+
+/// 就地释放的最大嵌套深度（超出的对象入待释放队列）
+const RELEASE_MAX_DEPTH: u32 = 32;
 
 /// 释放一个对象引用（`__Handle` / `Object` 的 Drop）：非最后一个强引用只减计数；最后一个按深度
-/// 就地释放或入队，最外层释放清空队列（行为层 `release_last`）。线程局部已销毁（线程退出期）
-/// 时就地释放。
+/// 就地释放或入队，最外层释放清空队列。线程局部已销毁（线程退出期）时就地释放。
 #[inline]
-fn __release(rc: __Obj<dyn ObjectVTable>) {
+pub(crate) fn __release(rc: __Obj<dyn ObjectVTable>) {
     if !rc.is_unique() {
         return;
     }
-    hooks::__release(rc);
+    release_last(rc);
+}
+
+#[inline(never)]
+fn release_last(rc: __Obj<dyn ObjectVTable>) {
+    // 释放槽不可用（线程退出期）时 rc 随闭包丢弃，就地释放
+    let Some(depth) = release_slot(|s| s.depth.get()) else { return };
+    if depth >= RELEASE_MAX_DEPTH {
+        release_slot(move |s| s.pending.borrow_mut().push(rc));
+        return;
+    }
+    release_slot(|s| s.depth.set(depth + 1));
+    drop(rc);
+    if depth == 0 {
+        // 最外层：逐个释放队列中的对象（其字段再次超深的入队，循环至空）
+        while let Some(Some(next)) = release_slot(|s| s.pending.borrow_mut().pop()) {
+            drop(next);
+        }
+    }
+    release_slot(|s| s.depth.set(depth));
 }
 
 #[cold]
@@ -171,7 +189,7 @@ impl __IfaceRef {
         self.obj.0.__interface(&mut slot);
         match slot {
             Some(p) => {
-                hooks::__stack_check()?;
+                crate::__stack_check()?;
                 // SAFETY: 指针由句柄所持对象自身上的引用转换得到（同一分配），借用期不超过 self
                 Ok(Some(unsafe { p.as_ref() }))
             }
@@ -179,7 +197,7 @@ impl __IfaceRef {
                 if self.obj.0.is_jvm_null() {
                     return Err(crate::error::JvmError::null_pointer());
                 }
-                hooks::__stack_check()?;
+                crate::__stack_check()?;
                 Ok(None)
             }
         }

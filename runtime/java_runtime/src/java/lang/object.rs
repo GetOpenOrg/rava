@@ -3,7 +3,6 @@
 
 use crate::sync_model::__Shared as Rc;
 use crate::obj_ref::__Obj;
-use crate::marker_hooks as hooks;
 // 类视图重建的共用部件（定义在 object_ext，宏生成的 `From<Object>` / `__virtual_view` 转交到这里）
 pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing, __PartsFn};
 
@@ -29,7 +28,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 非 Java 类载体（[`ObjectVTable::__object`] 为 None）按引用相等应答。
     fn equals(&self, other: Object) -> crate::error::Result<bool> {
         match self.__object() {
-            Some(this) => hooks::__object_equals(&this, other),
+            Some(this) => super::object_body::Object__equals_body(&this, other),
             None => Ok(!other.0.is_jvm_null() && self.__identity() == other.0.__identity()),
         }
     }
@@ -53,8 +52,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 非 Java 类载体回落 `__obj_str`。`__obj_str` 只服务 Rust 侧 Display / Debug（不可失败）。
     fn __to_string(&self) -> crate::error::Result<std::string::String> {
         match self.__object() {
-            // 行为侧包装：根类翻译体返回 Java String，钩子内换 std String（消标记层的 String 依赖）
-            Some(this) => hooks::__object_to_string_std(&this),
+            Some(this) => super::object_body::Object__toString_body(&this).map(|s| s.to_string()),
             None => Ok(self.__obj_str()),
         }
     }
@@ -89,7 +87,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// null 检查语义：JVM 里对 null 引用调 getClass 抛 NPE，由调用侧的 null 守卫承载；
     /// 此处到达即 receiver 非 null。
     fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
-        Ok(hooks::__class_for_class(self.__class_name()))
+        Ok(crate::java::lang::Class::for_class(self.__class_name()))
     }
 
     /// java.lang.Comparable.compareTo(Object)I — 接口方法，不实现 Comparable 的类调用时 panic
@@ -118,8 +116,8 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
             return Err(crate::error::JvmError::null_pointer());
         }
         match self.__object() {
-            Some(this) => hooks::__object_wait(&this, 0, 0),
-            None => hooks::__monitor_wait_timeout(self.__identity() as usize, 0, 0),
+            Some(this) => super::object_body::Object__wait_body(&this),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, 0, 0),
         }
     }
 
@@ -133,8 +131,8 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
             return Err(crate::error::JvmError::null_pointer());
         }
         match self.__object() {
-            Some(this) => hooks::__object_wait(&this, millis, 0),
-            None => hooks::__monitor_wait_timeout(self.__identity() as usize, millis, 0),
+            Some(this) => super::object_body::Object__wait_l_body(&this, millis),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, millis, 0),
         }
     }
 
@@ -147,8 +145,8 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
             return Err(crate::error::JvmError::null_pointer());
         }
         match self.__object() {
-            Some(this) => hooks::__object_wait(&this, millis, nanos),
-            None => hooks::__monitor_wait_timeout(self.__identity() as usize, millis, nanos),
+            Some(this) => super::object_body::Object__wait_l_i_body(&this, millis, nanos),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, millis, nanos),
         }
     }
 
@@ -157,7 +155,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        hooks::__monitor_notify(self.__identity() as usize)
+        crate::monitor::notify(self.__identity() as usize)
     }
 
     /// java.lang.Object.notifyAll()V
@@ -165,7 +163,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        hooks::__monitor_notify_all(self.__identity() as usize)
+        crate::monitor::notify_all(self.__identity() as usize)
     }
 
     /// monitorenter（指令侧）：进入本对象的监视器（可重入）。
@@ -173,7 +171,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        hooks::__monitor_enter(self.__identity() as usize)
+        crate::monitor::enter(self.__identity() as usize)
     }
 
     /// monitorexit（指令侧）：退出本对象的监视器一层。
@@ -181,7 +179,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        hooks::__monitor_exit(self.__identity() as usize)
+        crate::monitor::exit(self.__identity() as usize)
     }
 
     /// JVM null 检查辅助：Object 持有的是运行时类对象，只有 null 单例与类型化 null 应答 true
@@ -270,7 +268,7 @@ pub use super::object_impl::Instance as __ObjectInstance;
 pub fn __object_identity_hash<T: ObjectVTable + ?Sized>(o: &T) -> i32 {
     let id = o.__identity();
     if o.__class_name() == "java/lang/Class" {
-        if let Some(h) = hooks::__class_mirror_hash(id) {
+        if let Some(h) = super::Class::__mirror_hash(id) {
             return h;
         }
     }
@@ -329,7 +327,7 @@ pub fn Object__hashCode_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
 #[allow(non_snake_case)]
 pub fn Object__finalize_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<()> {
     match this.__object() {
-        Some(o) => hooks::__object_finalize(&o),
+        Some(o) => super::object_body::Object__finalize_body(&o),
         None => Ok(()),
     }
 }
@@ -346,7 +344,7 @@ pub fn Object__getClass_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
 #[allow(non_snake_case)]
 pub fn Object__equals_base<T: ObjectVTable + ?Sized>(this: &T, other: Object) -> crate::error::Result<bool> {
     match this.__object() {
-        Some(o) => hooks::__object_equals(&o, other),
+        Some(o) => super::object_body::Object__equals_body(&o, other),
         None => Ok(!other.0.is_jvm_null() && this.__identity() == other.0.__identity()),
     }
 }
@@ -356,8 +354,8 @@ pub fn Object__equals_base<T: ObjectVTable + ?Sized>(this: &T, other: Object) ->
 #[allow(non_snake_case)]
 pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<crate::java::lang::String> {
     match this.__object() {
-        Some(o) => hooks::__object_to_string_java(&o),
-        None => Ok(hooks::__string_from_std(this.__obj_str())),
+        Some(o) => super::object_body::Object__toString_body(&o),
+        None => Ok(crate::java::lang::String::from(this.__obj_str())),
     }
 }
 
@@ -422,10 +420,10 @@ impl_vtable_primitive!(bool, "java/lang/Boolean", |v: bool| format!("{}", v),
     |v: bool| if v { 1231 } else { 1237 });
 impl_vtable_primitive!(i8,  "java/lang/Byte", |v: i8| format!("{}", v), |v: i8| v as i32);
 impl_vtable_primitive!(i16, "java/lang/Short", |v: i16| format!("{}", v), |v: i16| v as i32);
-impl_vtable_primitive!(u16, "java/lang/Character", crate::java_fmt::java_fmt_char, |v: u16| v as i32);
-impl_vtable_primitive!(f32, "java/lang/Float", crate::java_fmt::java_fmt_f32,
+impl_vtable_primitive!(u16, "java/lang/Character", crate::java_fmt_char, |v: u16| v as i32);
+impl_vtable_primitive!(f32, "java/lang/Float", crate::java_fmt_f32,
     |v: f32| __canon_f32_bits(v) as i32);
-impl_vtable_primitive!(f64, "java/lang/Double", crate::java_fmt::java_fmt_f64,
+impl_vtable_primitive!(f64, "java/lang/Double", crate::java_fmt_f64,
     |v: f64| { let b = __canon_f64_bits(v); (b ^ (b >> 32)) as i32 });
 
 /// Java null 的静态哨兵（不计数，见 `obj_ref`）：`Object::default()` 与无静态类型的 null 共用这一个值。
@@ -568,7 +566,7 @@ impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for JvmRef<T> {
         }
         try_fmt!(i32); try_fmt!(i64); try_fmt!(bool);
         try_fmt!(f32); try_fmt!(f64); try_fmt!(i8); try_fmt!(i16);
-        if let Some(x) = v.downcast_ref::<u16>() { return crate::java_fmt::java_fmt_char(*x); }
+        if let Some(x) = v.downcast_ref::<u16>() { return crate::java_fmt_char(*x); }
         std::any::type_name::<T>().to_owned()
     }
 }
@@ -595,7 +593,7 @@ impl Drop for Object {
             return;
         }
         let null = __Obj::from_static(&JVM_NULL as &'static dyn ObjectVTable);
-        hooks::__release(std::mem::replace(&mut self.0, null));
+        crate::handle::__release(std::mem::replace(&mut self.0, null));
     }
 }
 

@@ -223,8 +223,8 @@ fn segment_with_budget(
     out
 }
 
-/// 路径段（关键字加 `r#`；marker_side 的 java_marker 再导出行同口径）
-pub(crate) fn seg_ident(name: &str) -> String {
+/// 路径段（关键字加 `r#`）
+fn seg_ident(name: &str) -> String {
     if is_rust_keyword(name) {
         format!("r#{name}")
     } else {
@@ -248,10 +248,12 @@ fn view_of(src: &Path) -> BTreeSet<PathBuf> {
 
 impl DeclSegs {
     /// 上层段落盘：各包 mod.rs、lib.rs、Cargo.toml；清除段内本轮未写的文件与多余的旧段目录。
-    /// 须在类文件与底段 mod 树写出之后调用。标记文件（§9.9 K4 阶段 3）在 java_marker crate
-    /// （不在本 crate），宿主类文件头的 `pub use java_marker::…;` 再导出行要求 java_marker
-    /// 是本 crate 的直接依赖（Cargo 路径按名可见）。
-    pub fn write_crates(&self, w: &mut Writer, out_dir: &Path, decl_src: &Path) -> Result<()> {
+    /// 须在类文件与底段 mod 树写出之后调用。
+    /// `marker_hosts`：有标记文件（§9.9 K6）的类文件绝对路径 → 标记模块名——同段类补
+    /// `pub mod <标记模块>; pub use <标记模块>::*;` 行（标记类型经包 glob 再导出，文件头 `use` 不变）
+    pub fn write_crates(
+        &self, w: &mut Writer, out_dir: &Path, decl_src: &Path, marker_hosts: &BTreeMap<PathBuf, String>,
+    ) -> Result<()> {
         remove_extra_segments(out_dir, &self.names[0], self.names.len() - 1)?;
         let mut view = view_of(decl_src);
         for (j, files) in self.files.iter().enumerate() {
@@ -263,7 +265,12 @@ impl DeclSegs {
             for rel in files {
                 let parent = rel.parent().unwrap_or(Path::new("")).to_path_buf();
                 let stem = rel.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                pkgs.entry(parent.clone()).or_default().1.insert(stem);
+                let entry = pkgs.entry(parent.clone()).or_default();
+                entry.1.insert(stem.clone());
+                // K6 标记模块：宿主类有标记文件时同目录声明（模块名经同包避让，见 `marker_side`）
+                if let Some(m) = marker_hosts.get(&src.join(rel)) {
+                    entry.1.insert(m.clone());
+                }
                 let mut d = parent;
                 while let (Some(p), Some(n)) = (d.parent().map(Path::to_path_buf), d.file_name()) {
                     let n = n.to_string_lossy().into_owned();
@@ -297,7 +304,7 @@ impl DeclSegs {
                 w.write(&src.join(pkg).join("mod.rs"), &(lines.join("\n") + "\n"))?;
             }
             w.write(&src.join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
-            let deps = [path_dep(prev, prev), super::vendor::macros_dep(), super::module_side::path_dep(super::overlay::MARKER_CRATE, super::overlay::MARKER_CRATE)];
+            let deps = [path_dep(prev, prev), super::vendor::macros_dep()];
             w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, name, &deps))?;
             sweep_unwritten(&src, w)?;
             view.extend(pkgs.into_keys().filter(|p| !p.as_os_str().is_empty()));
@@ -388,27 +395,37 @@ mod tests {
         assert_eq!(s.uppers().count(), 0);
     }
 
-    /// 上层段 Cargo.toml 依赖 java_marker（宿主类文件头的 `pub use java_marker::…;` 再导出
-    /// 行按名可见；§9.9 K4 阶段 3 起标记文件整体在该 crate，段内不再声明标记模块）
+    /// K6 标记模块行：上层段内宿主类的包 mod.rs / lib.rs 补 `pub mod <标记模块>; pub use …;`
+    ///（标记类型经包 glob 再导出，声明文件头 `use crate::<包>::<类名>;` 不变即解析）
     #[test]
-    fn upper_segment_depends_on_marker_crate() {
-        let out = std::env::temp_dir().join(format!("rava_emit_k4seg_{}", std::process::id()));
+    fn upper_segment_declares_marker_modules() {
+        let out = std::env::temp_dir().join(format!("rava_emit_k6seg_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let decl_src = out.join("java_base_decl/src");
         std::fs::create_dir_all(decl_src.join("java/lang")).unwrap();
-        std::fs::write(decl_src.join("java/lang/mod.rs"), "pub mod string;\n").unwrap();
+        std::fs::create_dir_all(decl_src.join("java/util")).unwrap();
+        std::fs::write(decl_src.join("java/lang/mod.rs"), "pub mod object;\n").unwrap();
+        std::fs::write(decl_src.join("java/util/mod.rs"), "pub mod scanner;\n").unwrap();
         let mut w = Writer::new(&out, &[decl_src.clone()], &out.join("rt"));
+        // 段 1：java/util/x.rs（有标记文件，模块名 `x_m`）与 java/util/list.rs（无）
         let seg = DeclSegs {
             names: vec!["java_base_decl".to_string(), "java_base_decl_1".to_string()],
-            files: vec![vec![PathBuf::from("java/lang/string.rs")]],
+            files: vec![vec![
+                PathBuf::from("java/util/x.rs"),
+                PathBuf::from("java/util/list.rs"),
+            ]],
         };
-        seg.write_crates(&mut w, &out, &decl_src).unwrap();
-        let cargo = std::fs::read_to_string(out.join("java_base_decl_1/Cargo.toml")).unwrap();
-        assert!(cargo.contains("java_marker"), "{cargo}");
-        let mod_rs = std::fs::read_to_string(out.join("java_base_decl_1/src/java/lang/mod.rs")).unwrap();
-        assert!(mod_rs.contains("pub use java_base_decl::java::lang::*;"), "{mod_rs}");
-        assert!(mod_rs.contains("pub mod string;\npub use string::*;"), "{mod_rs}");
-        assert!(!mod_rs.contains("string_m"), "{mod_rs}");
+        let src1 = out.join("java_base_decl_1/src");
+        let mut hosts = BTreeMap::new();
+        hosts.insert(src1.join("java/util/x.rs"), "x_m".to_string());
+        seg.write_crates(&mut w, &out, &decl_src, &hosts).unwrap();
+        let mod_rs = std::fs::read_to_string(src1.join("java/util/mod.rs")).unwrap();
+        assert!(mod_rs.contains("pub use java_base_decl::java::util::*;"), "{mod_rs}");
+        assert!(mod_rs.contains("pub mod x;\npub use x::*;\npub mod x_m;\npub use x_m::*;"), "{mod_rs}");
+        assert!(mod_rs.contains("pub mod list;\npub use list::*;"), "{mod_rs}");
+        assert!(!mod_rs.contains("list_m"), "{mod_rs}");
+        let lib_rs = std::fs::read_to_string(src1.join("lib.rs")).unwrap();
+        assert!(lib_rs.contains("pub use java_base_decl::*;"), "{lib_rs}");
         let _ = std::fs::remove_dir_all(&out);
     }
 }

@@ -278,22 +278,9 @@ impl<'a> EmitShared<'a> {
     pub fn root_api(&self) -> &BTreeSet<String> {
         self.root_api.get_or_init(|| {
             let mut names = BTreeSet::new();
-            // 两处真源（§9.9 K4 阶段 3）：object{,_impl,_ext}.rs 随标记层基础迁入 java_marker
-            let mut roots = vec![self.runtime_src()];
-            if let Some(marker_src) = self
-                .runtime_src()
-                .parent()
-                .and_then(|p| p.parent())
-                .map(|p| p.join("java_marker").join("src"))
-                .filter(|p| p.is_dir())
-            {
-                roots.push(marker_src);
-            }
-            for root in roots {
-                for f in Self::root_files(&root) {
-                    if let Ok(text) = std::fs::read_to_string(f) {
-                        names.extend(crate::text::pub_fn_names(&text));
-                    }
+            for f in Self::root_files(&self.runtime_src()) {
+                if let Ok(text) = std::fs::read_to_string(f) {
+                    names.extend(crate::text::pub_fn_names(&text));
                 }
             }
             names

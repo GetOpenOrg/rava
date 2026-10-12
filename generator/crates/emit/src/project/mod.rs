@@ -327,13 +327,10 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let mut body_plan = layers::split(ctx, &mut ems, &decl_src, &state.method_traits)?;
     // D8：声明层按签名 SCC 分段（上层段类改落 `<根>_decl_<j>`）
     let segs = decl_side::segment(ctx, &mut ems, &decl_src, out_dir);
-    // 标记层（§9.9 K6 起；K4 阶段 3 起独立 crate）：已拆层根模块类与接口的标记文件落
-    // `<scratch>/java_marker/src/<包>/<stem>_m.rs`，不透明（L1）类文件双发同相对路径。
-    // 须在分段之后调用——分段输入是未剥标记部分的声明文本（em.text 不变），切段逐类与
-    // 之前一致；声明文件块文本不变（`decl` 层展开由宏剥去标记部分），只有文件头再导出行
-    // （类：`pub use java_marker::<包>::<m>::<名>;`；接口另补块首 `decl` 属性）与新增标记文件
-    let marker_root = out_dir.join(overlay::MARKER_CRATE).join("src");
-    let marker = marker_side::split(ctx, &mut ems, &decl_src, &marker_root);
+    // K6 标记层（§9.9）：已拆层根模块类的标记文件（同段同目录 `<stem>_m.rs`）。须在分段之后
+    // 调用——分段输入是未剥标记部分的声明文本（em.text 不变），切段逐类与之前一致；
+    // 声明文件文本也不变（`decl` 层展开由宏剥去标记部分），只有新增标记文件
+    let marker = marker_side::split(ctx, &mut ems, &decl_src);
     let root_classes = jdk.files.keys().filter(|c| crates.crate_of(c) == crates.root()).count();
     perf.crates = crate_stats(&ems, &body_plan, crates, root_classes, &segs.upper_srcs(out_dir));
     let root_file = match &roots {
@@ -355,19 +352,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), ctx.opts.jdk_major, crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     }
-    // java_marker 的 mod 树与 lib.rs（§9.9 K4 阶段 3）：与声明层 crate 同口径——手写真源
-    // （runtime/java_marker）按磁盘扫描自动声明，生成标记文件（带生成标记）并入；lib.rs 由
-    // 手写清单 + 磁盘顶层包补全写出
-    if let Some(marker_dir) = ctx.runtime_dir.parent().map(|p| p.join(overlay::MARKER_CRATE)) {
-        if marker_dir.join("Cargo.toml").is_file() {
-            mod_tree::write_mod_tree(&marker_root, Some(&marker_dir), ctx.opts.jdk_major, crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
-            mod_tree::complete_lib_rs(&marker_root, &marker_dir.join("src"), &mut w)?;
-        }
-    }
-    // 声明层 java/lang 包注入（§9.9 K4 阶段 3）：object 三件随标记层迁走，`crate::java::lang::
-    // Object` 等旧路径经本行保持（java_marker 侧同名模块按包 glob 再导出）
-    inject_marker_pkg_reexport(&decl_src, &mut w)?;
-    segs.write_crates(&mut w, out_dir, &decl_src)?;
+    segs.write_crates(&mut w, out_dir, &decl_src, &marker.hosts)?;
     perf.mark("mod_tree");
     module_side::write_module_crates(ctx, &mut w, out_dir, segs.top())?;
     libs.write_crates(ctx, &mut w, out_dir, segs.top())?;
@@ -412,11 +397,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         archive_side::stamp_versions(&mut w, out_dir, &stamped, &included)?;
     }
     perf.mark("entry");
-    // 手写 vtable 守护审计扫两处真源（java_runtime + java_marker，§9.9 K4 阶段 3）
     state.hw_audit.extend(crate::audit::handwritten_vtable_impls(&runtime_src).into_iter().map(|m| (HwAudit::VtableImpl, m)));
-    if let Some(marker_dir) = ctx.runtime_dir.parent().map(|p| p.join(overlay::MARKER_CRATE).join("src")) {
-        state.hw_audit.extend(crate::audit::handwritten_vtable_impls(&marker_dir).into_iter().map(|m| (HwAudit::VtableImpl, m)));
-    }
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),
         user_classes: user.entries.len(),
@@ -443,31 +424,5 @@ fn root_line_registration(ctx: &EmitCtx<'_>, decl_src: &Path) -> Vec<(PathBuf, V
     // 非 native 方法按字节码翻译进 `root_bodies` 文件，由其行表头登记；手写只剩 native
     let methods = cf.methods.iter().filter(|m| m.is_native()).map(|m| (m.name.as_str(), m.desc.as_str(), true, overridable(m.access)));
     let hws = line_tables::handwritten::root_methods(root, &source, &ctx.short(root), methods, &rust_name);
-    // 根类手写文件扫两处（§9.9 K4 阶段 3）：object{,_impl,_ext}.rs 在 scratch 的 java_marker 源码树
-    // （decl_src = <scratch>/<声明层>/src → scratch 根下同名兄弟 crate）
-    let mut files = crate::ctx::EmitShared::root_files(decl_src);
-    if let Some(marker_src) = decl_src
-        .parent()
-        .and_then(Path::parent)
-        .map(|p| p.join(overlay::MARKER_CRATE).join("src"))
-        .filter(|p| p.is_dir())
-    {
-        files.extend(crate::ctx::EmitShared::root_files(&marker_src));
-    }
-    files.into_iter().map(|p| (p, hws.clone())).collect()
-}
-
-/// 声明层包 mod.rs 的标记层注入（§9.9 K4 阶段 3）：`java/lang` 的 object 三件（Object /
-/// ObjectVTable / __TypedNull / Object__clone_base 等）随 INFRA 迁入 java_marker 后，
-/// `crate::java::lang::Object` 等既有路径经 `pub use java_marker::java::lang::object::*;`
-/// 保持不变（java_marker 侧 object 模块由其 mod 树按磁盘声明并按包 glob 再导出）。
-/// 注入行在 mod 树之后追加（mod.rs 每轮由扫描重建，无反馈环）。
-fn inject_marker_pkg_reexport(decl_src: &Path, w: &mut fs::Writer) -> Result<()> {
-    const LINE: &str = "pub use java_marker::java::lang::object::*;";
-    let path = decl_src.join("java").join("lang").join("mod.rs");
-    let Ok(text) = std::fs::read_to_string(&path) else { return Ok(()) };
-    if text.contains(LINE) {
-        return Ok(());
-    }
-    w.write(&path, &format!("{text}{LINE}\n"))
+    crate::ctx::EmitShared::root_files(decl_src).into_iter().map(|p| (p, hws.clone())).collect()
 }

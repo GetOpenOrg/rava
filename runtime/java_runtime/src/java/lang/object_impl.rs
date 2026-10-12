@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use super::object::Object;
-use crate::marker_hooks as hooks;
+use super::object_body::{Object__finalize_body, Object__wait_body, Object__wait_l_body, Object__wait_l_i_body};
 
 /// `new Object()` 的实例体：无 Java 字段；占 1 字节使每个实例拥有独立堆地址（对象身份）。
 pub struct Instance(#[allow(dead_code)] u8);
@@ -57,7 +57,7 @@ impl Object {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        hooks::__object_finalize(self)
+        Object__finalize_body(self)
     }
 
     // ── 字节码方法的 bare-Object 接收者入口 ─────────────────────────────────
@@ -78,7 +78,7 @@ impl Object {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        Ok(hooks::__string_from_str(self.0.__to_string()?.as_str()))
+        Ok(String::from(self.0.__to_string()?.as_str()))
     }
 
     /// java.lang.Object.wait()V
@@ -86,7 +86,7 @@ impl Object {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        hooks::__object_wait(self, 0, 0)
+        Object__wait_body(self)
     }
 
     /// java.lang.Object.wait(J)V
@@ -94,7 +94,7 @@ impl Object {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        hooks::__object_wait(self, millis, 0)
+        Object__wait_l_body(self, millis)
     }
 
     /// java.lang.Object.wait(JI)V
@@ -102,20 +102,20 @@ impl Object {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        hooks::__object_wait(self, millis, nanos)
+        Object__wait_l_i_body(self, millis, nanos)
     }
 
     /// java.lang.Object.wait0(J)V（private native）：在本对象监视器上等待，millis 为 0 表示无限等待；
     /// 中断以 InterruptedException 返回（监视器侧表，monitor.rs）
     #[jvm_native]
     pub fn wait0(&self, millis: i64) -> Result<()> {
-        hooks::__monitor_wait_timeout(self.0.__identity() as usize, millis, 0)
+        crate::monitor::wait_timeout(self.0.__identity() as usize, millis, 0)
     }
 
     /// java.lang.Object.notify()V：无等待者时静默
     #[jvm_native]
     pub fn notify(&self) -> Result<()> {
-        hooks::__monitor_notify(self.0.__identity() as usize)
+        crate::monitor::notify(self.0.__identity() as usize)
     }
 
     /// java.lang.Object.notifyAll()V：notifyAll 无重载，mangle_name 保持
@@ -123,7 +123,7 @@ impl Object {
     /// 手写内部消费方继续可用，双名同体）。
     #[jvm_native]
     pub fn notify_all(&self) -> Result<()> {
-        hooks::__monitor_notify_all(self.0.__identity() as usize)
+        crate::monitor::notify_all(self.0.__identity() as usize)
     }
 
     /// notifyAll 的生成侧名（mangle 语义别名，见上）
@@ -135,13 +135,13 @@ impl Object {
     /// monitorenter（指令侧，codegen 发射）：可重入获取监视器
     #[jvm_ext]
     pub fn monitor_enter(&self) -> Result<()> {
-        hooks::__monitor_enter(self.0.__identity() as usize)
+        crate::monitor::enter(self.0.__identity() as usize)
     }
 
     /// monitorexit（指令侧，codegen 发射）：释放一层重入计数
     #[jvm_ext]
     pub fn monitor_exit(&self) -> Result<()> {
-        hooks::__monitor_exit(self.0.__identity() as usize)
+        crate::monitor::exit(self.0.__identity() as usize)
     }
 
     #[jvm_native]

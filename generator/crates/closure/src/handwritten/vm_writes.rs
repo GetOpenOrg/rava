@@ -14,18 +14,15 @@ impl Handwritten {
     /// 基础设施文件里写访问器（`x.__set_<字段>(…)` / `T::set_<字段>(…)`）点名的字段名
     pub fn vm_field_writes(&self) -> BTreeSet<String> {
         let mut out = BTreeSet::new();
-        // 两处真源（§9.9 K4 阶段 3）：java_marker 的 INFRA 文件同按「基础设施恒可达」计入
-        for root in &self.roots {
-            walk(&root.src, &mut |path, content| {
-                // 私有辅助目录内的文件按其宿主归类（共置手写的辅助文件随宿主方法扫描）
-                let host = super::layout::host_of(&root.src, path);
-                let name = host.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if SUFFIXES.iter().any(|s| name.ends_with(s)) || content.contains(GENERATED_MARK) {
-                    return;
-                }
-                out.extend(setter_names(content));
-            });
-        }
+        walk(&self.src, &mut |path, content| {
+            // 私有辅助目录内的文件按其宿主归类（共置手写的辅助文件随宿主方法扫描）
+            let host = super::layout::host_of(&self.src, path);
+            let name = host.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if SUFFIXES.iter().any(|s| name.ends_with(s)) || content.contains(GENERATED_MARK) {
+                return;
+            }
+            out.extend(setter_names(content));
+        });
         out
     }
 }

@@ -119,7 +119,7 @@ impl Object {
         }
         Err(crate::error::JvmError::class_cast(format!(
             "class {} cannot be cast to class {}",
-            crate::marker_hooks::__meta_java_name(self.0.__class_name()),
+            crate::meta::java_name(self.0.__class_name()),
             binary_name.replace('/', "."),
         )))
     }
@@ -137,7 +137,7 @@ impl Object {
             Some(view) => Ok(view),
             None => Err(crate::error::JvmError::class_cast(format!(
                 "class {} cannot be cast to class {}",
-                crate::marker_hooks::__meta_java_name(self.0.__class_name()),
+                crate::meta::java_name(self.0.__class_name()),
                 binary_name.replace('/', "."),
             ))),
         }
@@ -155,7 +155,7 @@ impl Object {
         }
         Err(crate::error::JvmError::class_cast(format!(
             "class {} cannot be cast to interface {}",
-            crate::marker_hooks::__meta_java_name(self.0.__class_name()),
+            crate::meta::java_name(self.0.__class_name()),
             binary_name.replace('/', "."),
         )))
     }

@@ -186,7 +186,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 与整数地址运算，opt-level 0 的调用方（dev-opt 档的用户 crate）也不逐层调用存取链。
     #[inline(always)]
     pub fn get(&self, i: i32) -> crate::error::Result<T> {
-        crate::marker_hooks::__safepoint(); // 安全点钩子（行为层 gil::safepoint，经链接期转交）
+        crate::gil::safepoint(); // 安全点钩子（并行后端为空）
         if let Repr::Own { len, prim: true, .. } = self.repr {
             return Ok(from_bits(self.prim_slot(i, len)?.load_bits(Ordering::Relaxed)));
         }
