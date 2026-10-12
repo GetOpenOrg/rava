@@ -243,6 +243,20 @@ pub fn peak_mem_mb() -> u64 {
     peak_rss_mb()
 }
 
+/// 当前 RSS（MB）：Linux 读 `/proc/self/statm` 第二字段（4 KiB 页）；读不到回退峰值。
+/// 尖峰剖析用：两段 dump 之间的峰值另由 `--lambda-prof` 的采样点记录（`rss_max`）
+pub fn cur_rss_mb() -> u64 {
+    if cfg!(target_os = "linux") {
+        let mut s = String::new();
+        if std::fs::File::open("/proc/self/statm").and_then(|mut f| std::io::Read::read_to_string(&mut f, &mut s)).is_ok() {
+            if let Some(pages) = s.split_whitespace().nth(1).and_then(|x| x.parse::<u64>().ok()) {
+                return pages * 4096 >> 20;
+            }
+        }
+    }
+    peak_rss_mb()
+}
+
 /// 进程峰值 RSS（MB）：getrusage；macOS 以字节计，Linux 以 KB 计
 pub fn peak_rss_mb() -> u64 {
     #[repr(C)]

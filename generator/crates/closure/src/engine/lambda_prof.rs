@@ -50,6 +50,10 @@ pub(super) struct LambdaProf {
     dup_by: [u64; 3],
     /// 读者复活次数
     revived: u64,
+    /// 本段 dump 间隙的 RSS 采样峰值（`lprof_rss_sample`；dump 时打印后清零）
+    rss_max: u64,
+    /// 全程 RSS 采样峰值
+    rss_max_all: u64,
 }
 
 impl LambdaProf {
@@ -71,6 +75,8 @@ impl LambdaProf {
             dup_site: 0,
             dup_by: [0; 3],
             revived: 0,
+            rss_max: 0,
+            rss_max_all: 0,
         }
     }
 }
@@ -78,7 +84,21 @@ impl LambdaProf {
 impl Engine<'_> {
     /// 开启剖析（`secs` = 打印间隔秒数，0 = 关闭）
     pub fn set_lambda_prof(&mut self, secs: u64) {
+        crate::alloc_prof::ENABLED.store(secs > 0, std::sync::atomic::Ordering::Relaxed);
         self.lprof = (secs > 0).then(|| Box::new(LambdaProf::new(secs)));
+    }
+
+    /// RSS 采样（剖析开启时记录段内 / 全程峰值；由 `lprof_tick` 与流排空周期调用，
+    /// 捕捉 dump 间隙的尖峰幅度）
+    pub(super) fn lprof_rss_sample(&mut self) {
+        let Some(p) = self.lprof.as_mut() else { return };
+        let r = stats::cur_rss_mb();
+        if r > p.rss_max {
+            p.rss_max = r;
+        }
+        if r > p.rss_max_all {
+            p.rss_max_all = r;
+        }
     }
 
     /// 分析结束时打印末段（未开剖析时无输出）
@@ -142,14 +162,27 @@ impl Engine<'_> {
     }
 
     pub(super) fn lprof_tick(&mut self) {
-        let Some(p) = self.lprof.as_mut() else { return };
-        p.tick = p.tick.wrapping_add(1);
-        if p.tick & TICK_MASK != 0 || p.last.elapsed() < p.every {
+        let mut due = false;
+        let mut sample = false;
+        if let Some(p) = self.lprof.as_mut() {
+            p.tick = p.tick.wrapping_add(1);
+            sample = p.tick & TICK_MASK == 0;
+            due = sample && p.last.elapsed() >= p.every;
+        }
+        if sample {
+            self.lprof_rss_sample();
+        }
+        if !due {
             return;
         }
-        p.last = Instant::now();
-        p.seq += 1;
+        if let Some(p) = self.lprof.as_mut() {
+            p.last = Instant::now();
+            p.seq += 1;
+        }
         self.lprof_dump();
+        if let Some(p) = self.lprof.as_mut() {
+            p.rss_max = 0;
+        }
     }
 
     /// 打印一段前列（stderr，`[lambda-prof #序号 秒]` 前缀）
@@ -185,6 +218,130 @@ impl Engine<'_> {
             self.objs.len(),
             self.hub_sites.len(),
             self.mref_keys.len(),
+        );
+        // 内存剖析（同上，定位 RSS 尖峰）：分配器计数 + 主要驻留结构的字节估计。
+        // rss_max 为上一段 dump 间隙的采样峰值；live（活跃字节）与 rss 之差是分配器滞留
+        let ac = &crate::alloc_prof::COUNTERS;
+        let mib = |b: u64| b >> 20;
+        eprintln!(
+            "{tag} mem rss={}MiB rss_max={}MiB all_max={}MiB live={}MiB live_peak={}MiB alloc_total={}GiB allocs={} frees={}",
+            stats::cur_rss_mb(),
+            p.rss_max,
+            p.rss_max_all,
+            mib(ac.live_bytes()),
+            mib(ac.peak_live.load(std::sync::atomic::Ordering::Relaxed)),
+            ac.alloc_bytes.load(std::sync::atomic::Ordering::Relaxed) >> 30,
+            ac.allocs.load(std::sync::atomic::Ordering::Relaxed),
+            ac.frees.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let mut sizes = String::new();
+        for (k, b) in ac.live.iter().enumerate() {
+            let v = b.load(std::sync::atomic::Ordering::Relaxed);
+            if v > 64 << 20 {
+                sizes.push_str(&format!(" 2^{k}:{}MiB", v >> 20));
+            }
+        }
+        eprintln!("{tag} sizeclass(since-enable){sizes}");
+        // 类型流图：集合 / 边 / 待推增量的字节；queued_delta 随 fwork 突发增长即为尖峰主项
+        let (sets_bytes, sets_n) = self.graph.sets.census();
+        let edges: usize = self.graph.edges.iter().map(|e| e.len()).sum();
+        let mut delta_bytes = 0usize;
+        let mut delta_nodes = 0usize;
+        let mut by_kind: [u64; 19] = [0; 19];
+        let mut top: Vec<(usize, u32)> = Vec::new();
+        for &i in &self.fwork {
+            let d = &self.graph.delta[i as usize];
+            if d.is_empty() {
+                continue;
+            }
+            let b = d.classes.heap_bytes() + d.open.heap_bytes() + std::mem::size_of::<TypeSet>();
+            delta_bytes += b;
+            delta_nodes += 1;
+            by_kind[stats::kind_ix(&self.graph.node(i))] += b as u64;
+            top.push((b, i));
+        }
+        eprintln!(
+            "{tag} census graph nodes={} sets={:.0}MiB/{} edges={}MiB queued_delta={:.0}MiB/{} seen={} members={} fmemo={}MiB nodes_dense≈{}MiB",
+            self.graph.node_count(),
+            sets_bytes as f64 / 1048576.0,
+            sets_n,
+            (edges * 8) as f64 / 1048576.0,
+            delta_bytes as f64 / 1048576.0,
+            delta_nodes,
+            self.graph.seen_len(),
+            self.graph.members.len(),
+            self.graph.fmemo_bytes >> 20,
+            (self.graph.node_count() * 160) >> 20,
+        );
+        let kinds: Vec<String> = by_kind
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b > 4 << 20)
+            .map(|(k, b)| format!("{}:{:.0}MiB", stats::KIND_NAMES[k], *b as f64 / 1048576.0))
+            .collect();
+        top.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        let tops: Vec<String> = top
+            .into_iter()
+            .take(6)
+            .map(|(b, i)| format!("{}={:.0}MiB", self.node_str(self.graph.node(i)), b as f64 / 1048576.0))
+            .collect();
+        eprintln!("{tag} census fwork kinds: {} top: [{}]", kinds.join(" "), tops.join(" "));
+        // 主要驻留表的条目数（字节估计按条目均摊，够归因量级即可）
+        let watch_n: usize = self.watch.values().map(|s| s.len()).sum();
+        let call_watch_n: usize = self.call_watch.values().map(|s| s.len()).sum();
+        let disp_n: usize = self.dispatched.values().map(|s| s.len()).sum();
+        let recv_done_n: usize = self.recv_done.values().flat_map(|m| m.values()).map(|v| v.len()).sum::<usize>() + self.recv_fp.len();
+        let ldone_n: usize = self
+            .lambda_done
+            .values()
+            .flat_map(|m| m.values())
+            .map(|h| h.len())
+            .sum::<usize>()
+            + self.hub_linked.values().map(|s| s.len()).sum::<usize>()
+            + self.hub_lsent.values().map(|s| s.len()).sum::<usize>();
+        let lcall_live = self.lcalls.iter().filter(|c| c.live).count();
+        let lcall_done_b: usize = self.lcalls.iter().map(|c| c.done.classes.heap_bytes() + c.done.open.heap_bytes()).sum();
+        let ctx_n = self.methods.values().filter(|m| m.ctx != NOCTX).count();
+        let anev: usize = self.methods.values().filter_map(|m| m.analysis.as_ref()).map(|a| a.events.len()).sum();
+        let mnode_b = self.methods.len() * std::mem::size_of::<MNode>();
+        eprintln!(
+            "{tag} census tables watch={}/{}={}MiB call_watch={} dispatched={} recv_done={} ldone={} lcalls={}/{} done={}MiB methods={}={}MiB ctx={} anev={}≈{}MiB objs={} ids={} lambdas={} mref={} site_nodes={}",
+            self.watch.len(),
+            watch_n,
+            (self.watch.len() * 80 + watch_n * 24) >> 20,
+            call_watch_n,
+            disp_n,
+            recv_done_n,
+            ldone_n,
+            lcall_live,
+            self.lcalls.len(),
+            lcall_done_b >> 20,
+            self.methods.len(),
+            mnode_b >> 20,
+            ctx_n,
+            anev,
+            (anev * 48) >> 20,
+            self.objs.len(),
+            self.ids.len(),
+            self.lambdas.len(),
+            self.mref_keys.len(),
+            self.site_nodes.len(),
+        );
+        let hub_recvs: usize = self.hubs.iter().map(|h| h.recvs.len()).sum();
+        let hub_special: usize = self.hubs.iter().flat_map(|h| h.special.values()).map(|v| v.len()).sum();
+        let hub_links: usize = self.hubs.iter().map(|h| h.links.len()).sum();
+        let hub_edged: usize = self.hubs.iter().map(|h| h.edged.len()).sum();
+        let hub_lam: usize = self.hubs.iter().map(|h| h.lambdas.len()).sum();
+        eprintln!(
+            "{tag} census hubs n={} recvs={}MiB special={}MiB links={}MiB lambdas={} edged={} grow_max={} upgraded={}",
+            self.hubs.len(),
+            hub_recvs * 4 >> 20,
+            hub_special * 4 >> 20,
+            (hub_links * 16) >> 20,
+            hub_lam * 4 >> 20,
+            hub_edged >> 20,
+            self.grow_max,
+            self.hub_upgraded,
         );
         let mut hs: Vec<(&u32, &u64)> = p.hub_replay.iter().collect();
         hs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));

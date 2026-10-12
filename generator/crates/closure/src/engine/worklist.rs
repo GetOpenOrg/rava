@@ -52,6 +52,10 @@ impl<'a> Engine<'a> {
         self.ctx.stats.borrow_mut().mark_rss("setup");
         let mut batch = 0usize;
         loop {
+            // RSS 采样（剖析开启时；工作表填充波不触发 lambda 计数，见 `lambda_prof.rs`）
+            if batch & 0xfff == 0 {
+                self.lprof_rss_sample();
+            }
             self.pkey_flush();
             self.fopen_flush();
             if !self.obj_dirty.is_empty() {

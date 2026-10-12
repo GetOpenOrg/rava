@@ -108,6 +108,10 @@ impl FlowGraph {
         self.seen = HashMap::default();
         self.edge_count = 0;
     }
+    /// 去重索引的条目数（观测）
+    pub(super) fn seen_len(&self) -> usize {
+        self.seen.values().map(|t| t.len()).sum()
+    }
 
     /// 节点序号（首次出现时驻留）
     #[inline]

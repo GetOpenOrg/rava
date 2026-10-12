@@ -125,4 +125,16 @@ impl SetStore {
     pub(super) fn unique(&self) -> usize {
         self.table.len()
     }
+    /// 全部节点类型集的原始字节估计（观测，含共享的重复计数）：返回（字节和, 非空节点数）
+    pub(super) fn census(&self) -> (usize, usize) {
+        let mut b = 0usize;
+        let mut n = 0usize;
+        for s in &self.sets {
+            if !s.is_empty() {
+                n += 1;
+                b += s.classes.heap_bytes() + s.open.heap_bytes() + std::mem::size_of::<TypeSet>();
+            }
+        }
+        (b, n)
+    }
 }

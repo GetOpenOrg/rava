@@ -32,9 +32,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 全局分配器：生成管线以大量小字符串 / 小向量分配为主，mimalloc 比系统分配器省约两成指令
-/// （输出与分配器无关：生成结果不依赖地址或哈希种子）
+/// （输出与分配器无关：生成结果不依赖地址或哈希种子）。
+/// 外包一层分配计数（`closure::alloc_prof`，只读诊断）：字节入出恒计数，分桶 / 峰值由
+/// `--lambda-prof` 门控——`rava closure --lambda-prof` 的 census 行据此归因 RSS 尖峰
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: closure::alloc_prof::CountingAlloc<mimalloc::MiMalloc> =
+    closure::alloc_prof::CountingAlloc::new(mimalloc::MiMalloc);
 
 fn usage() -> ExitCode {
     eprintln!(

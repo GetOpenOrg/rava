@@ -286,6 +286,10 @@ impl<'a> Engine<'a> {
                 self.collapse_cycles();
             }
             let Some(i) = self.fwork.pop_front() else { break };
+            // RSS 采样（剖析开启时；捕捉排空波内的尖峰幅度，见 `lambda_prof.rs`）
+            if self.graph.adds[0] & 0xffff == 0 {
+                self.lprof_rss_sample();
+            }
             let ix = i as usize;
             self.graph.queued[ix] = false;
             let s = std::mem::take(&mut self.graph.delta[ix]);
