@@ -167,8 +167,10 @@ FractionReduction 已实证转过。分类与验收以 release 为准；dev 档�
   一直在（本机 slot11 JDK21 残留构建实证 `unsafe_.rs` 的 `// [meta] #[java_native(name="getDouble"…)]` 与
   meta_tables 行；JDK21 缓存 closure.json 的 reflect.members 含全 getX 族）。
 - 修法：`write_archive` 扫描壳文本的 `#[impl_methods]` 标记（手写边界类，76 类），其类名并进 Keep 的
-  methods 集——手写层成员由人维护、MemberName 可在运行期以计算名触达是这类类的固有形态；JDK21 侧行为
-  不变（事实集合本已含这些类）。二进制代价：76 类的方法行（千行级）。
+  methods 集——手写层成员由人维护、MemberName 可在运行期以计算名触达是这类类的固有形态。
+  JDK21 侧对照（slot11 残留构建 closure.json）：反射重的用例事实集本含 Unsafe/Class/Object，但
+  Console/TimeZone/MethodHandleNatives 等不在——这些类此前 0 行（按名解析必失败、枚举为空，是裁剪伪影），
+  修复后按真实声明应答，方向严格贴近 JVM 语义；二进制代价 76 类方法行（千行级）。
 
 ### 3.3 folds 活调用死顺序（TestCollectionsFactories / TestListOf）— 已修 e05dcd0a
 
