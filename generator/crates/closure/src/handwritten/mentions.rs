@@ -23,7 +23,9 @@ impl Handwritten {
             return w.clone();
         }
         let mut out = HashSet::new();
-        walk(&self.src, &mut |content| {
+        // 两处真源（§9.9 K4 阶段 3）的词面并集（java_marker 的生成标记文件含生成标记，跳过）
+        for root in &self.roots {
+        walk(&root.src, &mut |content| {
             if content.contains(GENERATED_MARK) {
                 return;
             }
@@ -40,6 +42,7 @@ impl Handwritten {
                 }
             }
         });
+        }
         let w = Rc::new(out);
         *self.mentions.borrow_mut() = Some(w.clone());
         w

@@ -3,28 +3,27 @@
 //! 非 null 数组是 `__ArrayObj<T>`；null 数组装入 Object 是 `__ArrayNull<T>` 静态哨兵，以元素类型
 //! 应答数组类与 checkcast 探针（null 的身份与任意 null 相同）。
 
-use crate::java::lang::Class__Methods as _;
 use super::*;
+use crate::marker_hooks as hooks;
 
 /// 数组类（JLS §10.8）：反射创建数组按组件标签，其余按元素类型 T。
 fn array_class<T: Default + Into<Object> + 'static>(tag: Option<&Rc<str>>) -> crate::error::Result<crate::java::lang::Class> {
     if let Some(d) = JArray::<T>::primitive_elem_descriptor() {
-        return Ok(crate::java::lang::Class::for_class(format!("[{}", d).as_str()));
+        return Ok(hooks::__class_for_class(format!("[{}", d).as_str()));
     }
     if let Some(tag) = tag {
         let binary = if tag.starts_with('[') { format!("[{}", tag) } else { format!("[L{};", tag) };
-        return Ok(crate::java::lang::Class::for_class(binary.as_str()));
+        return Ok(hooks::__class_for_class(binary.as_str()));
     }
-    let elem_name = format!("{}", Into::<Object>::into(T::default())
-        .0.getClass()?
-        .__get_name())
+    let elem_name = hooks::__class_name(&Into::<Object>::into(T::default())
+        .0.getClass()?)?
         .replace('.', "/");
     let binary = if elem_name.starts_with('[') {
         format!("[{}", elem_name)
     } else {
         format!("[L{};", elem_name)
     };
-    Ok(crate::java::lang::Class::for_class(binary.as_str()))
+    Ok(hooks::__class_for_class(binary.as_str()))
 }
 
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> crate::java::lang::ObjectVTable for __ArrayObj<T> {
@@ -78,8 +77,8 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         }
         // 引用元素 / 嵌套数组：按数组协变（JLS §4.10.3，组件类型可赋值）判定
         match self.getClass() {
-            Ok(c) => crate::java::lang::Class::__name_assignable(
-                &target, &format!("{}", c.__get_name()).replace('.', "/")),
+            Ok(c) => hooks::__class_name_assignable(
+                &target, &hooks::__class_name(&c).unwrap_or_default().replace('.', "/")),
             Err(_) => false,
         }
     }

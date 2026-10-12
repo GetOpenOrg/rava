@@ -105,7 +105,7 @@ fn ensure_dispatcher() -> Result<()> {
         if n == 1 {
             if let Err(e) = Signal::dispatch(i32::from(b)) {
                 if let Ok(me) = crate::java::lang::Thread::currentThread() {
-                    e.dispatch_uncaught(&me);
+                    crate::error::dispatch_uncaught(&e, &me);
                 }
             }
         } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {

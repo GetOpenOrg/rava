@@ -78,6 +78,8 @@ impl CompanionDeps {
     /// - 手写层顶层 pub item（类型 / 函数 / 常量 / pub mod，overlay 全量复制）→ 在场；
     /// - `_` 前缀：宏展开生成的内部条目（`__Xxx`），不以文件形态存在 → 在场；
     /// - 大写段：生成类按 snake 化文件名（`Proxy_Dyn` → `proxy_dyn.rs`）或同名目录探测 scratch；
+    ///   java_marker 源码树（§9.9 K4 阶段 3）另有标记模块 `<snake>_m.rs` / `<snake>__m.rs`
+    ///   （包 mod.rs 的 glob 再导出条目，声明层 crate 侧该探测恒不命中——零操作）；
     /// - 「目录 + 同名 .rs」并存（`array/` 与 `array.rs`）：条目可能在 .rs 模块体里 → 在场；
     /// - 其余（如 `member_name` 而 `member_name.rs` 本轮未生成）→ 缺席：companion 不声明，方法回落存根
     fn item_present(&self, cur: &Path, seg: &str) -> bool {
@@ -86,7 +88,12 @@ impl CompanionDeps {
         }
         if seg.starts_with(|c: char| c.is_ascii_uppercase()) {
             let snake = to_snake(seg);
-            if cur.join(format!("{snake}.rs")).is_file() || cur.join(format!("{snake}_t.rs")).is_file() || cur.join(&snake).is_dir() {
+            if cur.join(format!("{snake}.rs")).is_file()
+                || cur.join(format!("{snake}_t.rs")).is_file()
+                || cur.join(&snake).is_dir()
+                || cur.join(format!("{snake}_m.rs")).is_file()
+                || cur.join(format!("{snake}__m.rs")).is_file()
+            {
                 return true;
             }
         }

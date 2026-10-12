@@ -310,6 +310,18 @@ pub(crate) fn expand_interface(
         // 标记层：只展开载体身份面（I__Methods 的定义与实现留声明 crate——其分派外壳引用
         // 本接口 vtable trait，标记 crate 不可见）
         Layer::Marker => iface_marker,
+        // 声明层（§9.9 K4 阶段 3）：载体身份面随标记文件在 java_marker crate，本文件头的
+        // `pub use java_marker::…::I;` 再导出行把名字带回——此处不再展开（否则与标记文件
+        // 重复定义）。Full 拼回三段（项序与拆前一致）。
+        Layer::Decl => quote! {
+            #iface_decl_head
+
+            // 载体成员移入方法 trait I__Methods（§9.9 K6 前置项）：static 方法 / static
+            // 字段访问器 / `__class_init` / 实例分派与继承转发；const fn（__from_image）、
+            // 关联常量（BINARY_NAME / __IMAGE_NULL）、`is_jvm_null` 留固有（§9.9 K4：载体
+            // struct 随标记层，后三者属标记段；`__default_*` 已入方法 trait）
+            #carrier_members
+        },
         _ => quote! {
             #iface_decl_head
 
@@ -533,5 +545,31 @@ mod tests {
         assert!(out.contains("pub fn is_jvm_null (& self) -> bool"), "{out}");
         // `__default_d` 的最终回退在 trait impl 里（self . __default_d 调用）
         assert!(out.contains("self . __default_d ("), "{out}");
+    }
+
+    /// §9.9 K4 阶段 3：接口拆层。标记层只展开载体身份面（struct / From 两向 / 身份 impl /
+    /// `__from_image` / `__IMAGE_NULL` / `BINARY_NAME` / `is_jvm_null`）；声明层不再展开
+    /// 这些（随标记文件在 java_marker crate，宿主文件头 `pub use java_marker::…` 再导出
+    /// 带回名字）——否则与标记文件重复定义。Full 拼回三段。
+    #[test]
+    fn interface_layers_split_carrier_face() {
+        let src = IFACE;
+        let layered = |layer: &str| {
+            let attr = format!("#[rava_layer = \"{layer}\"]\n");
+            let text = src.replacen("#[binary_name", &format!("{attr}#[binary_name"), 1);
+            super::super::expand(TokenStream2::from_str(&text).unwrap()).to_string()
+        };
+        let marker = layered("marker");
+        assert!(marker.contains("pub struct I"), "{marker}");
+        assert!(marker.contains("impl From < Object > for I"), "{marker}");
+        assert!(!marker.contains("pub trait I__VTable"), "{marker}");
+        assert!(!marker.contains("I__Methods"), "{marker}");
+        let decl = layered("decl");
+        assert!(decl.contains("pub trait I__VTable"), "{decl}");
+        assert!(!decl.contains("pub struct I"), "{decl}");
+        assert!(!decl.contains("impl From < Object > for I"), "{decl}");
+        // Full：三段齐（载体 struct 在场）
+        let full = super::super::expand(TokenStream2::from_str(src).unwrap()).to_string();
+        assert!(full.contains("pub struct I") && full.contains("pub trait I__VTable"), "{full}");
     }
 }

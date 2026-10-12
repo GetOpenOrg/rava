@@ -49,6 +49,12 @@ pub fn key_with(analyzer: &[u8], input: &Input<'_>, overrides: (&[String], &[Str
     }
     f.field("runtime", runtime_dir.display().to_string().as_bytes());
     tree(&mut f, runtime_dir)?;
+    // java_marker 真源（§9.9 K4 阶段 3 起为手写扫描根之一）：其文件变化须使缓存失效
+    let marker_dir = runtime_dir.parent().unwrap_or(Path::new("")).join("java_marker");
+    if marker_dir.is_dir() {
+        f.field("marker", marker_dir.display().to_string().as_bytes());
+        tree(&mut f, &marker_dir)?;
+    }
     for r in roots {
         f.field("root", r.to_string().as_bytes());
     }

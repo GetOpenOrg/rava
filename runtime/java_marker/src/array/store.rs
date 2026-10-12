@@ -194,7 +194,7 @@ impl<T: 'static> Store<'_, T> {
 /// 元素位形在内存中的前 `n` 字节（本机字节序）
 fn elem_bytes(bits: u64, n: usize) -> [u8; 8] {
     let mut out = [0u8; 8];
-    crate::native_memory::store_bits(&mut out[..n], bits);
+    crate::marker_hooks::__native_store_bits(&mut out[..n], bits);
     out
 }
 
@@ -254,7 +254,7 @@ impl<'a, T: 'static> Store<'a, T> {
             if is_bool {
                 bytes[0] = (bytes[0] != 0) as u8;
             }
-            crate::native_memory::load_bits(&bytes[..w])
+            crate::marker_hooks::__native_load_bits(&bytes[..w])
         };
         for e in first..last {
             let slot = &slots[e];
@@ -286,13 +286,13 @@ impl<'a, T: 'static> Store<'a, T> {
             let mut cur = slot.load_bits(Ordering::SeqCst);
             loop {
                 let mut bytes = elem_bytes(cur, w);
-                let old = crate::native_memory::load_bits(&bytes[off..off + width]);
+                let old = crate::marker_hooks::__native_load_bits(&bytes[off..off + width]);
                 let Some(n) = op(old) else { return Some(old) };
-                crate::native_memory::store_bits(&mut bytes[off..off + width], n);
+                crate::marker_hooks::__native_store_bits(&mut bytes[off..off + width], n);
                 if std::any::TypeId::of::<T>() == std::any::TypeId::of::<bool>() {
                     bytes[0] = (bytes[0] != 0) as u8;
                 }
-                match slot.cas_bits(cur, crate::native_memory::load_bits(&bytes[..w])) {
+                match slot.cas_bits(cur, crate::marker_hooks::__native_load_bits(&bytes[..w])) {
                     Ok(()) => return Some(old),
                     Err(actual) => cur = actual,
                 }
@@ -306,9 +306,9 @@ impl<'a, T: 'static> Store<'a, T> {
         let _g1 = (s1 != s0).then(|| STRIPES[s1].lock());
         let mut b = [0u8; 8];
         self.read_bytes(start, &mut b[..width]);
-        let old = crate::native_memory::load_bits(&b[..width]);
+        let old = crate::marker_hooks::__native_load_bits(&b[..width]);
         if let Some(n) = op(old) {
-            crate::native_memory::store_bits(&mut b[..width], n);
+            crate::marker_hooks::__native_store_bits(&mut b[..width], n);
             self.write_bytes(start, &b[..width]);
         }
         Some(old)

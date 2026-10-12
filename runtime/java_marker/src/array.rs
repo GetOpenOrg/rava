@@ -1,8 +1,8 @@
 // Java 数组类型封装：可读层包装
 // 调用方只需 array.get(i)、array.set(i, v)、array.len()；元素存储无锁（见 array/store.rs）
 
-use crate::java::lang::Class__Methods as _;
 use crate::sync_model::__Shared as Rc;
+use crate::marker_hooks as hooks;
 
 use crate::java::lang::Object;
 
@@ -272,7 +272,7 @@ impl JArray<crate::java::lang::String> {
     /// 切片，逐元素建 Java String。与 `JArray::from(vec![String::from(..), ..])` 等价，
     /// 但数千元素的资源束字面量表（CLDR getContents）不再展开为数千个表达式节点。
     pub fn from_strs(v: &[&str]) -> Self {
-        JArray::own(v.len(), None, v.iter().map(|s| crate::java::lang::String::from(*s)))
+        JArray::own(v.len(), None, v.iter().map(|s| hooks::__string_from_str(*s)))
     }
 }
 
@@ -294,7 +294,7 @@ impl JArray<Object> {
 
     /// `new Object[]{"k", "v"}`（元素全为字符串字面量）的紧凑形态，语义同上。
     pub fn objects_from_strs(v: &[&str]) -> Self {
-        JArray::own(v.len(), None, v.iter().map(|s| Object::from(crate::java::lang::String::from(*s))))
+        JArray::own(v.len(), None, v.iter().map(|s| Object::from(hooks::__string_from_str(*s))))
     }
 }
 
@@ -362,8 +362,8 @@ pub(crate) fn try_array_view<T: Clone + Default + From<Object> + Into<Object> + 
     // 反射创建的引用数组（FS-R6）：运行时数组类由组件标签确定，按 JVM checkcast
     // 精确判定（组件类型可赋值 → 视图；否则 ClassCastException），不走逐元素兼容。
     if let Some(tag) = obj.try_checkcast::<JArray<Object>>().and_then(|a| a.__component_tag()) {
-        let target = format!("{}", Into::<Object>::into(T::default()).0.getClass().ok()?.__get_name())
-            .replace('.', "/");
+        let target = hooks::__class_name(&Into::<Object>::into(T::default()).0.getClass().ok()?)
+            .ok()?.replace('.', "/");
         return if crate::java::lang::Class::__name_assignable(&target, &tag) {
             Some(erased_object_view(Clone::clone(obj)))
         } else {

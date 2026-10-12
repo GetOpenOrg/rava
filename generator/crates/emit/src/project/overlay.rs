@@ -184,10 +184,14 @@ fn mirror_marker_crate(src: &Path, dst: &Path, version: &str) -> Result<()> {
             if rel.as_os_str().is_empty() && f == "Cargo.toml" {
                 let text = std::fs::read_to_string(&from).map_err(|e| io_err(&from.display().to_string(), e))?;
                 std::fs::create_dir_all(dst).map_err(|e| io_err(&dst.display().to_string(), e))?;
-                write_if_changed(
-                    &to,
+                // 阶段 3 起 java_marker 依赖 rava_macros（object_ext / object_impl 的宏属性）：
+                // scratch 内改指 vendor/（与声明层 crate 同一重定向；rava_macros 必在 vendor
+                // ——java_runtime 恒依赖它）
+                let text = super::vendor::redirect_siblings(
                     &text.replace("version = \"0.1.0\"", &format!("version = \"{version}\"")),
-                )?;
+                    &[super::vendor::MACROS_CRATE.to_string()],
+                );
+                write_if_changed(&to, &text)?;
             } else if f != "Cargo.lock" {
                 copy_if_changed(&from, &to)?;
             }
