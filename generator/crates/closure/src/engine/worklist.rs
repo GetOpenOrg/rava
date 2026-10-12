@@ -72,6 +72,15 @@ impl<'a> Engine<'a> {
                 self.drain_flows();
                 self.obj_flush();
                 self.stat_leave();
+                // 预算降级合并的第二检查点位（§4.15，仅预算档）：批间排空（fwork 已全应用、集合稳定）。
+                // sb3 / S0 的主循环到被杀都未达全空闲点（mwork / swork / cwork 持续非空，g1c6-sb3 实测
+                // bhits=0——只在全空闲点查预算永远不触发），站点重跑的后续增长与排空点后的种子补入同型，
+                // 合并语义一致（近似档）；显式位 1/2 通道与缺省档不经此点位
+                if self.eq_budget > 0 && self.eq_merge_due() {
+                    self.stat_enter(Phase::Flows);
+                    self.eq_merge_checkpoint();
+                    self.stat_leave();
+                }
             }
             batch += 1;
             if let Some((k, e, s)) = self.rpending.pop() {
