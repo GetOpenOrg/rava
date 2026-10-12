@@ -40,13 +40,13 @@ impl<'a> Engine<'a> {
                 continue;
             }
             let mut f = fold_of(key.to_string(), code, &all);
-            // 具体轨迹里抛出异常的调用：其后继不可达（活调用顺序落入死区），按不返回的调用点导出
-            let mut thrown: Vec<u32> = Vec::new();
-            if clones.iter().any(|&i| self.is_concrete(i)) {
-                let index: HashMap<u32, &classfile::Insn> = code.insns.iter().map(|x| (x.offset, x)).collect();
-                thrown = f.violations.iter().copied().filter(|pc| index.get(pc).is_some_and(|x| matches!(x.operand, classfile::Operand::Method(..)))).collect();
-                f.violations.retain(|pc| !thrown.contains(pc));
-            }
+            // 调用点活而顺序后继在全部克隆不可达（活调用顺序落入死区）：调用在每个到达克隆里都不正常
+            // 返回（常量折叠的分支指令本身可达，不会造出该形态）——按不返回的调用点导出。原先只对
+            // 含具体求值克隆的组转换；JDK 25 Set.of().add（不可变集合 add 恒抛）等派发面定论不返回
+            // 的形态无具体克隆也成立，不再门控（[closure] folds 自检违约 → 转译失败的 TestListOf 族）
+            let index: HashMap<u32, &classfile::Insn> = code.insns.iter().map(|x| (x.offset, x)).collect();
+            let thrown: Vec<u32> = f.violations.iter().copied().filter(|pc| index.get(pc).is_some_and(|x| matches!(x.operand, classfile::Operand::Method(..)))).collect();
+            f.violations.retain(|pc| !thrown.contains(pc));
             self.init_reads(&key.owner, code, &mut f);
             self.dead_catches(code, &mut f);
             f.null_recv = self.null_recv(&clones, &um);

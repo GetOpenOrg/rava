@@ -18,12 +18,15 @@ fn owned(v: std::string::String) -> String {
     String::from_owned(v)
 }
 
-/// 标准流编码：只在该流是终端时设置（HotSpot `isatty` 判定），否则 null
+/// 标准流编码：终端流取本地编码（HotSpot `isatty` 判定后写 native encoding）；重定向流按
+/// JEP 400 缺省字符集 UTF-8（实测 JDK 21/25 管道下 `stdout.encoding=UTF-8`、JDK 25
+/// `stdin.encoding=UTF-8` 亦非 null——JDK 25 `Console.<clinit>` 以其为
+/// `Charset.forName` 实参，null 会抛 IllegalArgumentException"Null charset name"）
 fn tty_encoding(is_tty: bool) -> String {
     if is_tty {
         owned(crate::posix::native_encoding())
     } else {
-        String::default()
+        s("UTF-8")
     }
 }
 
