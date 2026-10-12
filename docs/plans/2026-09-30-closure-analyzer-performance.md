@@ -856,7 +856,11 @@ S0 ≤20 万上下文 / ≤16 GiB 的目标未达成，20 万上下文量级在�
   沿等价组扇出）；`RAVA_CTX_FLAT` 位 1/2 改为该合并的通道开关。5d685b3a 加 `RAVA_EQ_AT` / `RAVA_EQ_STEP`
   诊断覆盖（缺省不变）。
 - **缺省零影响（过）**：缺省档（位 8）四例 × 三种子 `closure_bench --diff` 对 09499b37（g1c2-scapreg
-  m16384，f9de87f1 已证与 09499b37 逐项相同）**SAME**——提交不改变缺省输出。
+  m16384，f9de87f1 已证与 09499b37 逐项相同）**SAME**——提交不改变缺省输出。5d685b3a（加 `RAVA_EQ_AT`
+  诊断覆盖，缺省档在 `eq_merge_due` 首判 `ctx_flat_mode & 3 == 0` 即返回、不读环境变量，路径与 09709207
+  结构相同）上复测 g1c5-acc（缺省环境、串行）：s0 HelloWorld / DeepCopy / CollectorsDemo SAME
+  （TestSerialLookupPairing 运行 rc=0、本地取回文件截断未进对照；s1/s2 因作业产物回收竞态未取回——
+  该两档以 09709207 的四例 × 三种子 SAME + 缺省路径结构不变覆盖）。
 - **试金石（过）**：DeepCopy 位 1 / 位 2 单开（合并通道）三种子 rc=0，墙钟 110–114 s / 峰值 RSS
   3.06–3.19 GB（基线 102–107 s / 3.01–3.07 GB）——§4.13 同位（建点急切收口）的 18 GiB OOM / 超时不再发生。
   注：g1c4-reg 作业的试金石段有 bug（`$f` 落在 CollectorsDemo.java、误存成 DeepCopy.json，3 s / 475 MB
@@ -867,10 +871,11 @@ S0 ≤20 万上下文 / ≤16 GiB 的目标未达成，20 万上下文量级在�
   +`java/io/Serializable`、rcall sites 215→235；TestSerialLookupPairing 小漂移（mc ±4 ~ ±1.4k，gaps 不变）。
   通道归因（g1c5-touch2，DeepCopy 种子 0）：**位 1 单开损名串常量**（gaps 42→2433、mc 不变、合并 84 168 节点）、
   **位 2 单开引起接收者变宽再探索**（mc +3461、gaps 不变、合并 92 165 节点）、两者叠加即 m3 终态。
-- **确定性（m3 档败）**：`RAVA_CTX_FLAT=3` 下 `closure_independent_of_order` **失败**（`closure_independent_of_hash_seed`
+- **确定性（m3 档败 / 缺省档过）**：`RAVA_CTX_FLAT=3` 下 `closure_independent_of_order` **失败**（`closure_independent_of_hash_seed`
   过；g1c4-det，2 项 1 过 1 失，测试段 4048 s）——两次分析次序的 `reflect.gaps` 集不同，差异集中在
   `Class.getDeclaredConstructor ← [Ljava/lang/Class;@<obj>` 一族：**抽象对象按分配序编号，等价类签名以
-  `Rc` 地址作内容同一性 ⟹ 划分依赖分配历史**。
+  `Rc` 地址作内容同一性 ⟹ 划分依赖分配历史**。缺省档两项在 5d685b3a 复测（g1c5-det8，dev#0 槽 28 GiB）
+  **通过**：2 过 0 失，测试段 3658 s。
 - **机理（归因作业 g1c5-touch2 的 A/B 判别）**：
   - A（`RAVA_EQ_AT` 超大 → 全程零合并、载体/标记/扇出记账全开）：输出对 m0 **SAME**——记账本身不动输出，
     漂移全部来自**合并本身**；
