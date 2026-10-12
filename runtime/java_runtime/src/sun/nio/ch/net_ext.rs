@@ -1,6 +1,7 @@
 //! `sun/nio/ch/Net` 的 ACC_NATIVE 续（类 1，libnio `Net.c`）：套接字选项、poll、可用字节数与平台能力探测。
 //! 选项转换对标 libnet `NET_GetSockOpt` / `NET_SetSockOpt`（mayNeedConversion 时）。
 
+use crate::sun::nio::ch::Net__Methods as _;
 use crate::prelude::*;
 use super::net::Net;
 use super::net_impl::{ipv6_available, socket_error, socket_exception, io_exception};

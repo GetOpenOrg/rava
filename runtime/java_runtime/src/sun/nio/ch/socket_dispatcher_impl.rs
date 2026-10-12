@@ -3,6 +3,7 @@
 //! 缓冲区参数是本地内存绝对地址。读到 ECONNRESET / EPIPE 抛 `sun.net.ConnectionResetException`
 //! （「Connection reset」），其余按 `convertReturnVal`：EOF = -1、EAGAIN = -2、EINTR = -3，失败抛 IOException。
 
+use crate::sun::nio::ch::SocketDispatcher__Methods as _;
 use crate::prelude::*;
 use super::socket_dispatcher::SocketDispatcher;
 use crate::java::io::FileDescriptor;

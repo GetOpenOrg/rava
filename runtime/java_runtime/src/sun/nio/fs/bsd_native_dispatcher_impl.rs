@@ -6,6 +6,7 @@
 //! 挂载表枚举（getfsstat / fsstatEntry / endfsstat）的迭代器是堆上的 [`FsStatIter`]，地址作 long 句柄；
 //! clonefile0 返回 errno（0 = 成功），不抛异常（JNI 同款）。本类 8 个 native 全部承载。
 
+use crate::sun::nio::fs::BsdNativeDispatcher__Methods as _;
 use crate::prelude::*;
 use super::bsd_native_dispatcher::BsdNativeDispatcher;
 use super::unix_mount_entry::UnixMountEntry;

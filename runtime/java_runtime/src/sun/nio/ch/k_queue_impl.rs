@@ -2,6 +2,7 @@
 //! 结构布局（kevent 大小与字段偏移）供 Java 侧经 Unsafe 读写本地事件数组。
 #![cfg(target_os = "macos")]
 
+use crate::sun::nio::ch::KQueue__Methods as _;
 use crate::prelude::*;
 use super::k_queue::KQueue;
 

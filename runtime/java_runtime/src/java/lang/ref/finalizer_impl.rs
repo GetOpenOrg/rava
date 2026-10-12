@@ -3,6 +3,7 @@
 //! 原生二进制以引用计数即时回收，不存在 finalize() 队列与 finalizer 线程：
 //! 终结化恒禁用（等价 JDK 18+ 的 `--finalization=disabled`）。
 
+use crate::java::lang::r#ref::Finalizer__Methods as _;
 use crate::prelude::*;
 use super::finalizer::Finalizer;
 

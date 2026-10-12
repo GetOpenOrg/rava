@@ -4,6 +4,8 @@
 //! 与 DirectConstructorHandleAccessor$NativeAccessor.newInstance0 同为 HotSpot
 //! `Reflection::invoke_constructor` 的对应物：按声明键经 L3 分派闭包 `<alloc>` + `<init>`。
 
+use crate::java::lang::reflect::InvocationTargetException__Methods as _;
+use crate::jdk::internal::reflect::NativeConstructorAccessorImpl__Methods as _;
 use crate::prelude::*;
 use super::native_constructor_accessor_impl::NativeConstructorAccessorImpl;
 use crate::java::lang::reflect::Constructor;

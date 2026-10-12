@@ -4,6 +4,9 @@
 //! 无 jvmstat：计数器只需进程内可读写，外部不可观测。`PerfCounter` 的 get / set / add 等语义
 //! 由其字节码经 `ByteBuffer.asLongBuffer()` 承载，这里只提供存储。
 
+use crate::java::nio::ByteBuffer__Methods as _;
+use crate::java::nio::ByteOrder__Methods as _;
+use crate::jdk::internal::perf::Perf__Methods as _;
 use crate::prelude::*;
 use super::perf::Perf;
 use crate::java::nio::{ByteBuffer, ByteOrder};

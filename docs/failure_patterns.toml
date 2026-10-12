@@ -1804,3 +1804,20 @@ owner = "fix-widen"
 diagnose = "症状面看反射实参拆箱取值路径（rd::unbox_*）；疑存根时在测试里加同族包装类的直呼调用点（hashCode / toString，入链即真体）复跑——直呼对、反射错 ⇒ 存根；对照生成 scratch 里该类文件的 hashCode / toString 方法体是否 Ok(0) / 二进制名存根"
 doc = "docs/reports/2026-10-11-rt-perf-profiling.md §三.4 更正块、§七.0"
 since = "2026-10-12"
+
+[[pattern]]
+id = "method-trait-handwritten-seam"
+stage = "compile"
+symptom = "java_base_decl 全类 E0599：no associated function named `valueOf_z` found for struct `boolean::Boolean`（reflect_dispatch.rs 装箱 switch 一带），或 `__class_init` / `new` / `dispatchUncaughtException` 等在伴生/基础设施文件里找不到"
+match = [["no associated function or constant named `valueOf_z` found for struct `boolean::Boolean`"],
+         ["no associated function or constant named `__class_init` found"],
+         ["no method named `dispatchUncaughtException` found"]]
+tests = ["batch-1013 抽查 33/33（ArraysStream、HelloWorld、DeepCopy、TestDynamicProxy 等）"]
+cause = "方法 trait 化（K3 起可读层成员移入 X__Methods）与主 lineage 分支点后手写层新增的生成类成员直调互为盲区：装箱 switch（84d9468f）、dispatchUncaughtException（9aed6cd6）、SyncFailedException::new / zip 系列（1b8728ec）在 s7-k3 分支不存在，合批 f7b69314 才相撞；另有一类系统性缝——jvm_native 宏对静态 native 注入 Self::__class_init()? 而非 glob 导入的伴生文件全缺本类 X__Methods 导入（闭包未覆盖时潜伏）。修法：装箱工厂族 valueOf_* 进 moves_to_trait 留固有名单（协议面，与访问器同级）；其余 25 手写文件补 use crate::<包>::X__Methods as _;（TypeRef 同类同路径，闭包零变化）；同包 use super::* 伴生经包 mod.rs 再导出天然覆盖"
+introduced = "f7b69314（s7-k3 合入 batch-1013；两侧各自全绿，合批相撞）"
+fixed = ["b1013-fix 分支（详见 S7 计划 §9.9 协议面保留名单扩充）"]
+status = "pending"
+owner = "b1013-fix（验收 bfx-*：三例 PASS + 四例种子闭包对 adf4cc1f 全同）"
+diagnose = "E0599 指到 java_base_decl 手写 overlay 文件且成员名为 Java 方法 / __class_init：查该文件有无 X__Methods as _ 导入与 use super::* 同包 glob；新缝按「路径调用扫描 × use 表 × 留固有名单 + jvm_native 静态注入面枚举」排查（S7 §9.9 排查方法节）"
+doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「协议面保留名单扩充」"
+since = "2026-10-12"

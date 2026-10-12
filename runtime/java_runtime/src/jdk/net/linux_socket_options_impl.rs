@@ -3,6 +3,7 @@
 //! SocketException（strerror 文案）。
 #![cfg(target_os = "linux")]
 
+use crate::jdk::net::LinuxSocketOptions__Methods as _;
 use crate::prelude::*;
 use super::linux_socket_options::LinuxSocketOptions;
 use crate::net_posix::{self, errno};

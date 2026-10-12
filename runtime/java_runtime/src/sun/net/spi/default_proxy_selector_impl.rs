@@ -4,6 +4,10 @@
 //! `default_proxy_selector_ext.rs`（macOS CFNetwork / Linux GIO、GConf），这里只把查询结果
 //! 构造成 `Proxy[]`（JNI `proxy_util.c` 的 createProxy：未解析地址 + HTTP / SOCKS 类型）。
 
+use crate::java::net::InetSocketAddress__Methods as _;
+use crate::java::net::Proxy_Type__Methods as _;
+use crate::java::net::Proxy__Methods as _;
+use crate::sun::net::spi::DefaultProxySelector__Methods as _;
 use crate::prelude::*;
 use super::default_proxy_selector::DefaultProxySelector;
 use super::default_proxy_selector_ext::{self as system, SystemProxy};

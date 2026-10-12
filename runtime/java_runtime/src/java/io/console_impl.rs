@@ -5,6 +5,7 @@
 //! `encoding` 在 Unix 恒返回 null（由 Java 侧回落 stdout.encoding / 本地编码）。
 //! 两个 native 并存：不同 JDK 21 更新版本的 `Console.<clinit>` 分别调用其一。
 
+use crate::java::io::Console__Methods as _;
 use crate::prelude::*;
 use super::console::Console;
 use crate::java::lang::String;

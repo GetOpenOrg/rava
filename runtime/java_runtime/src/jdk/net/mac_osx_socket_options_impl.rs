@@ -3,6 +3,7 @@
 //! SocketException（strerror 文案）。
 #![cfg(target_os = "macos")]
 
+use crate::jdk::net::MacOSXSocketOptions__Methods as _;
 use crate::prelude::*;
 use super::mac_osx_socket_options::MacOSXSocketOptions;
 use crate::net_posix::{self, errno};

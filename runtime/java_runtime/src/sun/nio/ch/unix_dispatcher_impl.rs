@@ -4,6 +4,7 @@
 //! preClose0 以 dup2 把它覆盖到待关闭 fd 上——阻塞在该 fd 上的读写立即见 EOF / EPIPE，
 //! 而 fd 号在真正 close0 之前不会被复用。
 
+use crate::sun::nio::ch::UnixDispatcher__Methods as _;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::prelude::*;

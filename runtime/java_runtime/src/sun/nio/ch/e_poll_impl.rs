@@ -2,6 +2,7 @@
 //! 结构布局（epoll_event 大小与字段偏移）供 Java 侧经 Unsafe 读写本地事件数组。
 #![cfg(target_os = "linux")]
 
+use crate::sun::nio::ch::EPoll__Methods as _;
 use crate::prelude::*;
 use super::e_poll::EPoll;
 

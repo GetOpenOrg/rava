@@ -36,6 +36,13 @@ pub(crate) const STD_COLLISIONS: [&str; 11] = [
 /// 接口载体（§9.9 K6 前置项，经 [`split_parts`]）另有内部成员留固有：`is_jvm_null`（null 探测，
 /// 与类 wrapper 的固有方法同形，K6 归标记层身份面）、`__default_*`（default 体的单一持有处，
 /// 载体分派回退与合成对象 vtable 条目都直调——固有调用无需 trait 导入）
+///
+/// 装箱工厂族 `valueOf_*`（按描述符后缀命名的全部，包装类 `valueOf_z` / `valueOf_i` / …）同样
+/// 留固有（b1013-fix，§9.9 协议面保留名单扩充）：运行时手写层（`reflect_dispatch::box_value`、
+/// `reflect/Array.get` 装箱、`proxy_dyn` 重装箱）以 `X::valueOf_z(..)` 路径直调——它们是 VM 装箱
+/// 协议面，与访问器同级，不应依赖调用方导入方法 trait。按前缀识别（不类名特判）：带描述符后缀的
+/// 重载名只出现在工厂/解析工厂形态；无后缀 `valueOf`（枚举 `valueOf(String)`、Character 唯一
+/// 重载等）仍移入 trait，由生成器登记导入或手写层 use 行对齐。
 fn moves_to_trait(f: &ImplItemFn) -> bool {
     let n = f.sig.ident.to_string();
     f.sig.constness.is_none()
@@ -44,6 +51,7 @@ fn moves_to_trait(f: &ImplItemFn) -> bool {
         && !n.starts_with("__get_")
         && !n.starts_with("__set_")
         && !n.starts_with("__default_")
+        && !n.starts_with("valueOf_")
 }
 
 /// trait 中的方法声明：签名同实现（形参模式去 `mut` / 非标识符模式改 `_`，无体声明不接受模式），
@@ -238,5 +246,29 @@ mod tests {
         let tr = out.split("pub trait C__Methods").nth(1).unwrap().split("impl <").next().unwrap();
         assert!(tr.contains("fn __clone"), "{tr}");
         assert!(out.contains("impl C__Methods for C"), "{out}");
+    }
+
+    /// 装箱工厂族 `valueOf_*`（描述符后缀命名）留固有 impl（b1013-fix：运行时协议面，
+    /// `reflect_dispatch::box_value` 等路径直调不导入方法 trait）；无后缀 `valueOf` 仍入 trait
+    #[test]
+    fn boxing_factory_stays_inherent() {
+        use std::str::FromStr;
+        let src = r#"
+        #[binary_name = "java/lang/Integer"]
+        pub struct Integer { pub value: i32 }
+        impl Integer {
+            #[java_method(name = "valueOf", descriptor = "(I)Ljava/lang/Integer;", access = "public", modifiers = "static")]
+            pub fn valueOf_i(x: i32) -> Result<Integer> { Ok(Integer::default()) }
+            #[java_method(name = "valueOf", descriptor = "(Ljava/lang/String;)Ljava/lang/Integer;", access = "public", modifiers = "static")]
+            pub fn valueOf_ljava_lang_String(s: String) -> Result<Integer> { Ok(Integer::default()) }
+        }
+    "#;
+        let out = super::super::super::super::expand(TokenStream2::from_str(src).unwrap()).to_string();
+        assert!(!out.contains("compile_error"), "{out}");
+        // trait 声明段：`pub trait Integer__Methods` 到其实现头（非泛型类无 `impl <`，按实现类名切）
+        let tr = out.split("pub trait Integer__Methods").nth(1).unwrap().split("impl Integer__Methods").next().unwrap();
+        assert!(!tr.contains("valueOf_"), "装箱工厂不应在 trait 声明里: {tr}");
+        assert!(out.contains("pub fn valueOf_i (x : i32)"), "{out}");
+        assert!(out.contains("pub fn valueOf_ljava_lang_String (s : String)"), "{out}");
     }
 }

@@ -1,3 +1,4 @@
+use crate::java::io::RandomAccessFile__Methods as _;
 use crate::prelude::*;
 use super::random_access_file::RandomAccessFile;
 

@@ -4,6 +4,10 @@
 //! 消息为 strerror 文案；IOStatus：UNAVAILABLE = -2、INTERRUPTED = -3。
 //! 套接字选项、poll 与可用性探测见同类的 `net_ext.rs`。组播 / 带外数据 native 不在档案调用链上。
 
+use crate::java::net::Inet4Address__Methods as _;
+use crate::java::net::Inet6Address__Methods as _;
+use crate::java::net::InetSocketAddress__Methods as _;
+use crate::sun::nio::ch::Net__Methods as _;
 use crate::prelude::*;
 use super::net::Net;
 use crate::java::io::FileDescriptor;

@@ -3,6 +3,7 @@
 //! 本类只在 macOS 的 JDK 中存在，唯一 native 为 `directCopy0`：Files.copy 的内核内数据拷贝，
 //! 走 fcopyfile(3) 的 COPYFILE_DATA；有取消标记时挂进度回调，回调见标记置位即令 fcopyfile 退出。
 
+use crate::sun::nio::fs::BsdFileSystem__Methods as _;
 use crate::prelude::*;
 use super::bsd_file_system::BsdFileSystem;
 #[cfg(target_os = "macos")]

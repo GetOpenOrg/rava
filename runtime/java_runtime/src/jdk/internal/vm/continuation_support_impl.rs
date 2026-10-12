@@ -1,6 +1,7 @@
 //! `jdk/internal/vm/ContinuationSupport` 的 ACC_NATIVE（类 1）。`isSupported()` 按字节码翻译
 //!（读 `SUPPORTED` 静态常量，由本 native 初始化）。
 
+use crate::jdk::internal::vm::ContinuationSupport__Methods as _;
 use crate::prelude::*;
 use super::continuation_support::ContinuationSupport;
 

@@ -3,6 +3,8 @@
 //! HotSpot `Reflection::invoke_method` 的对应物：MethodHandleAccessorFactory.useNativeAccessor
 //! 为真（native 目标、java.lang.invoke 自身成员等）时经此调用；按声明键走 L3 分派闭包。
 
+use crate::java::lang::reflect::InvocationTargetException__Methods as _;
+use crate::jdk::internal::reflect::DirectMethodHandleAccessor_NativeAccessor__Methods as _;
 use crate::prelude::*;
 use super::direct_method_handle_accessor_native_accessor::DirectMethodHandleAccessor_NativeAccessor;
 use crate::java::lang::reflect::Method;

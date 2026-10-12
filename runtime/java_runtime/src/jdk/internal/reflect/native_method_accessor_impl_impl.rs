@@ -4,6 +4,8 @@
 //! 与 DirectMethodHandleAccessor$NativeAccessor.invoke0 同为 HotSpot
 //! `Reflection::invoke_method` 的对应物：按声明键走 L3 分派闭包。
 
+use crate::java::lang::reflect::InvocationTargetException__Methods as _;
+use crate::jdk::internal::reflect::NativeMethodAccessorImpl__Methods as _;
 use crate::prelude::*;
 use super::native_method_accessor_impl::NativeMethodAccessorImpl;
 use crate::java::lang::reflect::Method;

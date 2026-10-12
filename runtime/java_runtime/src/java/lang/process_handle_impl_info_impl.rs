@@ -8,6 +8,7 @@
 //! - user = /proc/<pid> 属主 uid 经 getpwuid_r 取用户名（取不到时为 uid 数字串，JDK 同形）。
 //! 无权读取的项保持 null / -1（其它用户的进程）。
 
+use crate::java::lang::ProcessHandleImpl_Info__Methods as _;
 use crate::prelude::*;
 use super::process_handle_impl_info::ProcessHandleImpl_Info;
 use super::process_handle_impl_impl::proc_stat;

@@ -2,6 +2,8 @@
 //! 经系统 zlib（crate::zlib，运行期 dlopen）——压缩输出与 JVM 逐字节一致。Bytes / Buffer 各变体
 //!（Buffer = 直接缓冲区的直接内存地址）共用 deflate_raw / deflate_status。
 
+use crate::java::lang::InternalError__Methods as _;
+use crate::java::util::zip::Deflater__Methods as _;
 use crate::prelude::*;
 use super::deflater::Deflater;
 use crate::zlib::{self, ZStream};

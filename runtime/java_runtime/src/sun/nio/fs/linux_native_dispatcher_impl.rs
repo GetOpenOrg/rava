@@ -9,6 +9,7 @@
 //! - `posix_fadvise`：直接返回 posix_fadvise 的结果码（不抛异常，与 JNI 同）；
 //! - `directCopy0`：Files.copy 的内核内拷贝（先 copy_file_range，不支持时退回 sendfile）。
 
+use crate::sun::nio::fs::LinuxNativeDispatcher__Methods as _;
 use crate::prelude::*;
 use super::linux_native_dispatcher::LinuxNativeDispatcher;
 use super::unix_mount_entry::UnixMountEntry;

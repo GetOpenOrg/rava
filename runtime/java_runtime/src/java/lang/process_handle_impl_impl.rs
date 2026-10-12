@@ -5,6 +5,7 @@
 //! waitid）、进程枚举（getProcessPids0，遍历 /proc）；进程信息 Info.info0 在
 //! process_handle_impl_info_impl.rs，共用本文件的 /proc/<pid>/stat 解析。
 
+use crate::java::lang::ProcessHandleImpl__Methods as _;
 use crate::prelude::*;
 use super::process_handle_impl::ProcessHandleImpl;
 

@@ -1,6 +1,7 @@
 //! `java/util/zip/Adler32` 的 native 方法（与生成的 adler32.rs 共置）。
 //! 对标 zlib `adler32()`（RFC 1950）：s1 = 1 + Σbyte，s2 = Σs1，均 mod 65521。
 
+use crate::java::util::zip::Adler32__Methods as _;
 use crate::prelude::*;
 use super::adler32::Adler32;
 

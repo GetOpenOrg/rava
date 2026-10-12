@@ -32,6 +32,7 @@
 //! 未命中（闭包缺席 / 方法形态未承载）→ panic stub（如实报出缺口，与反射
 //! 族其他未覆盖面语义一致）。
 
+use crate::java::lang::Character__Methods as _;
 use crate::java::lang::Class__Methods as _;
 use crate::error::Result;
 use crate::java::lang::{Boolean, Byte, Character, Double, Float, Integer, Long, Object, Short};

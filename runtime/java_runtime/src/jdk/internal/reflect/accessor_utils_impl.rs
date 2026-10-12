@@ -4,6 +4,7 @@
 //! java.base 句柄适配层（实参转换失败 → IllegalArgumentException）。原生二进制无 Java 栈帧，
 //! 由 L3 分派登记的「目标抛出」身份等价应答：未经目标方法体逃逸者即实参转换失败。
 
+use crate::jdk::internal::reflect::AccessorUtils__Methods as _;
 use crate::prelude::*;
 use super::accessor_utils::AccessorUtils;
 use crate::java::lang::{Class, RuntimeException};

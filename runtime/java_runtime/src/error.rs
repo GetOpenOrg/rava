@@ -24,6 +24,7 @@ use crate::java::lang::NullPointerException__Methods as _;
 use crate::java::lang::OutOfMemoryError__Methods as _;
 use crate::java::lang::StackOverflowError__Methods as _;
 use crate::java::lang::StringIndexOutOfBoundsException__Methods as _;
+use crate::java::lang::Thread__Methods as _;
 use crate::java::lang::Throwable__Methods as _;
 use crate::java::lang::{Object, ObjectVTable, String, Throwable};
 
