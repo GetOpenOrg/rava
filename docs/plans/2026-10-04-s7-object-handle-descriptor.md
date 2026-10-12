@@ -1138,16 +1138,119 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   - **K7 / K8 衔接**：K7（共置手写随宿主）独立可并行——标记文件按类同段落盘，宿主判定不受影响；
     K4 落地后标记文件整体挪入 `java_marker` crate，届时 D8 图只剩 inherit / hidden 边（⑤ 口径）
     的验证归 K8 档案验收（连同标记 crate 自身体量——本轮已随 `s7k6b-seg` 产出逐例统计）。
+- **K4 实施（10-12，分支 s7-k4，基于 s7-k6 a07fbb6f）**：目标 = 解开声明链前提——标记部分依赖的
+  `__Handle` / `Object` / `__ClassDesc` 等全在手写 INFRA（overlay 进声明底段 crate），无 K4 则不存在
+  可置于声明链之下的独立 `java_marker` crate（标记 crate 依赖底段、底段又要标记类型 → 环）。分阶段
+  落地，每阶段链接级验证（K6 教训：check 不覆盖 extern 声明 / 导出定义的配对）。
+  - **阶段 1（e6edfa24，已推 origin/github）**：`runtime/java_marker` 独立 crate 建立真源——
+    `obj_ref`（`__Obj`；`group::Ops` / `Header` 转公开供行为层引用）与 `sync_model`（持锁登记
+    `HoldSlot` / `hold_slot` 自 exec_context 移入 `held::slot`；`__process_static!` / `__DynFn!`
+    宏随 crate 根，java_runtime 再导出保持 `crate::__process_static!` 旧路径）搬入。**行为经
+    `unsafe extern "Rust"` 链接期声明转交**（与 `rava_layer` 拆层同一机制）：分配路径的区域登记
+    （`region::__on_alloc` → `__rava_marker_region_on_alloc`）与释放路径的监视器摘表
+    （`monitor::forget` → `__rava_marker_monitor_forget`），定义在 java_runtime `marker_hooks.rs`
+    （`#[export_name]`，签名取自同一类型 → 漂移即链接失败）。`java_runtime` 依赖它并按原模块路径
+    整体再导出（`pub use java_marker::{obj_ref, sync_model}`——`crate::obj_ref::*` 等既有引用零变化）；
+    `object.rs` 的 `impl __Obj<dyn ObjectVTable>::is_jvm_null` 随 `__Obj` 改泛型入 obj_ref（orphan），
+    `ObjectVTable` 特化形态（含 debug 断言）待其移入后恢复。发射侧：overlay 镜像 java_marker 进
+    scratch（版本唯一化、真源已无删除、生成文件保留）；vendor 兄弟闭包排除之（生成类标记文件后续
+    要进该 crate，静态 vendor 拷贝不可承载）；声明层 Cargo.toml 注入依赖；workspace 成员与 archive
+    版本戳补齐；**D8 把 java_marker 真源字节计入底段（foundation）体量**——INFRA 换 crate 不换切段
+    输入，切段逐类与之前一致由构造保证。
+    验证：generator `cargo check --release --tests` 过；宏单测 plan 41/41；**HelloWorld emit→编译→
+    rava-link→运行输出与 JVM 逐字一致**（extern 钩子链接级验证——符号未配对即链接失败，此跑证明
+    声明/定义闭环）。
+  - **阶段 2（a867b085，已推 origin/github）**：K6 偏差注记的「剩余项清单」全量落地（宏侧，过渡
+    形态仍同 crate）：`moves_to_trait` 放开——字段访问器（`__get_*` / `__set_*`）、`_init_not_null`、
+    `__init_on`、装箱工厂族 `valueOf_*`、接口载体 `__default_*` 移入方法 trait（K3 收尾为压峰值
+    留固有的名单；K4 搬 wrapper struct 进标记 crate 后固有 impl 必须与 struct 同 crate，只能经声明
+    crate 的方法 trait 承载）；`__vt()` 自独立固有 impl 改入方法 trait 成员（调用点与访问器同经
+    `X__Methods` 解析；invokespecial 的 `(obj).__vt()` 由 owner 登记覆盖；字段指令与 invoke 指令
+    同经 `record_member`，生成侧导入登记无需改动）。**接口载体拆层**（`expand_interface` 按
+    `meta.layer` 分段）：标记段 = 载体身份面（struct、Default / From 两向 / PartialEq / Debug /
+    Deref、`__from_image` / `__IMAGE_NULL`、`BINARY_NAME`、`is_jvm_null`）；声明段 = `I__VTable` +
+    statics + 初始化状态机 + `I__Methods` 及其实现（孤儿规则允许：trait 本地、载体类型外来）；
+    Full 拼回项序不变；mod.rs 标记层不再对接口早退为空。手写层（b1013-fix 清单口径）：
+    `reflect_dispatch` / `reflect/array_impl` / `proxy_dyn_impl` 补七个包装类 `__Methods` 匿名导入。
+    验证：宏单测 plan 41/41、缺省 35/35（守护测试随新形态更新：装箱工厂 / 访问器 / `__vt` /
+    `__default_*` 应在 trait 声明）；**HelloWorld、CollectorsDemo、DeepCopy 三例 emit→编译→
+    rava-link→运行输出与 JVM 逐字一致**（覆盖装箱协议面 / 访问器 / 虚分派 / lambda-sam / 接口
+    default / 反射 clone 链）。
+  - **阶段 3（未做，续作入口）——INFRA 主体搬移 + 标记文件挪入 java_marker，原子落地**：
+    - **为何原子**：`ObjectVTable::getClass(&self) -> Result<Class>` 的签名引用生成类 `Class`
+      （java.lang.Class 是字节码翻译类）。`ObjectVTable` 整体随 object.rs 入 java_marker 时，
+      `Class` 的标记 struct 必须已在 java_marker（即标记文件已搬入）——否则不可解析。同理
+      `JvmError::catch_any` / `dispatch_uncaught` 签名引用 `Throwable` / `Thread`。**不可行方案
+      已排除**：手写最小 Class 标记占位（其 DESC 引用约 30 个类 / 接口标记，级联不可收敛）；
+      getClass 移出 ObjectVTable（final 方法，数组分派依赖 T 不可恢复）。
+    - **运行时搬移清单**（java_runtime → java_marker，行为面 extern 钩子转交）：
+      `class_desc.rs`（纯）、`field_desc.rs`（纯——`__clone_fields` / Unsafe 按名协议全在标记层类型
+      上）、`error.rs`（拆分：struct / `Result` / `thrown` / `class_name` / `is_instance_of` /
+      `catch_as` 与签名安全的 VM 构造器留标记（体 = `__rava_marker_*` 钩子）；签名引用
+      `Throwable` / `Thread` 的 `catch_any`（零调用点，可删）与 `dispatch_uncaught`（三个手写调用
+      点改自由函数 `dispatch_uncaught(&JvmError, &Thread)`，vmrules 的 fns 名单不受影响——名保留））
+      、`handle.rs`（`__Handle` / `__IfaceRef`；释放计深 `__release` → 钩子；`__stack_check` → 钩子）、
+      `java/lang/object.rs`（`Object` / `ObjectVTable` / `__TypedNull` / JVM_NULL / 基本类型盒 /
+      `JvmRef` / Rc 数组 impl；钩子：object_body 五函数（equals / toString / wait×3 / finalize——
+      行为侧包装返回 std String 消 String 签名依赖）、monitor 五入口、`Class::for_class` /
+      `Class::__mirror_hash`（`__object_identity_hash` 留标记）、`java_fmt_*` 纯函数随迁再导出）、
+      `java/lang/object_ext.rs`（impl Object 全块——`try_cast_array` 依赖的 `array::try_array_view`
+      随数组系统同迁；`meta::java_name` → 钩子）、`array.rs` + `array/{obj,store,view,vtable}.rs`
+      （`ObjectVTable` 的数组 impl 必须随 trait 同 crate——orphan；钩子：`Class::for_class` /
+      `Class::__name_assignable` / `gil::safepoint`）、lib.rs 的 `_is_jnull` / `_is_jnull_ref` /
+      `java_fmt` 族。
+      声明层包 mod.rs 注入：`pub use java_marker::java::lang::object::*;`（`crate::java::lang::Object`
+      等旧路径零变化；java_marker 侧 java/lang/mod.rs 手写真源声明 object / object_ext）。
+    - **生成器清单**：`marker_side` v2——标记文件落 `<scratch>/java_marker/src/<pkg>/<stem>_m.rs`
+      （类与接口都要——接口标记文件承载载体身份面，接口声明文件 `pub use java_marker::…` 再导出，
+      宏侧已就绪）；宿主声明文件的再导出行改 `pub use java_marker::<pkg>::<m>::<Name>;`；java_marker
+      的包 mod.rs（镜像手写真源 + 生成模块合并，同 mod_tree 口径）与 lib.rs 补全；java_marker 侧
+      prelude（标记文件头 `use crate::prelude::*;` 的标记子集——`__Handle` / `Object` / `JvmError` /
+      `Result` / `__ClassDesc` / `__FieldDesc` / `__FieldKind` / `__TypedNull` / `__ThreadSafe` /
+      `__erased_view` / `__class_from_object` / `JArray`）；`object_ext` 用的 `#[jvm_ext]` 需要
+      java_marker 依赖 rava_macros（scratch 内重定向到 vendor/）；`InstrFacts` / `root_api` /
+      `handwritten_vtable_impls` 审计扫两处真源。
+    - **切片与峰值口径**：D8 分段输入不含标记文件（K6 同 crate 形态即如此——标记文件是分段后
+      新增文件），搬移不改切段；声明 crate 源码减标记文件字节（HW 约 −6.15 MB）——阶段 2 的
+      trait 项回涨（估 +0.5–1.5 pp）由本项收回。java_marker 自身峰值见 §9.8.2 探针（语料量级
+      约 1.0 GB，非约束）。
+    - **standalone 编译面变化（须接受并记入 CI 口径）**：阶段 3 后 `runtime/java_marker` 手写
+      真源引用 `Class`（getClass 签名）——该类型只在 scratch（生成标记文件）存在，**java_marker
+      与 java_runtime 的 standalone `cargo check` 不再是绿色口径**（java_runtime standalone 在
+      阶段 1 前即因 java/jdk/sun 占位 mod.rs 缺失而非绿）；以「scratch 全构建 + 宏单测 +
+      generator check」为口径。
+  - **阶段 2 服务器验收（tag 前缀 s7k4-，基线 s7-k6 a07fbb6f，交回时在跑）**：
+    - `s7k4-macro` ✅（jp2，rc=0）：宏单测 **plan 41/41、缺省 35/35**。
+    - `s7k4-seed`（jp1）：`s7k6_seed_sets.sh a07fbb6f` 四例 × 种子 0/1/2 闭包集合对照——日志尾
+      `seed-sets: ALL-IDENTICAL` 即过（`--fetch` 声明 build/s7k6-seed/summary.txt）。
+    - `s7k4-det`（us1）：`cargo test -p driver --test closure_cli closure_independent
+      -- --include-ignored` 确定性两项。
+    - `s7k4-seg`（kr2）：`s7k6b_segments.sh a07fbb6f` 三例切段逐类对照——**预期有差**（阶段 2
+      声明文件含 trait 声明行，体量增 → D8 重切），差异应全部为段边界移动（无类增删）；绝对值
+      记入本节。
+    - `s7k4-peak`（sg1）：`s7k6_peak.sh a07fbb6f` 三例逐 crate 固定切段重建峰值，判定口径 =
+      声明 crate 峰值对 s7-k6 不超 +10%（阶段 2 估 +0.5–1.5 pp，s7-k6 基线 HW 底段 +8.5%——
+      临界，若破线归因 trait 项回涨，阶段 3 收回后复测）。
+    - 回收：`cat cluster_results/job/<tag>/summary.json`（status/rc）+ `tail …/01_*.log`；脚本
+      已幂等可重派。
+  - **K5 / K7 / K8 衔接**：K5（类初始化骨架去按类展开）与本阶段无依赖，可并行派发；K7（共置手写
+    随宿主）在阶段 3 落地后钉底 = 行为层 INFRA 直连类；K8 档案验收在阶段 3 后做（⑤ 口径的 D8 图
+    验证 + 标记 crate 自身体量随 `s7k4-seg` 口径统计）。
 - **K4 及后续方案**（10-11 用户暂停派发新代理，K4 未派，以下为续作入口）：
   - **K3 收尾**：10-11 晚已完成分解归因与两轮修复（15276d82，见上「K3 收尾」节）：切段漂移全部收回（与基线逐类一致）、底段峰值 +24–31% 收窄到 +8%（本机口径）、body crate 达标、DeepCopy 工作区复测与全量单测已发服务器作业。**剩余决策**：~~须用户裁决后合入~~ **已裁决（2026-10-12 用户）：阈值放宽至 ±10%，K3 随下一批合入**（batch-1012 未等 K3；固有 impl 保留 / 选择性 trait 的进一步压缩并入 K6 取舍；s7k3-fix2 三例同机复测 +7.1–9.5% 见上表）。
-  - **K4** 运行时基础设施分层：按上表实施。新增两项要求：
-    - 标记层基础只含类型与句柄，不含任何 `use …__Methods`；
-    - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层。
+  - **K4** 运行时基础设施分层：**10-12 已开工（分支 s7-k4，见上「K4 实施」节）**——阶段 1
+    （obj_ref / sync_model 入 java_marker + extern Rust 钩子，e6edfa24）与阶段 2（K6 剩余项清单
+    入方法 trait + 接口载体拆层，a867b085）已推双远端并过链接级验证；阶段 3（INFRA 主体搬移 +
+    标记文件挪入，原子）为续作入口，设计与不可行方案排除见该节。新增两项要求的落实：
+    - 标记层基础只含类型与句柄，不含任何 `use …__Methods`——阶段 1/2 的 java_marker 真源
+      零方法 trait 引用（宏单测 `marker_layer_is_signature_free` 守护标记展开面）；
+    - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层——阶段 2 已按 b1013-fix 清单补齐
+      装箱协议面三文件；阶段 3 的行为层钩子清单见「K4 实施」节。
   - **K5** 类初始化骨架去按类展开：与 K3、K4 无依赖，可与 K3 收尾并行。
   - **K6** 标记 crate 生成：前提是 K3（含第 5 项改名——✅ 已随 K6 前置项完成，std 同名与接口载体成员均已在方法 trait 上）、K4、K5。**机制已随 10-12 K6 本体落地（同 crate 标记文件过渡形态，见上「K6 本体」节）**；独立 `java_marker` crate 待 K4（标记文件搬移 + 路径前缀 + 访问器/`__vt` 并入方法 trait）。方法 trait 与其 impl 留声明 crate；标记层展开文本不含 `__Methods`（✅ 宏单测守护）。
   - **K7** D8 共置手写随宿主：独立。注意 K3 增加的 `use` 行改变了按体量切段的结果，模拟器（`decl_scc_sim.py`）的体量口径需同步计入导入行，或改为不计 `use` 行。
   - **K8** 档案验收：按上表；连同 K2 留下的 §4.3 热循环用例、StockTrans 计时一并补测。
 - 下一步：
-  - K3 收口：服务器作业（s7k3-fix1-*）数字回填 + 用户裁决 ±5%/±10% 阈值后合入；
-  - 然后 K4（运行时基础设施分层）；
-  - K5（类初始化骨架）与 K1–K4 互不依赖，可并行派发。
+  - K4 阶段 3（INFRA 主体搬移 + 标记文件挪入 java_marker，原子——见「K4 实施」节）；阶段 2 的
+    服务器验收（s7k4-*）回收后视峰值结论决定是否先做峰值归因；
+  - K5（类初始化骨架）与 K4 剩余互不依赖，可并行派发。
