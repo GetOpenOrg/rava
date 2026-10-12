@@ -22,6 +22,8 @@ pub(super) struct RawObject {
     pub(super) supers: BTreeSet<TypeRef>,
     pub(super) fns: HashMap<String, FnInfo>,
     pub(super) calls: HashMap<String, HashSet<String>>,
+    /// fn → 其中不以 `self` 为接收者调用 / 引用的名字（见 [`FileFns::nonself`]）
+    pub(super) nonself: HashMap<String, HashSet<String>>,
 }
 
 /// 一个类的手写文件扫描结果（未闭包）
@@ -347,6 +349,7 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     }
     for (obj, name, raw) in fs.object_fns {
         let o = out.objects.entry(obj).or_default();
+        o.nonself.entry(name.clone()).or_default().extend(raw.nonself.iter().cloned());
         merge_fn(&mut o.fns, &mut o.calls, name, raw);
     }
     for (obj, sup) in fs.supers {
@@ -355,14 +358,16 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
 }
 
 /// 分配 / 构造沿同文件 fn 调用传递（被调 fn 名须在同类手写文件内）。
-/// 字段写入值是 `self`（[`FieldAccess::value_self`]）只沿全程 `self.f(…)` 的调用链保持：
-/// 按（fn, 链上的 self 是否仍是本 fn 的 self）遍历，经非 `self` 接收者到达的 fn 里该标记取消
+/// 字段写入值是 `self`（[`FieldAccess::value_self`]）与被调 fn 体内调用点的接收者归属
+/// （[`TypedCall::on_self`]）只沿全程 `self.f(…)` 的调用链保持：按（fn, 链上的 self 是否仍是本 fn 的
+/// self）遍历，经非 `self` 接收者到达的 fn 里该标记取消
 pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, HashSet<String>>, nonself: &HashMap<String, HashSet<String>>) {
     let names: Vec<String> = fns.keys().cloned().collect();
     let mut closed = Vec::new();
     for n in &names {
         let mut seen: HashSet<(&str, bool)> = HashSet::from([(n.as_str(), true)]);
         let mut done: HashSet<&str> = HashSet::new();
+        let mut calls_done: HashSet<(&str, bool)> = HashSet::new();
         let mut stack = vec![(n.as_str(), true)];
         let (mut allocs, mut ctors, mut objects) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
         let (mut tcalls, mut opaque, mut fields) = (Vec::new(), HashSet::new(), Vec::new());
@@ -373,11 +378,15 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
                     arr |= f.array_access;
                     allocs.extend(f.allocs.iter().cloned());
                     ctors.extend(f.ctors.iter().cloned());
-                    // 被调 fn 的 self 不一定是本方法的接收者
-                    let own = x == n.as_str();
-                    tcalls.extend(f.calls.iter().map(|c| TypedCall { on_self: c.on_self && own, ..c.clone() }));
                     opaque.extend(f.opaque.iter().cloned());
                     objects.extend(f.objects.iter().cloned());
+                }
+                // 调用点按（fn, 链上 self 是否仍是本 fn 的 self）吸收：本 fn 自身体内恒成立，被调 fn 沿
+                // 全程 `self.f(…)` 的调用链保持 on_self（`hw-upcall-self-lost-in-helper`）；既经 self 又经
+                // 非 self 到达的 fn 两个变体并存（`self_only` 等全站点判定随之保守），与弹出顺序无关
+                let self_recv = keep || x == n.as_str();
+                if calls_done.insert((x, self_recv)) {
+                    tcalls.extend(f.calls.iter().map(|c| TypedCall { on_self: c.on_self && self_recv, ..c.clone() }));
                 }
                 // 被调 fn 的 self 不一定是本方法的接收者
                 let own = x == n.as_str();
@@ -596,6 +605,39 @@ mod tests {
         let fresh: BTreeSet<(String, bool)> = fs.iter().filter(|fa| fa.write).map(|fa| (fa.field.clone(), fa.value_fresh)).collect();
         let want = BTreeSet::from([("componentType".into(), true), ("a".into(), true), ("b".into(), false), ("d".into(), false), ("e".into(), false)]);
         assert_eq!(fresh, want);
+    }
+
+    /// 带 `&self` 的辅助 fn 体内 `self.X()` 的接收者归属：沿全程 `self.f(…)` 的调用链保持 on_self
+    /// （`hw-upcall-self-lost-in-helper`），经非 `self` 接收者到达的链取消；两种链都可达时两个变体并存
+    #[test]
+    fn helper_upcall_on_self() {
+        let src = r#"
+            impl Native {
+                pub fn entry(&self, o: Object) -> i32 { self.a() + o.b() }
+                pub fn mixed(&self, o: Object) -> i32 { self.helper() + o.helper() }
+                fn a(&self) -> i32 { self.helper() }
+                fn b(&self) -> i32 { self.helper() }
+                fn helper(&self) -> i32 { self.upcall() }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut raw = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut raw);
+        close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
+        let on = |f: &str| {
+            let mut v: Vec<bool> = raw.fns[f].calls.iter().filter(|c| c.name == "upcall").map(|c| c.on_self).collect();
+            v.sort();
+            v
+        };
+        // entry 经 self.a() 到 helper（链上 self 仍是 entry 的接收者，上调保持归属）、经 o.b() 到 helper
+        // （归属取消）：两个变体并存
+        assert_eq!(on("entry"), vec![false, true]);
+        // 同一 fn 内既有 self.helper() 又有 o.helper()：按名保守，只按非 self 链吸收
+        assert_eq!(on("mixed"), vec![false]);
+        // 各 fn 自身体内：本 fn 的 self
+        assert_eq!(on("a"), vec![true]);
+        assert_eq!(on("b"), vec![true]);
+        assert_eq!(on("helper"), vec![true]);
     }
 
     #[test]
