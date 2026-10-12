@@ -24,9 +24,15 @@ use std::time::Instant;
 
 use super::*;
 
-/// 参与合并的最小图规模与两次合并间的最小新增节点数（等价类轮成本分档）
-const EQ_AT: usize = 8192;
-const EQ_STEP: usize = 32_768;
+/// 参与合并的最小图规模与两次合并间的最小新增节点数（等价类轮成本分档）。
+/// 诊断覆盖：`RAVA_EQ_AT` / `RAVA_EQ_STEP`（缺省同常量；`RAVA_EQ_AT` 取超大值即全程不做合并，
+/// 用于隔离「载体 / 标记 / 扇出记账」与「合并本身」各自对输出的影响）
+fn eq_at() -> usize {
+    std::env::var("RAVA_EQ_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(8192)
+}
+fn eq_step() -> usize {
+    std::env::var("RAVA_EQ_STEP").ok().and_then(|v| v.parse().ok()).unwrap_or(32_768)
+}
 /// 分划细化最大轮数（稳定即提前退出）
 const EQ_ROUNDS: usize = 8;
 
@@ -142,7 +148,8 @@ impl<'a> Engine<'a> {
             return false;
         }
         let n = self.graph.node_count();
-        n >= EQ_AT && n >= self.eqm.last_nodes + EQ_STEP
+        let (at, step) = (eq_at(), eq_step());
+        n >= at && n >= self.eqm.last_nodes + step
     }
 
     /// 排空点等价类合并（见模块说明）。工作队列全空时调用；`fwork` 已排空，合并是纯存储操作
