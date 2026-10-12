@@ -21,10 +21,12 @@ build_rava() {  # <目录>
 
 run_sets() {  # <检出目录> <rava> <前缀>
   local dir="$1" rava="$2" tag="$3" t f s
-  cd "$dir"
   for t in $TESTS; do
+    cd "$dir"  # 每用例回到检出目录（作业重派续跑避免 cwd 漂移）
     f=$(find tests/e2e -name "$t.java" | head -1)
     for s in 0 1 2; do
+      # 幂等续跑：结果 json 已在（前次运行产物）即跳过（作业重派不重付全部闭包）
+      [ -f "$OUT/$tag.$t.s$s.json" ] && continue
       echo "[closure] $tag $t seed $s"
       "$rava" closure "$f" --java-home "$JAVA_HOME" --runtime "$dir/runtime/java_runtime" \
         --hash-seed "$s" -o "$OUT/$tag.$t.s$s.json" > "$OUT/$tag.$t.s$s.log" 2>&1
@@ -36,7 +38,10 @@ build_rava "$ROOT"
 run_sets "$ROOT" "$ROOT/build/analyzer-target/release/rava" new
 
 BASE_WT="$ROOT/../s7k6-base-wt-$(basename "$ROOT")"  # 每检出目录独立：同服务器多 tag 并行不共用
-git -C "$ROOT" worktree add "$BASE_WT" "$BASE_REF" > /dev/null 2>&1 || git -C "$ROOT" worktree add --force "$BASE_WT" "$BASE_REF" > /dev/null
+# 首选新建；路径已有登记的 worktree（作业重派 / 本机复跑）则就地 checkout 到基线提交
+if ! git -C "$ROOT" worktree add "$BASE_WT" "$BASE_REF" > /dev/null 2>&1; then
+  git -C "$BASE_WT" checkout -q "$BASE_REF" || { echo "base worktree 不可用：$BASE_WT"; exit 1; }
+fi
 build_rava "$BASE_WT"
 run_sets "$BASE_WT" "$BASE_WT/build/analyzer-target/release/rava" base
 
