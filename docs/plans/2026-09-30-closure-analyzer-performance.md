@@ -806,7 +806,7 @@ S0 ≤20 万上下文 / ≤16 GiB 的目标未达成，20 万上下文量级在�
 - **机制否定（负结果，三处实测同档）**：分配点变体数——语料扫描（作业 `g1c2-objscan`，全语料单例闭包
   1123 例取 final dump `objsite` 行，3 分片 × 并行 3；1108 例 rc=0 有数，11 例 rc=1 为 §4.12 已知的 JUnit /
   TestUnnamedVar 类路径族，4 例 rc=137 为 18 GiB 分片上限内 3 并发被杀的重量级 XML 例——其同族已测例
-  ≤393，原始数据留 `build/g1c2-objscan/`）**最大 393**（`TestXmlFactoryConfigs` 的 `HashMap$Node`；
+  ≤393，原始数据留 worktree `build/g1c2-objscan/`（gitignore 内））**最大 393**（`TestXmlFactoryConfigs` 的 `HashMap$Node`；
   p99 295 / p90 206 / p50 20，前列为 `ArrayList$Itr`、`HashMap$Node`、CHM 节点与 stream 头一族）；
   sb3 终态最大 **261**（`ConcurrentHashMap$Node/TreeNode` 一族）；
   S0 A 全开（`g1ctx-s0a` 3949 s 一段）最大 **213**（同 CHM 一族），`objsites=11653` 个分配点摊 2.3 万对象。
