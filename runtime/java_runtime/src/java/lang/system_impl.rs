@@ -1,3 +1,10 @@
+use crate::java::io::BufferedInputStream__Methods as _;
+use crate::java::io::BufferedOutputStream__Methods as _;
+use crate::java::io::FileDescriptor__Methods as _;
+use crate::java::io::FileInputStream__Methods as _;
+use crate::java::io::FileOutputStream__Methods as _;
+use crate::java::io::PrintStream__Methods as _;
+use crate::sun::nio::cs::UTF_8__Methods as _;
 use crate::prelude::*;
 use super::*;
 use crate::java::io::{BufferedInputStream, BufferedOutputStream, FileDescriptor, FileInputStream, FileOutputStream, InputStream, PrintStream};

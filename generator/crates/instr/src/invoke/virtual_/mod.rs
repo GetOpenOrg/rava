@@ -103,6 +103,8 @@ fn member_name(env: &InstrEnv, cls: &str, call: &CallRef) -> InstrResult<String>
 
 /// invokevirtual / invokeinterface 的发射（`_gen_invokevirtual`）
 pub fn gen_invokevirtual(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &CallRef) -> InstrResult<()> {
+    // 合成调用（indy 降级 / 清单入口）同样登记方法 trait（§9.9 K3）
+    crate::method_traits::record_member(&env.ctx, &call.owner, &call.name, Some(&call.desc));
     // @CallerSensitive 虚调用：调用处类经 __caller_sensitive 显式传入（与 invokestatic 同一机制）
     let cs = CsCtx::new(call, env.ctx.class_name);
     // [equiv-audit] 按常量池方法名匹配的近似等价形态，只计数不改发射
@@ -124,6 +126,11 @@ pub fn gen_invokevirtual(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
         site.obj_e = crate::opaque::upcast_text(env, &site.obj_e, &view);
         site.obj_node = Expr::raw(site.obj_e.clone());
         site.obj_ty = view;
+    }
+    // 接收者静态类型比 owner 更具体（协变返回 / 上游已知子类）时，调用落在接收者类的 wrapper 上：
+    // 自接收者类起沿超类链登记方法 trait（§9.9 K3）
+    if let Some(recv_bin) = erased_binary(env, &site.obj_ty).filter(|b| *b != call.owner) {
+        crate::method_traits::record_member(&env.ctx, &recv_bin, &call.name, Some(&call.desc));
     }
     if args::try_early_receiver_paths(env, sim, log, obj_is_typevar, call, &site)? {
         return Ok(());

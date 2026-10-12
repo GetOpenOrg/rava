@@ -46,6 +46,8 @@
 //! 所有 null 的身份都是同一个哨兵地址（`JVM_NULL`），没有对象头：各入口先比较一次
 //! 身份即抛 NullPointerException，null 身份不进侧表、不进置位函数。
 
+use crate::java::lang::Thread_FieldHolder__Methods as _;
+use crate::java::lang::Thread__Methods as _;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;

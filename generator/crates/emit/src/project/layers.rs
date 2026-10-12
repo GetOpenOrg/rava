@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
-use rava_macros_core::plan::{decl_elisions, elide};
+use rava_macros_core::plan::{decl_plan, elide};
 use ty::ident::is_rust_keyword;
 
 use super::fs::{has_marker, walk, Writer};
@@ -81,18 +81,39 @@ fn module_path(rel: &Path) -> String {
 
 /// 一个类文本拆成 (声明层文本, 实现层文本)；块不存在时 Ok(None)。
 /// 声明层剥去下沉方法体（判定与宏同一份代码，`rava_macros_core::plan`）。
-pub fn split_text(text: &str, decl_crate: &str, module: &str) -> std::result::Result<Option<(String, String)>, String> {
+/// 方法 trait 匿名导入（`use crate::…::X__Methods as _;`，§9.9 K3）在声明层文件头的保留策略
+#[derive(Debug, Default)]
+pub enum AnonKeep {
+    /// 只按词剪枝（纯外壳文件：无留体 fn）
+    #[default]
+    Word,
+    /// 全保留（留体 fn 缺 java_method 属性、无法按名差分）
+    All,
+    /// 词干出现或名字在集合中才保留（留体 fn 的精确需求集，名字 = `<声明名>__Methods`）
+    Set(BTreeSet<String>),
+}
+
+/// 一个类文本拆成 (声明层文本, 实现层文本)；块不存在时 Ok(None)。
+/// 声明层剥去下沉方法体（判定与宏同一份代码，`rava_macros_core::plan`）。
+/// `anon_of`：由剥体计划给出的留体 fn（[`StayBodies`]）构造匿名导入保留策略
+pub fn split_text(
+    text: &str,
+    decl_crate: &str,
+    module: &str,
+    anon_of: impl FnOnce(&rava_macros_core::plan::StayBodies) -> AnonKeep,
+) -> std::result::Result<Option<(String, String)>, String> {
     let Some(open) = text.find(BLOCK_OPEN) else { return Ok(None) };
     let start = open + BLOCK_OPEN.len();
     // 块以第 0 列的 `}` 行结束（块内各项至少缩进 4 列）
     let Some(end) = text[start..].find("\n}\n") else { return Ok(None) };
     let inner_end = start + end + 1;
     let close = start + end + 3;
-    let plan = decl_elisions(&text[start..inner_end])?;
+    let (plan, stay) = decl_plan(&text[start..inner_end])?;
+    let anon = anon_of(&stay);
     let decl_block = elide(&text[start..inner_end], &plan);
     let decl = format!(
         "{}{BLOCK_OPEN}    #[rava_layer = \"decl\"]\n{}{}",
-        prune_uses(&text[..open], &[&decl_block, &text[inner_end..]]),
+        prune_uses(&text[..open], &[&decl_block, &text[inner_end..]], &anon),
         decl_block,
         &text[inner_end..]
     );
@@ -110,10 +131,22 @@ pub fn split_text(text: &str, decl_crate: &str, module: &str) -> std::result::Re
 /// 引用判定按词：本文件其余文本（块、块后宏，含属性字符串，`$` 视同 `_`）出现该名，或该名形如
 /// `<词>__…`（宏按类名派生的 vtable trait / base 函数等）且 `<词>` 出现，即保留；`__` 开头、glob、
 /// 花括号与路径重导出一律保留。只会多留、不会误删：宏派生的名字都由块内出现的类名拼出。
-fn prune_uses(header: &str, rest: &[&str]) -> String {
+/// 方法 trait 匿名导入（`use crate::…::X__Methods as _;`，§9.9 K3）同单名规则：词干 `X` 出现才保留。
+/// 纯外壳文件里，声明层的跨类方法调用都出自宏生成的外壳（继承转发 / 反射分派尾巴等），其所指类的
+/// 二进制名或 Rust 名必在属性串、签名或尾巴文本中出现，按词剪枝不漏。**例外**：留在声明层的方法体
+/// （wrapper 上下文体不可下沉）按推断类型解析方法调用，接收者类名可以不在文本中出现——这类体的
+/// 导入需求按 [`AnonKeep::Set`] 差分保留（`ProjectState::method_traits`），缺属性时退全保留。
+fn prune_uses(header: &str, rest: &[&str], anon: &AnonKeep) -> String {
     let mut words: BTreeSet<String> = BTreeSet::new();
     let single = |line: &str| -> Option<String> {
         let path = line.strip_prefix("use crate::")?.strip_suffix(';')?;
+        let a = path.strip_suffix(" as _");
+        // 方法 trait 匿名导入 `use crate::…::X__Methods as _;`：名取 `X__Methods`；
+        // 全保留策略下不作单名处理（不参与剪枝，也不贡献词）
+        if a.is_some() && matches!(anon, AnonKeep::All) {
+            return None;
+        }
+        let path = a.unwrap_or(path);
         let name = path.rsplit("::").next()?;
         (path.contains("::") && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
             .then(|| name.to_string())
@@ -128,7 +161,10 @@ fn prune_uses(header: &str, rest: &[&str]) -> String {
     }
     rest.iter().for_each(|s| add_words(s));
     let keep = |name: &str| {
-        name.starts_with("__") || words.contains(name) || name.split_once("__").is_some_and(|(stem, _)| words.contains(stem))
+        words.contains(name)
+            || name.split_once("__").is_some_and(|(stem, _)| words.contains(stem))
+            || name.starts_with("__")
+            || matches!(anon, AnonKeep::Set(s) if s.contains(name))
     };
     let mut out = String::with_capacity(header.len());
     for line in header.split_inclusive('\n') {
@@ -140,8 +176,15 @@ fn prune_uses(header: &str, rest: &[&str]) -> String {
     out
 }
 
-/// 改写 `ems` 中可拆类的文本为声明层，返回实现层装箱结果
-pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path) -> Result<BodyPlan> {
+/// 改写 `ems` 中可拆类的文本为声明层，返回实现层装箱结果。
+/// `method_traits`：方法体所需的方法 trait 账本（`(类, 方法名, 描述符) → 目标类`），留体 fn 的
+/// 匿名导入按它精确保留
+pub fn split(
+    ctx: &EmitCtx<'_>,
+    ems: &mut IndexMap<String, ClassEmission>,
+    decl_src: &Path,
+    method_traits: &BTreeMap<(String, String, String), BTreeSet<String>>,
+) -> Result<BodyPlan> {
     let crates = ctx.crates();
     let decl = crates.decl();
     // 可拆类：(ems 下标, 相对路径)
@@ -162,7 +205,20 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_
         let ems_ref = &*ems;
         crate::par::par_map(crate::par::resolve_jobs(ctx.opts.jobs), &cands, |(i, rel)| {
             let em = &ems_ref[*i];
-            split_text(&em.text, &decl, &module_path(rel)).map_err(|e| format!("{}：剥体计划失败：{e}", em.binary_name))
+            let bin = em.binary_name.clone();
+            let ledger = method_traits;
+            split_text(&em.text, &decl, &module_path(rel), |stay| match stay {
+                rava_macros_core::plan::StayBodies::None => AnonKeep::Word,
+                rava_macros_core::plan::StayBodies::Unknown => AnonKeep::All,
+                rava_macros_core::plan::StayBodies::Fns(keys) => AnonKeep::Set(
+                    keys.iter()
+                        .filter_map(|k| ledger.get(&(bin.clone(), k.0.clone(), k.1.clone())))
+                        .flatten()
+                        .map(|b| format!("{}__Methods", ctx.declared(b)))
+                        .collect(),
+                ),
+            })
+            .map_err(|e| format!("{}：剥体计划失败：{e}", em.binary_name))
         })
     };
     let mut bodies: Vec<(String, PathBuf, String)> = Vec::new();
@@ -283,7 +339,7 @@ mod tests {
     #[test]
     fn split_text_separates_layers() {
         let text = "#![allow(x)]\nuse crate::prelude::*;\n\nrava_macros::java_class! {\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n// tail\nrava_macros::iface_upcasts! { impl B => C }\n";
-        let (decl, body) = split_text(text, "rt_decl", "a::b").unwrap().unwrap();
+        let (decl, body) = split_text(text, "rt_decl", "a::b", |_| AnonKeep::Word).unwrap().unwrap();
         assert_eq!(
             decl,
             "#![allow(x)]\nuse crate::prelude::*;\n\nrava_macros::java_class! {\n    #[rava_layer = \"decl\"]\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n// tail\nrava_macros::iface_upcasts! { impl B => C }\n"
@@ -302,10 +358,39 @@ mod tests {
         let block = "    #[superclass = \"Anc\"]\n    #[nest_members = \"a/Outer$Inner\"]\n    pub struct B {}\n    \
                      impl B {\n        pub fn f(&self, u: Used) -> Result<()>;\n    }\n";
         assert_eq!(
-            prune_uses(header, &[block, "}\n"]),
+            prune_uses(header, &[block, "}\n"], &AnonKeep::Word),
             "#![allow(x)]\nuse crate::prelude::*;\nuse crate::a::Used;\nuse crate::a::Anc__VTable;\n\
              use crate::a::Outer_Inner;\nuse crate::a::__helper;\nuse crate::a::{X, Y};\n\n"
         );
+    }
+
+    /// 方法 trait 匿名导入按词剪枝（§9.9 K3）：声明层文本出现词干才保留，只被方法体使用的剪去
+    #[test]
+    fn method_trait_imports_pruned_by_stem_word() {
+        let header = "#![allow(x)]\nuse crate::prelude::*;\n\
+                      use crate::a::Anc__Methods as _;\nuse crate::a::OnlyInBody__Methods as _;\n\
+                      use crate::a::Map_Entry__Methods as _;\nuse crate::a::{X, Y};\n\n";
+        // 词干来源：超类属性串（Anc）、反射分派尾巴（`Map_Entry::new(..)`，Map$Entry 的 Rust 名）
+        let block = "    #[superclass = \"a/Anc\"]\n    pub struct B {}\n";
+        let tail = "// tail\nimpl B { pub fn __reflect_dispatch(_: &str) { let _ = Map_Entry::new(); } }\n";
+        let pruned = prune_uses(header, &[block, tail], &AnonKeep::Word);
+        assert!(pruned.contains("use crate::a::Anc__Methods as _;"), "{pruned}");
+        assert!(pruned.contains("use crate::a::Map_Entry__Methods as _;"), "{pruned}");
+        assert!(!pruned.contains("OnlyInBody"), "{pruned}");
+        // 词干不出现在声明层任何位置（`$` 词干按 `_` 折算）时剪去
+        let header2 = "#![allow(x)]\nuse crate::prelude::*;\nuse crate::a::Other__Methods as _;\nuse crate::a::Other;\n\n";
+        let pruned2 = prune_uses(header2, &[block, tail], &AnonKeep::Word);
+        assert!(!pruned2.contains("Other"), "{pruned2}");
+        // 留有方法体的文件：方法调用按推断类型解析，匿名导入全部保留
+        let pruned3 = prune_uses(header2, &[block, tail], &AnonKeep::All);
+        // 留体 fn 的差分需求集：名字在集合中即保留（词干可不出现在文本里）
+        let set = AnonKeep::Set(["Other__Methods".to_string()].into_iter().collect());
+        let pruned4 = prune_uses(header2, &[block, tail], &set);
+        assert!(pruned4.contains("use crate::a::Other__Methods as _;"), "{pruned4}");
+        assert!(!pruned4.contains("use crate::a::Other;"), "{pruned4}");
+        assert!(pruned3.contains("use crate::a::Other__Methods as _;"), "{pruned3}");
+        // 类型导入仍按词剪枝（推断不需要类型名）
+        assert!(!pruned3.contains("use crate::a::Other;"), "{pruned3}");
     }
 
     #[test]

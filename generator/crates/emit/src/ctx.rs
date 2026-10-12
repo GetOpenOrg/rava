@@ -394,6 +394,10 @@ pub struct ProjectState {
     pub hw_audit: Vec<(HwAudit, String)>,
     /// 方法体生成日志（审计事实 + 逐方法耗时；发射序）
     pub body_log: crate::body::BodyLog,
+    /// 方法体所需的方法 trait（§9.9 K3 收尾）：(类, 方法名, 描述符) → 匿名导入目标类集合。
+    /// 留在声明层的方法体（wrapper 上下文体等）按推断类型解析方法调用，其导入不能按词剪枝——
+    /// 拆层时以本账本差分出精确需求（`layers::split`），替代「整文件保留全部匿名导入」
+    pub method_traits: BTreeMap<(String, String, String), BTreeSet<String>>,
 }
 
 /// 公开 API 类非 native 方法被手写覆盖的审计类别
@@ -422,6 +426,9 @@ impl ProjectState {
         self.sam_sites.extend(d.sam_sites);
         self.hw_audit.extend(d.hw_audit);
         self.body_log.append(d.body_log);
+        for (k, v) in d.method_traits {
+            self.method_traits.entry(k).or_default().extend(v);
+        }
     }
 
     /// 方法体生成登记的事实并入账本

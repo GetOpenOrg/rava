@@ -10,6 +10,9 @@ use super::{collect_uses, path_segs, HwCfg, TypeRef, GENERATED_MARK};
 /// 共置手写模块后缀：`use super::<类>_impl::…` 要求该类在生成范围内（其 mod.rs 才声明该模块）
 pub const MODULE_SUFFIXES: [&str; 2] = ["_impl", "_ext"];
 
+/// 每类方法 trait 名后缀（`X__Methods`，rava_macros 生成）
+const METHODS_SUFFIX: &str = "__Methods";
+
 struct TypePaths {
     uses: HashMap<String, Vec<String>>,
     out: BTreeSet<TypeRef>,
@@ -21,6 +24,15 @@ impl TypePaths {
             Some(full) if segs.len() > 1 || full.len() > 1 => {
                 let mut v = full.clone();
                 v.extend(segs.into_iter().skip(1));
+                v
+            }
+            _ => segs,
+        };
+        // 方法 trait 导入（`use …::X__Methods as _;`，宏生成，§9.9 K3）要求类 X 存在
+        let segs = match segs.split_last() {
+            Some((last, head)) if last.len() > METHODS_SUFFIX.len() && last.ends_with(METHODS_SUFFIX) => {
+                let mut v = head.to_vec();
+                v.push(last[..last.len() - METHODS_SUFFIX.len()].to_string());
                 v
             }
             _ => segs,
@@ -93,6 +105,12 @@ mod tests {
         assert!(r.contains(&"super::java_lang_access_impl::SystemJavaLangAccess".to_string()));
         assert!(r.contains(&"crate::java::util::HashMap".to_string()));
         assert!(!r.iter().any(|s| s.ends_with("Self")));
+    }
+
+    #[test]
+    fn methods_trait_import_requires_class() {
+        let r = refs("use crate::java::util::HashMap__Methods as _;\n");
+        assert_eq!(r, vec!["crate::java::util::HashMap".to_string()]);
     }
 
     #[test]

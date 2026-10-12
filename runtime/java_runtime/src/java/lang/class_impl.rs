@@ -1,3 +1,6 @@
+use crate::java::lang::reflect::Method__Methods as _;
+use crate::jdk::internal::loader::BootLoader__Methods as _;
+use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::prelude::*;
 use super::*;
 use super::reflect::Field;

@@ -4,6 +4,7 @@
 //! 但 `refersTo` 仍可判定 referent 身份）。运行时无 GC（见 reference_impl.rs），
 //! referent 仅经 `clear()` 置空——语义与 `Reference.refersTo0` 同：引用身份比较。
 
+use crate::java::lang::r#ref::PhantomReference__Methods as _;
 use crate::prelude::*;
 use super::phantom_reference::PhantomReference;
 

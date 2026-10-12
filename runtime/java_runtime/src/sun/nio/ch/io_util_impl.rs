@@ -1,5 +1,8 @@
 //! `sun/nio/ch/IOUtil` 的 ACC_NATIVE（类 1，libnio `IOUtil.c`）。其余方法按字节码翻译。
 
+use crate::java::io::FileDescriptor__Methods as _;
+use crate::java::io::IOException__Methods as _;
+use crate::sun::nio::ch::IOUtil__Methods as _;
 use crate::prelude::*;
 use super::io_util::IOUtil;
 use crate::java::io::FileDescriptor;

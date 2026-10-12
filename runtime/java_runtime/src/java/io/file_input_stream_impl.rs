@@ -1,3 +1,8 @@
+use crate::java::io::FileDescriptor__Methods as _;
+use crate::java::io::FileInputStream__Methods as _;
+use crate::java::io::FileNotFoundException__Methods as _;
+use crate::java::io::IOException__Methods as _;
+use crate::java::lang::ArrayIndexOutOfBoundsException__Methods as _;
 use crate::prelude::*;
 use super::file_input_stream::FileInputStream;
 use crate::jdk_resources;

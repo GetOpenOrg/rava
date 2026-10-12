@@ -5,6 +5,7 @@
 //! 「Signal Dispatcher」守护系统线程（首次安装处理器时惰性启动）读管道，以 `Signal.dispatch(int)`
 //! 回到 Java（dispatch 再为每个信号派生处理线程）。引导期 `Terminator.setup` 经此注册 HUP / INT / TERM。
 
+use crate::jdk::internal::misc::Signal__Methods as _;
 use crate::prelude::*;
 use super::signal::Signal;
 use std::sync::OnceLock;

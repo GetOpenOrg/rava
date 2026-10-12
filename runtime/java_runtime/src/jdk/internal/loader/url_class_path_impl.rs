@@ -1,3 +1,4 @@
+use crate::jdk::internal::loader::URLClassPath__Methods as _;
 use crate::prelude::*;
 use super::url_class_path::URLClassPath;
 

@@ -261,6 +261,10 @@ fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option
     if arms.is_empty() {
         return None;
     }
+    // 实参编组的字符串化调用（`String::valueOf_obj`）在方法 trait 上（§9.9 K3）
+    if arms.iter().any(|a| a.contains("String::valueOf_obj(")) {
+        ctx.ty.use_methods(ty::consts::STRING);
+    }
     let mut out = vec![
         String::new(),
         "// ── L3 反射分派闭包（Method.invoke / Constructor.newInstance 的按名协议；".into(),

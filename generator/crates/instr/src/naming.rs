@@ -117,7 +117,9 @@ fn mangle_uncached(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -
         if let (Some(bd), false) = (&bridged_iface_desc, recv.is_interface()) {
             return Ok(ctx.ty.interface_member_local_name(recv, mname, bd));
         }
-        return Ok(mname.to_string());
+        // 非重载成员名与 std prelude trait 方法同名（`clone` / `eq` 等）时按定义侧同一规则加
+        // `__` 前缀——方法 trait 表面上的内部名（§9.9 K6 前置项；重载名带描述符后缀不冲突）
+        return Ok(ty::ident::escape_std_trait_method(mname));
     }
     if call_desc.is_empty() {
         return Ok(mname.to_string());

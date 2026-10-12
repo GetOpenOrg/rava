@@ -1,5 +1,12 @@
 //! Class 的 class 文件属性 native：注解 / 签名 / 许可子类 / 接口 / record 组件 / 保护域 / 签名者（宿主 class_impl.rs 的私有辅助模块）
 
+use crate::jdk::internal::loader::URLClassPath__Methods as _;
+use crate::java::lang::reflect::RecordComponent__Methods as _;
+use crate::java::security::CodeSource__Methods as _;
+use crate::java::security::SecureClassLoader__Methods as _;
+use crate::jdk::internal::loader::BuiltinClassLoader__Methods as _;
+use crate::jdk::internal::loader::ClassLoaders__Methods as _;
+use crate::jdk::internal::reflect::ConstantPool__Methods as _;
 use super::*;
 
 impl Class {

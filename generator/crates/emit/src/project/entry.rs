@@ -10,6 +10,7 @@ use crate::ctx::{EmitCtx, USER_CRATE};
 use crate::phase2::dispatch::registration_turbofish;
 use crate::phase2::Emissions;
 use crate::error::Result;
+use crate::imports::fill::METHODS_SUFFIX;
 use crate::text::{safe_pkg_part, scratch_pkg_version, to_snake};
 
 /// 反射分派登记行（dispatch_gen 产出；步骤 (d) 接入）
@@ -43,10 +44,12 @@ fn block(head: &str, lines: &[String], tail: &str) -> String {
 }
 
 /// 类初始化钩子：枚举形态 / 有 `<clinit>` 的用户类 + 注解枚举种子与按镜像初始化目标（JDK）。
-/// 泛型类路径的类型实参按登记约定取 Object（钩子闭包无推断上下文，E0283）
-fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions) -> Vec<String> {
+/// 泛型类路径的类型实参按登记约定取 Object（钩子闭包无推断上下文，E0283）。
+/// 返回 (登记行, 钩子类路径)：`__class_init` 在方法 trait 上，路径用于匿名导入（§9.9 K3）
+fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions) -> (Vec<String>, Vec<String>) {
     let rt = ctx.crates().root();
     let mut out = Vec::new();
+    let mut paths = Vec::new();
     for (c, e) in &user.entries {
         // 不透明（L1）类只有类型身份、不初始化，没有 `__class_init`
         let Some(ci) = ctx.class(c).filter(|_| !ctx.is_opaque(c)) else { continue };
@@ -65,6 +68,8 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
             p.join("::"),
             registration_turbofish(ctx, ems, c)
         ));
+        // 接口载体的 `__class_init` 同在 I__Methods 上（§9.9 K6 前置项）
+        paths.push(p.join("::"));
     }
     // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`；
     // 不透明（L1）类只有类型身份、不初始化，不登记
@@ -78,15 +83,19 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
             jrt_path(ctx, en),
             registration_turbofish(ctx, ems, en)
         ));
+        // 手写类无生成的方法 trait；接口载体的 `__class_init` 在 I__Methods 上（K6 前置项）
+        if ems.get(en).is_some_and(|em| !em.handwritten) {
+            paths.push(jrt_path(ctx, en));
+        }
     }
-    out
+    (out, paths)
 }
 
-/// main 启动段（钩子登记全部段落）
-fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions, disp: &DispatchReg) -> String {
+/// main 启动段（钩子登记全部段落）；附带钩子类路径（方法 trait 匿名导入用）
+fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions, disp: &DispatchReg) -> (String, Vec<String>) {
     let rt = ctx.crates().root();
     let mut hb = String::new();
-    let hooks = class_init_hooks(ctx, user, jdk, ems);
+    let (hooks, paths) = class_init_hooks(ctx, user, jdk, ems);
     if !hooks.is_empty() {
         hb += &block(&format!("    {rt}::register_class_init_hooks(&["), &hooks, "    ]);");
     }
@@ -98,7 +107,7 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
     }
     // 构建期引导映像（HotSpot initPhase1–3 的构建期求值结果）：登记钩子之后装入，main 之前完成引导的残差部分
     hb += &format!("    {rt}::{}::{}();\n", super::boot_image::MODULE, super::boot_image::START_FN);
-    hb
+    (hb, paths)
 }
 
 /// 性能类测试的构建档位（cargo 自定义 profile，产物在 `<target>/dev-opt/`）：dev 语义、全部 crate opt-level 1。
@@ -156,6 +165,11 @@ pub fn write_main(
         lines.extend(top.map(|m| user_mod_decl(user_src, m, "")));
     }
     lines.push(format!("use {use_path};"));
+    // 主类 `main` 与钩子类 `__class_init` 在各类方法 trait 上（§9.9 K3）：匿名导入
+    let (hb, hook_paths) = hook_block(ctx, user, jdk, ems, disp);
+    let mut traits: std::collections::BTreeSet<String> = hook_paths.into_iter().collect();
+    traits.insert(use_path.clone());
+    lines.extend(traits.iter().map(|p| format!("use {p}{METHODS_SUFFIX} as _;")));
     // 反射元数据表 crate：运行时以导出符号读取其表，此处把它纳入链接
     lines.push("use java_meta as _;".into());
     // 用户类的反射元数据行（`meta_sides`）：启动时登记，与档案侧表合并查询
@@ -172,7 +186,6 @@ pub fn write_main(
     lines.push(format!("    {rt}::meta::register_user(&{meta_mod}::USER_META);"));
     // 进程级终止约定（panic 钩子）先于一切登记就位：此后任何 panic 同一出口
     lines.push(format!("    {rt}::create_java_vm();"));
-    let hb = hook_block(ctx, user, jdk, ems, disp);
     if !hb.is_empty() {
         lines.push(hb);
     }

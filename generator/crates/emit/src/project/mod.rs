@@ -323,7 +323,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let precheck = Precheck::scan(ems.values(), &ctx.input.precheck_visited);
     let readability = crate::audit::readability_counts(ems.values().map(|em| em.text.as_str()));
     // S4 物理拆层：根模块生成类分声明层（原位）与实现层（`<根>_body_k`）；其余模块 crate 不拆
-    let mut body_plan = layers::split(ctx, &mut ems, &decl_src)?;
+    let mut body_plan = layers::split(ctx, &mut ems, &decl_src, &state.method_traits)?;
     // D8：声明层按签名 SCC 分段（上层段类改落 `<根>_decl_<j>`）
     let segs = decl_side::segment(ctx, &mut ems, &decl_src, out_dir);
     let root_classes = jdk.files.keys().filter(|c| crates.crate_of(c) == crates.root()).count();

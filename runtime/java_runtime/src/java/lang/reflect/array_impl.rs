@@ -1,3 +1,14 @@
+use crate::java::lang::Boolean__Methods as _;
+use crate::java::lang::Byte__Methods as _;
+use crate::java::lang::Character__Methods as _;
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::Double__Methods as _;
+use crate::java::lang::Float__Methods as _;
+use crate::java::lang::IllegalArgumentException__Methods as _;
+use crate::java::lang::Integer__Methods as _;
+use crate::java::lang::Long__Methods as _;
+use crate::java::lang::Short__Methods as _;
+use crate::java::lang::reflect::Array__Methods as _;
 use crate::prelude::*;
 use super::Array;
 use crate::java::lang::{

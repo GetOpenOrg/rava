@@ -2,6 +2,9 @@
 //! 经系统 zlib（crate::zlib，运行期 dlopen）。Bytes / Buffer 各变体（Buffer = 直接缓冲区的直接内存
 //! 地址）共用 inflate_raw / inflate_status。
 
+use crate::java::lang::InternalError__Methods as _;
+use crate::java::util::zip::DataFormatException__Methods as _;
+use crate::java::util::zip::Inflater__Methods as _;
 use crate::prelude::*;
 use super::inflater::Inflater;
 use crate::zlib::{self, ZStream};

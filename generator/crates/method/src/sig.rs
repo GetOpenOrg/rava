@@ -6,7 +6,7 @@ use classfile::extras::LocalVar;
 use classfile::Method;
 use instr::InstrEnv;
 use sim::names::safe_name;
-use ty::ident::safe_ident;
+use ty::ident::{escape_std_trait_method, safe_ident};
 use ty::type_map::{mangle_name, parse_descriptor_params};
 use ty::RsType;
 
@@ -36,7 +36,8 @@ pub fn local_names(local_vars: &[LocalVar]) -> BTreeMap<u16, String> {
     best.into_iter().map(|(s, (_, n))| (s, n.to_string())).collect()
 }
 
-/// 最终 Rust 方法名：调用方给定名（已去重）> 构造器 `new`（重载加描述符后缀）> 重载加后缀 > 安全化原名
+/// 最终 Rust 方法名：调用方给定名（已去重）> 构造器 `new`（重载加描述符后缀）> 重载加后缀 >
+/// 安全化原名（与 std prelude trait 方法同名时先加 `__` 前缀，与定义侧同一口径——§9.9 K6 前置项）
 pub fn rust_fn_name(env: &InstrEnv, m: &Method, overloaded: bool, rust_name: Option<&str>) -> String {
     let manifest = env.ctx.ty.manifest;
     if let Some(n) = rust_name {
@@ -50,7 +51,7 @@ pub fn rust_fn_name(env: &InstrEnv, m: &Method, overloaded: bool, rust_name: Opt
     } else if overloaded {
         mangle_name(manifest, &m.name, &m.desc)
     } else {
-        safe_ident(&m.name)
+        safe_ident(&escape_std_trait_method(&m.name))
     }
 }
 

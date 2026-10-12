@@ -4,6 +4,7 @@
 //! 注意：生成类 `java/net/InetAddressImpl`（接口）的文件名主干与本文件相同，生成器把它落在
 //! `inet_address_impl_t.rs`。
 
+use crate::java::net::InetAddress__Methods as _;
 use crate::prelude::*;
 use super::inet_address::InetAddress;
 

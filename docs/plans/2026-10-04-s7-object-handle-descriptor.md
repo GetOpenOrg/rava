@@ -970,15 +970,71 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   - 手写文件不止 `_impl.rs`：基础设施文件（`error.rs`、`lib.rs`、`monitor.rs`、`reflect_dispatch.rs`、`array_impl.rs` 等）也直接调用生成类的方法，同样需要显式导入。K4 把基础设施拆进 `runtime/java_marker/` 时，标记层文件不得调用 `X__Methods`（标记层无方法面）。依赖行为的调用须留在行为层，或经 `extern "Rust"` 转交。
   - 合成调用（indy 降级、ObjectMethods、反射分派臂、引导映像、main 钩子）不经字节码 invoke 指令，必须在生成点逐一登记。漏登记表现为 E0599 / E0425（找不到关联函数）。补登记以 invoke 入口统一登记为主，避免散点。
   - K6：`X__Methods` 的定义与 impl 须留在声明 crate（与方法体同层），不能进标记 crate。孤儿规则允许：trait 本地、类型外来。导入路径须随之改指声明 crate 的 `pub use`。
+- **K3 收尾（10-11 晚，s7-k3 15276d82）：峰值 +24–31% 分解归因、切段漂移修复、trait 展开收窄到 +8%**
+  - **归因（固定切段分解）**：
+    - 成因 1（切段漂移，主因之一）：K3 把文件头全部 `use …__Methods as _;` 无条件保留在声明层文件（`prune_uses` 对匿名导入不作单名剪枝）。D8 建图按 `crate::` 路径扫全文件 → 每条匿名导入都是类→类边；钉底文件（伴生宿主、手写引用类）的导入边级联把闭包拉进底段：HelloWorld 底段 342→476 类、DeepCopy 1895→2458（权重也计入这些行：两例底段分别 1 186 行 / 65 KB、11 363 行 / 638 KB）。模拟器同期失配（实际 {0:2326} vs 复现 {0:2122}）：`as _` 别名在 `local` 表互相覆盖。
+    - 成因 2（trait 展开，主因之二）：每类成员签名在 trait 声明 + trait impl 各一份。rustc 分段剖面（`-Z time-passes`，本机，修复前口径基线→修复前）：expand_crate 351→426 MB、type_check_crate 696→837、MIR_borrow_checking 877→1012、monomorphization graph walk 1032→1193、generate_crate_metadata 1052→1202——全管线抬升，是签名双份 + trait 项进 crate 元数据的结构性成本。
+    - 成因 3（次要）：匿名导入行的名称解析（修复后底段仍 538 行 / 30 KB）。
+  - **修复（15276d82，三个成分）**：
+    1. 声明层文件头匿名导入按词剪枝：`use crate::…::X__Methods as _;` 同单名规则——词干 `X` 出现在声明层文本（属性串 / 签名 / 反射分派尾巴）才保留。纯外壳文件的声明层跨类方法调用全部出自宏生成外壳，所指类名必在属性串或签名里，按词剪枝不漏。
+    2. 留体文件精确保留：留在声明层的方法体（泛型类整类、wrapper 上下文体、不可函数化体）按推断类型解析方法调用，接收者类名可不在文本中（实测例：`concurrent_hash_map_tree_bin.rs` 的 `_t1.compareTo(_t3)`，全文件无 `String` 词），词剪枝不安全——剥体计划（宏 `plan.rs` `StayBodies`）给出留体 fn 的 (java_method name, descriptor)，生成器按方法体发射前后差分出它所需的方法 trait（`ProjectState::method_traits`），拆层时按名单精确保留；缺属性的留体 fn 退全保留。中间测点：只做成分 1 而留体文件全保留时底段 370 类（多拉 28 类），成分 2 把它收回基线。
+    3. 内部成员留固有 impl：字段访问器（`__get_*` / `__set_*`）、`_init_not_null`、`__init_on` 不再入 trait——它们的跨 crate 调用点都在实现层或对本类，固有即可解析；trait 项省一份签名（底段 trait 成员 11 073 → 7 891，−29%）。K6 搬 struct 后固有失效，并入 K6 前置项（见下）。
+    4. 模拟器 `decl_scc_graph.py`：匿名导入按 D8 的 `crate::` 路径无条件建边（`as _` 别名不再互相覆盖），复现与实际分段一致。
+  - **修复后实测（本机 dev，32 核 / 120 GB，预热依赖后单 crate 重建 `/usr/bin/time` %M KB；基线 9baa7c22 → K3 2e310b56 → 修复 15276d82；切段与基线逐类一致：HelloWorld 底段 341 / 上段 237）**：
+
+    | crate（HelloWorld） | 基线 | K3 | 修复 | 修复 vs 基线 |
+    |---|---:|---:|---:|---:|
+    | java_base_decl（底段） | 1 031 756 | 1 295 500 | 1 111 940 | +7.8% |
+    | java_base_decl_1 | 544 928 | 422 244 | 588 680 | +8.0% |
+    | java_base_body_1 / _2 | 865 604 / 1 061 384 | 887 232 / 1 021 992 | 878 384 / 1 017 132 | +1.5% / −4.2% |
+
+  - **剩余与结论**：底段 / 上段 +7.8% / +8.0%，仍超 ±5%；body crate 达标。剩余成分是 java 方法外壳的 trait 展开（底段 7 891 项 trait 成员中 7 453 项为方法外壳，94%）：这正是 K6 需要的跨 crate 可读成员面，「每类一个全量方法 trait」形态内不可再减。进一步压低的已量化选项（供 K4 / 用户取舍，本轮未实施）：
+    1. `__class_init`（底段 90 项）与静态字段访问器（348 项）也留固有 impl：−5.6% trait 项，估 −0.5–1.5 pp；再扩大 K6 前置项。
+    2. 选择性 trait：只为「方法被跨文件调用」的类生成 trait（HelloWorld 底段实测 75% 的类被用到，25% 可省，估 −2–3 pp）；需两遍发射（全部文件的方法 trait 账本汇总后回写块内属性再触发展开），正确性风险在合成调用登记的完备性（漏登记即 E0599）。
+    3. 1+2 叠加估到 +4–5%（临界达标）。
+    4. 或修订 K3 过渡期阈值（±5% → ±10%）：D8 自身的 ≤1.3 GB 段目标不受影响（修复后 HelloWorld 底段约 1.11 GB < 1.3 GB；DeepCopy 底段基线本就 4.15 GB 超 1.3 GB，归 K5/K7 底段收窄）。
+  - **验证状态**：
+    - 本机：`cargo check --release --tests` 过；宏单测 26/26（`--features plan`）与缺省 21/21、emit layers 4/4；生成树工作区构建 0 错（HelloWorld、TestDynamicProxy，dev）。生成树对照（基线 9baa7c22 对 15276d82，HelloWorld 全部 1 045 个 `java_class!` 块按「层 + 相对路径」归一后逐字节一致，差异全部是文件头 `use crate::` 行）。
+    - 本机 CollectorsDemo（同法）：底段 1 108 680 → 1 191 856（+7.5%）、上段 524 224 → 571 276（+9.0%）、body 两段 +2.8% / +1.5%。
+    - 服务器单测 B（`s7k3-fix1-utB`，sg2）：workspace 除 driver 全部 + driver bins/各 CLI + 宏测试共 37 个测试目标 637 通过 0 失败（含 `no_jdk_literals` / `jdk_literal_lint`、emit layers / method_trait / decl_plan 新测试）。
+    - 服务器（其余作业 `s7k3-fix1-*`，进行中）：复测（同机基线 vs 修复 × HelloWorld / CollectorsDemo / DeepCopy 逐 crate 峰值 + 全工作区构建，即 DeepCopy f3368359 后复测）、单测 A（closure_cli）、DeepCopy release 二进制对照 batch-1011k。结果见下「K3 收尾服务器数据」。
+  - **K6 前置项（K3 相关，搬 struct 进标记 crate 前必须处理）**：std 同名成员（E0034）与接口载体成员（固有）之外，新增本轮留固有的字段访问器、`_init_not_null`、`__init_on`——须改名经 `__`-前缀内部名转发、并入方法 trait，或由 K6 的标记层机制另行承载。**前两类已于 10-11 完成（见下「K6 前置项完成」节）**；第三类与载体内 `is_jvm_null` / `__default_*` 留作 K6 标记层机制处理。
+  - **待验证清单（交主会话合批）**：七例抽查集（HelloWorld、CollectorsDemo、DeepCopy、TestDynamicProxy、TestAnnoReflect、TestSerialLookupPairing、TestXmlTransform）＋相关例（InheritanceChain、InterfaceDispatch、LambdaBasic、StreamDemo、TestCollections、TestGenerics、Polymorphism、TestZonedDateTime、TestArrayList）；生成树对照（`compare_trees.sh`，基线 9baa7c22 对 15276d82：预期方法体文本不变、差异只在文件头匿名导入行与 D8 段归属复原）。
+- **K3 收尾交接（10-12 晨，子代理到点停止；作业在跑，结果收集法如下）**：
+  - `s7k3-fix2-15276d82`（jp2，复测：基线 9baa7c22 vs 15276d82 × HelloWorld / CollectorsDemo / DeepCopy 逐 crate `/usr/bin/time` 峰值 + 全工作区构建 + 模拟器分段复现）：完成后日志尾有 `===== mem.txt =====` 全表（`cluster_results/job/<tag>/01_jp2.log`），`--fetch` 已声明，`build/k3fix.tgz` 会落到结果目录。首个同名作业 `s7k3-fix1-15276d82` 跑完 rc=0（44 min）但未取回产物（spot 目录已清理），数字以 fix2 为准。
+  - `s7k3-fix1-utA`（us1，closure_cli）：`01_us1.log` 流式收 `test result` 行；跳过项为 `closure_independent_of_hash_seed / of_order`（确定性单测，按 12.3 不在本机跑）。
+  - `s7k3-fix2-rel`（kr2，DeepCopy release 二进制对照 batch-1011k，`CARGO_BUILD_JOBS=1`）：`s7k3-fix1-rel`（JOBS=2）在 15G 服务器 OOM（限 11891M）——本分支基线 9baa7c22 不含 E1（build-memsafe，在 batch-1011h 才合入）；JOBS=1 重试中，若仍 OOM 改在 dev 跑或合入 E1 后复测。
+  - 数字回填位置：本节「K3 收尾」的实测表与「K3 收尾服务器数据」（待建小节）。预期：服务器同机比值与本机一致（底段 / 上段约 +8%、body ±5% 内）；若出入大于 2 pp，优先核对两例的段成员表（模拟器复现行）。
+  - 主会话合批抽查清单见上「待验证清单」。
+- **K6 前置项完成（10-11，s7-k3 8efa6444 + 5c3c8bdc）**：std 同名方法与接口载体方法移入方法 trait，交付于 s7-k3 分支（K3 之后两提交），未合入。
+  - **盘点结论**：
+    - std 同名成员的实际命中面（HelloWorld 闭包实测 + 名单核对）：`clone`（类覆盖 `Object.clone`：HashMap / Hashtable / ArrayList / HashSet / Locale / Properties / Enum / Thread / MemberName / Reference / AbstractMap / HashtableEntry 等，HelloWorld 闭包 12 类、DeepCopy 更广）、`eq`（`Objects.eq` / `AbstractMap.eq` / `Collections.eq` 等静态）、`from`（`Random.from` 静态工厂）；其余 8 个名单名（ne / into / to_owned / try_from / try_into / clone_from / clone_into / default）在语料未命中（`default` 是 Java 关键字，不可能出现）。`hash` 不在名单——wrapper 未实现 std `Hash`，无 E0034 面（K3 全量已验证）。
+    - 接口载体成员形态：载体固有 impl 含 static 方法、static 字段访问器、`__class_init`、实例分派（`__IfaceRef::enter` 现取视图）、继承转发（`inherited_from`）与 default 体持有（`__default_<m>`）；接口文件整体属声明层（`Layer::Body` 为空）。
+  - **改动**：
+    1. std 同名成员（11 名单，`STD_COLLISIONS` 口径）统一改 `__` 前缀内部名（`clone` → `__clone`）后移入方法 trait：单一规则 `ty::ident::escape_std_trait_method`，定义侧（input/plan `member_rust_name`、emit/vtable `member_rust_name`（槽位名）、ty/sig_types `receiver_member_name` / `interface_member_local_name` / `interface_declared_name`、class_writer inherit / super_inherit / methods / stub、method/sig 兜底）与调用侧（instr/naming 非重载原名分支）同一口径；根类（手写，含 `Object__clone_base`）与带描述符后缀的重载名不改；反射分派臂按 Java 名匹配、臂体调内部名，行为不变。宏 `STD_COLLISIONS` 保留为手写块兜底（改名后的标识符不在名单，正常入 trait）。
+    2. 接口载体成员移入 `I__Methods`（宏 interface.rs 经 `method_trait::split_parts`，与类同形）：static 方法、static 字段访问器、`__class_init`、实例分派与继承转发；`const fn`（`__from_image`）、关联常量（`BINARY_NAME` / `__IMAGE_NULL`）、`is_jvm_null`、`__default_*` 留固有（身份面 / 内部名，K6 搬 struct 后由标记层机制另行承载——与 K3 留固有的字段访问器、`_init_not_null`、`__init_on` 同类遗留，见下）。
+    3. 登记（漏登记即 E0599 / E0432）：`record_member` 受理接口（只登记 owner——载体的继承转发外壳在 owner 上，不沿超接口链走）；phase2 `inherited.rs` / `iface_impls.rs` 的转发体发射点、`head.rs` `init_interfaces`（宏生成的 `<I>::__class_init()` 触发）、`resolve_static_field`（getstatic 常量池 owner 可以是引用它的类 / 实现类，访问器在声明接口上——实测 `Signal$NativeHandler.toString` 的 `SIG_IGN`）、boot_image、entry.rs 钩子类清单同步放开接口。
+    4. D8 权重不计接口方法 trait 匿名导入行（decl_side `iface_methods_import_bytes`）：接口文件不拆层、导入行必然保留，计入权重会把纯名称解析开销（K3 归因的次要成分）按 240 B/MB 斜率推高上段预算——未扣时 DeepCopy 有一类跨段（decl_1 → decl_2），扣后三例切段与 70dd51f8 逐类一致；对无接口导入行（K3 及更早）的树是零操作。类侧匿名导入口径不变。
+  - **验证（本机 dev）**：
+    - 宏单测 23（缺省）/ 28（`plan`），新增 `renamed_std_member_moves_to_trait`、`carrier_members_on_methods_trait`；生成器单测 ty 24 / input 65 / instr 20 / method 22 / emit 95（含新增 `iface_methods_import_bytes_excluded`）、`jdk_literal_lint` / `no_jdk_literals` 各 2——全绿。
+    - 生成树对照（基线 70dd51f8 同 closure 重发射）：HelloWorld / CollectorsDemo / DeepCopy 三例全部 crate 的文件集合逐类一致（切段不漂移）；文件差异仅为接口 `__Methods` 匿名导入行 + `clone`/`eq`/`from` 的 `__` 前缀改名（声明与调用点，DeepCopy 全树 80 处改名调用点，含用户源 `p1.__clone()` 与反射分派臂）。三例工作区 `cargo check` 0 错；HelloWorld / CollectorsDemo / DeepCopy / TestSerialLookupPairing 四例经 rava-link 运行，输出与 JVM 期望逐字一致（DeepCopy 覆盖用户 clone、反射 clone 臂与序列化深拷贝；全树差异逐行核对只含 `__Methods` 导入行与三名的前缀改名）。
+    - 服务器作业（tag `s7k6-*`）：
+      - `s7k6-macro` ✅（jp2）：宏单测 23（缺省）/ 28（`plan`）全过。
+      - `s7k6-seed` ✅（jp2，rc=0，`scripts/diag/s7k6_seed_sets.sh`）：四例 × 种子 0/1/2 的类 / 方法 / 反射成员集合与基线 70dd51f8 逐项全同（HelloWorld 580/1897/61、CollectorsDemo 619/2022/62、DeepCopy 3001/16425/977、TestSerialLookupPairing 3003/16410/971；日志尾 `seed-sets: ALL-IDENTICAL`，全表在 `cluster_results/job/s7k6-seed/`）。
+      - `s7k6-uta`（us1，closure_cli 全量，收尾时在跑）：结果看法——`cluster_results/job/s7k6-uta/01_us1.log` 收 `test result` 行（跳过项 `closure_independent_of_hash_seed` / `of_order` 属确定性重单测，服务器上照跑）；rc 见 summary.json。
+      - `s7k6-peak4`（三例逐 crate 单独重建峰值对基线 70dd51f8，方法同 s7k3-fix2，`scripts/diag/s7k6_peak.sh`）：**交回时在跑，数字待回收**。前两跑（`s7k6-peak` / `s7k6-peak2`）因脚本 cwd 漂移早退、`s7k6-peak3` 因基线 worktree 路径与同服务器 seed 作业共用而冲突——均已修复（479f3745 / 4d28aa29）；peak3 已产出**新侧三例全量逐 crate 数据**（HelloWorld：decl 底段 1 124 388 KB / decl_1 584 456 / body_1 907 960 / body_2 1 071 044；DeepCopy 底段与全部上段 / body 段齐全，见 `cluster_results/job/s7k6-peak3/01/build/s7k6-peak/rows.txt`）。回收法：`cluster_results/job/s7k6-peak4/`（fetch 已声明 summary.txt 与 rows.txt，逐 crate 表在日志尾与 `01/build/s7k6-peak/summary.txt`），判定口径 = 声明 crate 峰值对 70dd51f8 不超 +10%。
+  - **遗留**：K3 留固有的字段访问器（`__get_*` / `__set_*`）、`_init_not_null`、`__init_on` 与本轮留固有的 `is_jvm_null`、`__default_*`、载体关联常量——K6 搬 struct 后固有跨 crate 失效，须由 K6 的标记层机制另行承载（或并入方法 trait，届时权衡 trait 项体量 vs 标记层）。
+  - **待验证清单（交主会话合批）**：K3 七例集（HelloWorld、CollectorsDemo、DeepCopy、TestDynamicProxy、TestAnnoReflect、TestSerialLookupPairing、TestXmlTransform）＋ K3 相关例（InheritanceChain、InterfaceDispatch、LambdaBasic、StreamDemo、TestCollections、TestGenerics、Polymorphism、TestZonedDateTime、TestArrayList）＋ 本轮新受影响例（PolymorphicCopy——用户直调 clone；ArraysStream、HashMapStream、StreamToUnmodifiableCollections——接口方法重度使用；TestObjectNativeFrames——Object 方法帧）。
 - **K4 及后续方案**（10-11 用户暂停派发新代理，K4 未派，以下为续作入口）：
-  - **K3 收尾**（先做）：完成上面未完成项 1–4，达标后合入；第 5 项并入 K6 前置。
+  - **K3 收尾**：10-11 晚已完成分解归因与两轮修复（15276d82，见上「K3 收尾」节）：切段漂移全部收回（与基线逐类一致）、底段峰值 +24–31% 收窄到 +8%（本机口径）、body crate 达标、DeepCopy 工作区复测与全量单测已发服务器作业。**剩余决策**：~~须用户裁决后合入~~ **已裁决（2026-10-12 用户）：阈值放宽至 ±10%，K3 随下一批合入**（batch-1012 未等 K3；固有 impl 保留 / 选择性 trait 的进一步压缩并入 K6 取舍；s7k3-fix2 三例同机复测 +7.1–9.5% 见上表）。
   - **K4** 运行时基础设施分层：按上表实施。新增两项要求：
     - 标记层基础只含类型与句柄，不含任何 `use …__Methods`；
     - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层。
   - **K5** 类初始化骨架去按类展开：与 K3、K4 无依赖，可与 K3 收尾并行。
-  - **K6** 标记 crate 生成：前提是 K3（含第 5 项改名）、K4、K5。方法 trait 与其 impl 留声明 crate；标记 crate 展开文本不含 `__Methods`。
+  - **K6** 标记 crate 生成：前提是 K3（含第 5 项改名——✅ 已随 K6 前置项完成，std 同名与接口载体成员均已在方法 trait 上）、K4、K5。方法 trait 与其 impl 留声明 crate；标记 crate 展开文本不含 `__Methods`。
   - **K7** D8 共置手写随宿主：独立。注意 K3 增加的 `use` 行改变了按体量切段的结果，模拟器（`decl_scc_sim.py`）的体量口径需同步计入导入行，或改为不计 `use` 行。
   - **K8** 档案验收：按上表；连同 K2 留下的 §4.3 热循环用例、StockTrans 计时一并补测。
 - 下一步：
-  - K3 收尾（未完成项 1–4），然后 K4（运行时基础设施分层）；
+  - K3 收口：服务器作业（s7k3-fix1-*）数字回填 + 用户裁决 ±5%/±10% 阈值后合入；
+  - 然后 K4（运行时基础设施分层）；
   - K5（类初始化骨架）与 K1–K4 互不依赖，可并行派发。

@@ -1,3 +1,4 @@
+use crate::jdk::internal::loader::EmbeddedClassPath__Methods as _;
 use crate::prelude::*;
 use super::embedded_class_path::EmbeddedClassPath;
 

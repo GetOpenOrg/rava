@@ -12,6 +12,7 @@ use classfile::Method;
 use input::plan::CLINIT_FN;
 use input::{MethodPlan, Role, Verdict};
 use ty::ident::safe_ident;
+use ty::ident::escape_std_trait_method;
 use ty::type_map::mangle_name;
 use ty::{ClassInfo, FnSig};
 
@@ -142,7 +143,20 @@ impl Cx<'_, '_> {
             in_vtable_body: spec.in_vtable_body,
             site: spec.site,
         };
-        match bodies.emit_body(self.ctx, &req, &mut state.body_log) {
+        // 本方法体发射前后差分出它所需的方法 trait（§9.9 K3 收尾）：留在声明层的方法体
+        // 按推断类型解析方法调用，拆层时以此账本精确保留匿名导入（不整文件全保留）
+        let before = self.ctx.ty.methods_set();
+        let out = bodies.emit_body(self.ctx, &req, &mut state.body_log);
+        let needs: BTreeSet<String> =
+            self.ctx.ty.methods_set().difference(&before).cloned().collect();
+        if !needs.is_empty() {
+            state
+                .method_traits
+                .entry((self.ci.name().to_string(), e.method.name.clone(), e.method.desc.clone()))
+                .or_default()
+                .extend(needs);
+        }
+        match out {
             Ok(out) => {
                 state.absorb(&out.effects);
                 Ok(Some(FnText { text: out.text, sig: out.sig }))
@@ -203,7 +217,8 @@ fn lambda_rust_name(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method) -> String {
     {
         mangled
     } else {
-        m.name.clone()
+        // 载体 / wrapper 的方法 trait 表面用 `__` 前缀内部名避开 std prelude trait 同名（§9.9 K6 前置项）
+        escape_std_trait_method(&m.name)
     };
     safe_ident(&name.replace("<init>", "new"))
 }

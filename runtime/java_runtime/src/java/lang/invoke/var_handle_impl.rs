@@ -15,6 +15,7 @@
 //! 的读-比-写在字段存储单元内原子完成（引用槽写锁 / 基本类型槽经 Unsafe 统一载体：实例字段
 //! 字 / 双字视图、静态字段写锁）。
 
+use crate::jdk::internal::misc::Unsafe__Methods as _;
 use crate::prelude::*;
 use super::var_handle::VarHandle;
 use super::var_handle_ext::*;

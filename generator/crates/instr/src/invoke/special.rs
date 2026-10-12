@@ -21,6 +21,8 @@ use crate::owner::{interface_special_member_name, resolve_interface_special_targ
 
 /// invokespecial 翻译入口
 pub fn gen_invokespecial(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &CallRef) -> InstrResult<()> {
+    // 合成调用（indy 降级 / 清单入口）同样登记方法 trait（§9.9 K3）
+    crate::method_traits::record_member(&env.ctx, &call.owner, &call.name, Some(&call.desc));
     if call.name == "<init>" {
         ctor::gen_ctor(env, sim, log, call)
     } else {

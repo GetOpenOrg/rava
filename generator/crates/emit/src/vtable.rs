@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use classfile::Method;
-use ty::ident::safe_ident;
+use ty::ident::{escape_std_trait_method, safe_ident};
 use ty::type_map::mangle_name;
 use ty::ClassInfo;
 
@@ -44,12 +44,13 @@ impl<'a> EmitCtx<'a> {
         })
     }
 
-    /// 方法 Rust 名（按接收者 `ci` 的重载态 mangle，不做关键字转义）
+    /// 方法 Rust 名（按接收者 `ci` 的重载态 mangle，不做关键字转义；与 std prelude trait
+    /// 方法同名的成员加 `__` 前缀，与发射块内的 fn 标识符同一口径——§9.9 K6 前置项）
     pub fn member_rust_name(&self, ci: &ClassInfo, m: &Method) -> String {
         if self.ty.method_name_is_mangled(ci, &m.name) {
             mangle_name(&self.manifest.ty, &m.name, &m.desc)
         } else {
-            m.name.clone()
+            escape_std_trait_method(&m.name)
         }
     }
 

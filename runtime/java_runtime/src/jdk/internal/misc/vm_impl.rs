@@ -5,6 +5,9 @@
 //! `initLevel = SYSTEM_BOOTED`、`savedProps` 快照与 `javaLangInvokeInited` 开始，与 HotSpot 同为单一字段。
 //! 残差步骤的构建期档位由启动序列写入同一字段（`[concrete.boot] level`）。
 
+use crate::java::lang::Class__Methods as _;
+use crate::jdk::internal::loader::ClassLoaders__Methods as _;
+use crate::jdk::internal::misc::VM__Methods as _;
 use crate::prelude::*;
 use super::vm::VM;
 

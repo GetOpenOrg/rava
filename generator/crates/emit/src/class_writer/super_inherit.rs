@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 
 use classfile::{acc, Method};
 use ty::ident::safe_ident;
+use ty::ident::escape_std_trait_method;
 use ty::type_map::mangle_name;
 use ty::ClassInfo;
 
@@ -251,7 +252,8 @@ fn user_ancestor_block(
 /// 桥 wrapper 名：与可见方法同名即 mangle；同名同参（仅返回不同）取 `Iface_super_m` 形态唯一名
 fn bridge_wrapper_name(ctx: &EmitCtx<'_>, visible: &[&Method], b: &Method, owner_bin: &str) -> String {
     if !visible.iter().any(|m| m.name == b.name) {
-        return b.name.clone();
+        // 方法 trait 表面用 `__` 前缀内部名避开 std prelude trait 同名（§9.9 K6 前置项）
+        return escape_std_trait_method(&b.name);
     }
     if visible.iter().any(|m| m.name == b.name && param_part(&m.desc) == param_part(&b.desc)) {
         if let Some(owner) = ctx.ty.reg.get(owner_bin) {

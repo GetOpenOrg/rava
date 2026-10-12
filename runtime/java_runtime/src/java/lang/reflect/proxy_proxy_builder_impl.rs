@@ -4,6 +4,8 @@
 //! 的代理类即 VM 支持类 `Proxy$Dyn`（newProxyInstance 内建，不经 defineProxyClass 登记），
 //! 判定按类身份应答（与 vm_intrinsics.toml 中 newProxyInstance 同一准入）。
 
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::reflect::Proxy_ProxyBuilder__Methods as _;
 use crate::prelude::*;
 use super::proxy_proxy_builder::Proxy_ProxyBuilder;
 use crate::java::lang::Class;

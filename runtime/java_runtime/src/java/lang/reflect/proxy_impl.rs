@@ -5,6 +5,8 @@
 //! 类定义：全部代理实例由 VM 支持类 `Proxy$Dyn`（字节码翻译）承载，实例携带接口列表。
 //! 其余 Proxy 公开方法（isProxyClass / getInvocationHandler）按字节码翻译。
 
+use crate::java::lang::reflect::Proxy_Dyn__Methods as _;
+use crate::java::lang::reflect::Proxy__Methods as _;
 use crate::prelude::*;
 use super::proxy::Proxy;
 use super::Proxy_Dyn;

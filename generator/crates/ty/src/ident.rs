@@ -25,6 +25,25 @@ pub fn safe_ident(name: &str) -> String {
     s
 }
 
+/// wrapper / 接口载体已实现的 std prelude trait（及 blanket impl）的方法名
+///（S7 计划 §9.9 K6 前置项；宏侧重名防护名单 `rava_macros_core … method_trait::STD_COLLISIONS` 同源）：
+/// 这类 Java 方法名移入方法 trait `X__Methods` 后，调用点与 `Clone::clone` / `From::from` 等
+/// prelude trait 方法构成 E0034 歧义，定义侧与调用侧统一改为 `__` 前缀内部名（`clone` → `__clone`）。
+/// 带描述符后缀的重载名（`clone_xxx`）不在此列——不与 std trait 方法同名。
+pub const STD_TRAIT_METHOD_NAMES: [&str; 11] = [
+    "clone", "clone_from", "clone_into", "to_owned", "eq", "ne", "default", "from", "into", "try_from",
+    "try_into",
+];
+
+/// 方法 trait 表面上的成员名：与 std prelude trait 方法同名时加 `__` 前缀
+pub fn escape_std_trait_method(name: &str) -> String {
+    if STD_TRAIT_METHOD_NAMES.contains(&name) {
+        format!("__{name}")
+    } else {
+        name.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,5 +55,13 @@ mod tests {
         assert_eq!(safe_ident("type"), "type_");
         assert_eq!(safe_ident("yield"), "yield_");
         assert_eq!(safe_ident("value"), "value");
+    }
+
+    #[test]
+    fn std_trait_method_names_get_prefix() {
+        assert_eq!(escape_std_trait_method("clone"), "__clone");
+        assert_eq!(escape_std_trait_method("from"), "__from");
+        assert_eq!(escape_std_trait_method("clone_int"), "clone_int");
+        assert_eq!(escape_std_trait_method("hashCode"), "hashCode");
     }
 }

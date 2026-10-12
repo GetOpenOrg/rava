@@ -35,6 +35,7 @@ use self::layout::{instance_layout, Slot};
 use super::fs::Writer;
 use crate::ctx::EmitCtx;
 use crate::error::{EmitError, Result};
+use crate::imports::fill::METHODS_SUFFIX;
 use crate::phase2::uses::use_path;
 use crate::phase2::Emissions;
 
@@ -59,6 +60,8 @@ pub(crate) struct Plan<'c, 'a> {
     pub memos: BTreeMap<u32, Vec<(String, String, IVal)>>,
     /// 以别的元素静态类型被引用的映像数组（各取一个擦除协变视图 `BOOT_VIEW_{i}`）
     pub views: RefCell<BTreeSet<u32>>,
+    /// 文本中出现的生成类（类型 / 表达式位置）：其方法 trait `X__Methods` 须匿名导入（§9.9 K3）
+    pub methods: RefCell<BTreeSet<String>>,
     pub layouts: BTreeMap<String, Vec<Slot>>,
     /// 类 → 实现层模块路径（存储类型 `X__inner` 随存储层进实现 crate）
     pub homes: &'c BTreeMap<String, String>,
@@ -93,6 +96,7 @@ impl<'c, 'a> Plan<'c, 'a> {
             mat,
             memos,
             views: RefCell::new(BTreeSet::new()),
+            methods: RefCell::new(BTreeSet::new()),
             layouts: BTreeMap::new(),
             homes,
             seg: BTreeMap::new(),
@@ -180,13 +184,31 @@ impl<'c, 'a> Plan<'c, 'a> {
         }
     }
 
+    /// 登记类的方法 trait 使用：由字节码生成的类与接口载体（宏为其生成 `X__Methods`；
+    /// 接口载体成员自 §9.9 K6 前置项起同样在方法 trait 上）
+    fn use_methods(&self, cls: &str) {
+        let generated = self.ctx.class(cls).is_some()
+            && !self.ctx.is_opaque(cls)
+            && self.ems.get(cls).is_some_and(|em| !em.handwritten);
+        if generated {
+            self.methods.borrow_mut().insert(cls.to_string());
+        }
+    }
+
+    /// 方法 trait 导入行（`use <类路径>__Methods as _;`）
+    pub fn methods_imports(&self) -> String {
+        self.methods.borrow().iter().map(|c| format!("use {}{} as _;\n", self.path(c), METHODS_SUFFIX)).collect()
+    }
+
     /// 类的完整类型（类型位置）
     pub fn full_ty(&self, cls: &str) -> String {
+        self.use_methods(cls);
         format!("{}{}", self.path(cls), self.targs(cls))
     }
 
     /// 类的表达式位置路径（泛型类带 turbofish）
     pub fn expr_path(&self, cls: &str) -> String {
+        self.use_methods(cls);
         let t = self.targs(cls);
         if t.is_empty() {
             self.path(cls)
@@ -287,6 +309,7 @@ pub fn write_boot_image(
     let image = values::image_struct(&plan)?;
     let tabs = tables::tables(&plan)?;
     let start = start::start_fn(&plan, &image.residual, &tabs)?;
+    let views = values::views_text(&plan);
     let text = format!(
         "//! 构建期引导映像（生成，见计划 2026-10-05-boot-image-evaluator §5.5.2）\n\
          #![allow(non_snake_case, unused_imports, unused_variables, unused_parens, clippy::all)]\n\
@@ -294,8 +317,8 @@ pub fn write_boot_image(
          use crate::obj_ref::{{__ImageObj, __image_register}};\n\
          use crate::array::__ImageArr;\n\
          use crate::image_rt as rt;\n\
-         use ::std::cell::UnsafeCell;\n\n{}\n{}\n{}\n{}",
-        image.text, values::views_text(&plan), tabs.text, start
+         use ::std::cell::UnsafeCell;\n{}\n{}\n{}\n{}\n{}",
+        plan.methods_imports(), image.text, views, tabs.text, start
     );
     w.write(&out_dir.join(&plan.root).join("src").join(format!("{MODULE}.rs")), &text)?;
     Ok(())

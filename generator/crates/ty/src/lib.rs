@@ -91,6 +91,18 @@ impl<'a> TyCtx<'a> {
         }
     }
 
+    /// 登记调用点用到类 `binary` 的方法 trait（`X__Methods`，匿名导入；无作用域时无操作）
+    pub fn use_methods(&self, binary: &str) {
+        if let Some(s) = self.scope {
+            s.methods_trait(binary);
+        }
+    }
+
+    /// 方法 trait 记录快照（无作用域时空集）：按方法体发射前后差分出该方法体所需的导入
+    pub fn methods_set(&self) -> std::collections::BTreeSet<String> {
+        self.scope.map(|s| s.methods_set()).unwrap_or_default()
+    }
+
     /// 结构化引用集按 binary 序预认领（无作用域时无操作）
     pub fn preclaim<'s>(&self, bins: impl IntoIterator<Item = &'s str>) {
         if let Some(s) = self.scope {

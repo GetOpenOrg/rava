@@ -1,3 +1,8 @@
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::IllegalAccessException__Methods as _;
+use crate::java::lang::InstantiationException__Methods as _;
+use crate::java::lang::reflect::Field__Methods as _;
+use crate::jdk::internal::misc::Unsafe__Methods as _;
 use crate::prelude::*;
 use super::unsafe_::Unsafe;
 use crate::java::lang::Class;

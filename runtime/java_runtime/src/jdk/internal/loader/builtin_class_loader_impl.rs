@@ -1,3 +1,6 @@
+use crate::java::util::Collections__Methods as _;
+use crate::jdk::internal::loader::BuiltinClassLoader__Methods as _;
+use crate::jdk::internal::loader::EmbeddedClassPath__Methods as _;
 use crate::prelude::*;
 use super::builtin_class_loader::BuiltinClassLoader;
 use super::EmbeddedClassPath;

@@ -1,5 +1,7 @@
 //! VM 支持类 `jdk/internal/reflect/SerializationConstructorAccessorDyn` 的 native（FS-R R3）。
 
+use crate::java::lang::Class__Methods as _;
+use crate::jdk::internal::reflect::SerializationConstructorAccessorDyn__Methods as _;
 use crate::prelude::*;
 use super::serialization_constructor_accessor_dyn::SerializationConstructorAccessorDyn;
 use crate::java::lang::Class;

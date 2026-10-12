@@ -4,6 +4,7 @@
 //! `Continuation.yield` 卸载（有栈协程，`jdk/internal/vm/continuation_impl.rs`），被 pin 时按字节码
 //! `parkOnCarrierThread` 在载体上阻塞。
 
+use crate::java::lang::VirtualThread__Methods as _;
 use crate::prelude::*;
 use super::virtual_thread::VirtualThread;
 

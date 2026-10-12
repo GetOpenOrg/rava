@@ -1,3 +1,4 @@
+use crate::java::io::FileCleanable__Methods as _;
 use crate::prelude::*;
 use super::file_cleanable::FileCleanable;
 use crate::jdk_resources;

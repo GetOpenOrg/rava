@@ -1,3 +1,12 @@
+use crate::java::lang::AssertionStatusDirectives__Methods as _;
+use crate::java::lang::ClassFormatError__Methods as _;
+use crate::java::lang::ClassLoader__Methods as _;
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::LinkageError__Methods as _;
+use crate::java::lang::NoClassDefFoundError__Methods as _;
+use crate::java::lang::UnsupportedClassVersionError__Methods as _;
+use crate::java::nio::ByteBuffer__Methods as _;
+use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::prelude::*;
 use super::class_loader::ClassLoader;
 

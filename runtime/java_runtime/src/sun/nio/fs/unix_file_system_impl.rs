@@ -1,5 +1,6 @@
 //! `sun/nio/fs/UnixFileSystem` 手写伴生：仅 ACC_NATIVE 方法（其余由字节码翻译）。
 
+use crate::sun::nio::fs::UnixFileSystem__Methods as _;
 use crate::prelude::*;
 
 impl super::unix_file_system::UnixFileSystem {

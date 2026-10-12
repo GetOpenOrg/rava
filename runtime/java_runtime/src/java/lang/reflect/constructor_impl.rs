@@ -2,6 +2,8 @@
 //! reflect_invoke 构造，FS-R R2）。newInstance 与注解查询族已回到 JDK 字节码（FS-R R2 / R4b）。
 //! 挂载键：(clazz, 描述符)——描述符参数段从 parameterTypes 还原。
 
+use crate::java::lang::Class__Methods as _;
+use crate::java::lang::reflect::Constructor__Methods as _;
 use crate::prelude::*;
 use super::Constructor;
 use crate::java::lang::Class;

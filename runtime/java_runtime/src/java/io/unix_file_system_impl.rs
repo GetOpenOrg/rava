@@ -1,3 +1,7 @@
+use crate::java::io::FileSystem__Methods as _;
+use crate::java::io::UnixFileSystem__Methods as _;
+use crate::java::io::File__Methods as _;
+use crate::java::io::IOException__Methods as _;
 use crate::prelude::*;
 use super::unix_file_system::UnixFileSystem;
 use super::file::File;

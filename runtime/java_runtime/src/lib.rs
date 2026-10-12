@@ -33,6 +33,7 @@ pub mod proxy_dyn;
 pub mod sun;
 pub mod vm_constants;
 
+use crate::java::lang::Shutdown__Methods as _;
 pub use array::JArray;
 pub use error::{JvmError, Result};
 pub use java::lang::Object;

@@ -8,6 +8,23 @@
 //! 本文件构造 VM 异常对象的 fn 是 VM 规则的落地（闭包分析器 `engine/vmrules.rs`：规则 ID + JVMS 依据，
 //! 由可达字节码中的触发指令激活），其中对已翻译 Java 方法的调用按手写体调用点推断。
 
+use crate::java::lang::ArithmeticException__Methods as _;
+use crate::java::lang::ArrayIndexOutOfBoundsException__Methods as _;
+use crate::java::lang::ArrayStoreException__Methods as _;
+use crate::java::lang::ClassCastException__Methods as _;
+use crate::java::lang::CloneNotSupportedException__Methods as _;
+use crate::java::lang::ExceptionInInitializerError__Methods as _;
+use crate::java::lang::IllegalArgumentException__Methods as _;
+use crate::java::lang::IllegalMonitorStateException__Methods as _;
+use crate::java::lang::IndexOutOfBoundsException__Methods as _;
+use crate::java::lang::InterruptedException__Methods as _;
+use crate::java::lang::NegativeArraySizeException__Methods as _;
+use crate::java::lang::NoClassDefFoundError__Methods as _;
+use crate::java::lang::NullPointerException__Methods as _;
+use crate::java::lang::OutOfMemoryError__Methods as _;
+use crate::java::lang::StackOverflowError__Methods as _;
+use crate::java::lang::StringIndexOutOfBoundsException__Methods as _;
+use crate::java::lang::Throwable__Methods as _;
 use crate::java::lang::{Object, ObjectVTable, String, Throwable};
 
 /// 被抛出的 Java 异常对象（运行时类任意，静态视图为 `Object`）。

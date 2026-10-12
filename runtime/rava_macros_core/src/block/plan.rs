@@ -12,6 +12,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use super::gen::context::augment_generic_bounds;
 use super::gen::GenContext;
 use super::moved::plan_facts;
+use super::util::attr_str;
 use super::parse::{ClassInput, ClassMeta, FnItem};
 
 /// 一处剥体：在 `attr_at` 插入 `#[rava_moved = "<fact>"] `，`body`（`{ … }` 含花括号）换成 `;`
@@ -41,22 +42,55 @@ fn item_start(f: &FnItem) -> usize {
 /// `inner` 是 `java_class! { … }` 花括号内的文本（不含花括号）。
 /// 接口、泛型类与无可下沉体的类返回空表。
 pub fn decl_elisions(inner: &str) -> Result<Vec<Elision>, String> {
+    decl_plan(inner).map(|(e, _)| e)
+}
+
+/// 声明层留有的方法体（§9.9 K3 收尾）
+#[derive(Debug, PartialEq, Eq)]
+pub enum StayBodies {
+    /// 无：全部方法体可下沉
+    None,
+    /// 留在声明层的 fn（java_method name, descriptor）：生成器按此差分出精确的方法 trait
+    /// 导入需求（`ProjectState::method_traits`），替代整文件保留全部匿名导入
+    Fns(Vec<(String, String)>),
+    /// 某条留体 fn 缺 java_method 属性、无法按名差分（保守：整文件保留全部匿名导入）
+    Unknown,
+}
+
+/// 剥体计划 + [`StayBodies`]：有体且不可下沉（wrapper 上下文 / 不可函数化，`moved_fact`
+/// 为 None）的 fn 原样留在声明层。这类体的方法调用按推断类型解析，接收者类名可以不在文本
+/// 中出现，文件头的方法 trait 匿名导入（§9.9 K3）不能按词剪枝（拆层 §7.5.4 #3）。
+pub fn decl_plan(inner: &str) -> std::result::Result<(Vec<Elision>, StayBodies), String> {
     let out = compute(inner);
     proc_macro2::extra::invalidate_current_thread_spans();
     out
 }
 
-fn compute(inner: &str) -> Result<Vec<Elision>, String> {
+fn compute(inner: &str) -> std::result::Result<(Vec<Elision>, StayBodies), String> {
     let ts = TokenStream2::from_str(inner).map_err(|e| format!("词法：{e}"))?;
     let input: ClassInput = syn::parse2(ts).map_err(|e| format!("解析：{e}"))?;
     let meta = ClassMeta::from_attrs(&input.attrs).map_err(|e| format!("类属性：{e}"))?;
     if meta.is_interface {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), StayBodies::None));
     }
     let generics = augment_generic_bounds(&input.generics);
     let ctx = GenContext::build(&input, meta, generics);
+    let facts = plan_facts(&ctx);
+    let sink: std::collections::HashSet<usize> = facts.iter().map(|(i, _)| *i).collect();
+    // 不可下沉的有体 fn（wrapper 上下文 / 不可函数化）原样留在声明层
+    let mut stay = Vec::new();
+    let mut unknown = false;
+    for (i, f) in input.fns.iter().enumerate() {
+        if f.block.is_none() || sink.contains(&i) {
+            continue;
+        }
+        match (attr_str(&f.attrs, "name"), attr_str(&f.attrs, "descriptor")) {
+            (Some(n), Some(d)) => stay.push((n, d)),
+            _ => unknown = true,
+        }
+    }
     let mut out = Vec::new();
-    for (i, m) in plan_facts(&ctx) {
+    for (i, m) in facts {
         let f = &input.fns[i];
         let Some(block) = &f.block else { continue };
         let open = block.brace_token.span.open().byte_range().start;
@@ -64,7 +98,14 @@ fn compute(inner: &str) -> Result<Vec<Elision>, String> {
         out.push(Elision { attr_at: item_start(f), body: open..close, fact: m.as_str() });
     }
     out.sort_by_key(|e| e.attr_at);
-    Ok(out)
+    let stay = if unknown {
+        StayBodies::Unknown
+    } else if stay.is_empty() {
+        StayBodies::None
+    } else {
+        StayBodies::Fns(stay)
+    };
+    Ok((out, stay))
 }
 
 /// 按计划改写块内文本：插标注、体（连同其前空白）换 `;`（计划按 `attr_at` 升序、互不重叠）
@@ -152,6 +193,33 @@ mod tests {
         let b = decl_expansion_normalized(&elided).unwrap();
         assert_eq!(a, b);
         assert!(!a.contains("compile_error"), "{a}");
+    }
+
+    /// 剥体计划同时报告「留在声明层的有体 fn」（按 java_method 名 + 描述符差分导入需求）：
+    /// 可全下沉的类为 None；泛型类不剥体（有体留在声明层，方法调用按推断类型解析）→ Some(键集)
+    #[test]
+    fn decl_plan_flags_bodies_left_in_decl() {
+        let (plan, stay) = decl_plan(CLASS).unwrap();
+        assert!(matches!(stay, StayBodies::None));
+        assert_eq!(plan.len(), 3);
+        let generic = r#"
+    #[binary_name = "a/L"]
+    pub struct L<E> { pub n: i32 }
+    impl L<E> {
+        #[java_method(name = "m", descriptor = "()I", access = "public")]
+        pub fn m(&self) -> Result<i32> { Ok(0) }
+        #[java_method(name = "sib", descriptor = "()I", access = "public")]
+        pub fn sib(&self) -> Result<i32>;
+    }
+"#;
+        let (plan, stay) = decl_plan(generic).unwrap();
+        assert!(plan.is_empty());
+        assert_eq!(stay, StayBodies::Fns(vec![("m".to_string(), "()I".to_string())]));
+        // 有体 fn 缺 java_method 属性 → 无法按名差分 → Unknown（调用方保守保留全部匿名导入）
+        let attr_m = "#[java_method(name = \"m\", descriptor = \"()I\", access = \"public\")]\n        ";
+        let noattr = generic.replace(attr_m, "");
+        let (_, stay) = decl_plan(&noattr).unwrap();
+        assert!(matches!(stay, StayBodies::Unknown));
     }
 
     /// S7 计划 §9.9 K1：wrapper 只持对象句柄，不含本类视图指针；分派经 `__vt()` 按深度现取

@@ -1,5 +1,6 @@
 //! `jdk/internal/misc/PreviewFeatures` 的 ACC_NATIVE（类 1）。
 
+use crate::jdk::internal::misc::PreviewFeatures__Methods as _;
 use crate::prelude::*;
 use super::preview_features::PreviewFeatures;
 

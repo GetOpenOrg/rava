@@ -2,6 +2,8 @@
 //!
 //! HotSpot `Reflection::invoke_constructor` 的对应物：按声明键经 L3 分派闭包 `<alloc>` + `<init>`。
 
+use crate::java::lang::reflect::InvocationTargetException__Methods as _;
+use crate::jdk::internal::reflect::DirectConstructorHandleAccessor_NativeAccessor__Methods as _;
 use crate::prelude::*;
 use super::direct_constructor_handle_accessor_native_accessor::DirectConstructorHandleAccessor_NativeAccessor;
 use crate::java::lang::reflect::Constructor;

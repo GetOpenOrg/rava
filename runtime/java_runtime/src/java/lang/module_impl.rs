@@ -1,3 +1,7 @@
+use crate::java::lang::IllegalStateException__Methods as _;
+use crate::java::lang::Module__Methods as _;
+use crate::java::lang::NullPointerException__Methods as _;
+use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::prelude::*;
 use super::Module;
 

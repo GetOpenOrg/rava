@@ -7,6 +7,9 @@
 //! 路径落入 `${java.home}` 虚拟树（U14，`crate::jdk_resources`）或句柄为虚拟句柄时改读嵌入数据：
 //! open / openat / close / read / stat / lstat / fstatat / access / dup / opendir / fdopendir / readdir / closedir。
 
+use crate::sun::nio::fs::UnixException__Methods as _;
+use crate::sun::nio::fs::UnixFileAttributes__Methods as _;
+use crate::sun::nio::fs::UnixNativeDispatcher__Methods as _;
 use crate::prelude::*;
 use super::unix_native_dispatcher::UnixNativeDispatcher;
 use super::unix_exception::UnixException;

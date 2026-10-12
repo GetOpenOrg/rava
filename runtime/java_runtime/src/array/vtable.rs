@@ -3,6 +3,7 @@
 //! 非 null 数组是 `__ArrayObj<T>`；null 数组装入 Object 是 `__ArrayNull<T>` 静态哨兵，以元素类型
 //! 应答数组类与 checkcast 探针（null 的身份与任意 null 相同）。
 
+use crate::java::lang::Class__Methods as _;
 use super::*;
 
 /// 数组类（JLS §10.8）：反射创建数组按组件标签，其余按元素类型 T。

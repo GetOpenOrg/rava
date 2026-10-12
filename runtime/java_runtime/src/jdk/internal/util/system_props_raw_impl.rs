@@ -6,6 +6,7 @@
 //! 结果改写映像字符串（计划 2026-10-05-boot-image-evaluator §5.5.2 D3）——下标即类文件常量，
 //! `vmProperties` 的键序与构建期模型（vm_intrinsics.toml `[concrete.boot] vm_props`）一致。
 
+use crate::jdk::internal::util::SystemProps_Raw__Methods as _;
 use crate::prelude::*;
 use super::system_props_raw::SystemProps_Raw;
 

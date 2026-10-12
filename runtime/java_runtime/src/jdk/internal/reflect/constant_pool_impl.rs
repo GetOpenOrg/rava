@@ -6,6 +6,7 @@
 //! getLongAt / getFloatAt / getDoubleAt）。表外索引 → IllegalArgumentException（HotSpot 对
 //! 越界 / 错型索引同）。
 
+use crate::java::lang::Class__Methods as _;
 use crate::prelude::*;
 use super::constant_pool::ConstantPool;
 use crate::java::lang::Class;

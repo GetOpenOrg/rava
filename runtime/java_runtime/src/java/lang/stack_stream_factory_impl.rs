@@ -1,5 +1,6 @@
 //! `java/lang/StackStreamFactory` 的 ACC_NATIVE（类 1）。
 
+use crate::java::lang::StackStreamFactory__Methods as _;
 use crate::prelude::*;
 use super::stack_stream_factory::StackStreamFactory;
 

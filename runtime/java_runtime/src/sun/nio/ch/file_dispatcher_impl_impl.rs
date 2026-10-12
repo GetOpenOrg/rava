@@ -8,6 +8,7 @@
 //! 返回值约定同 JNI（`sun.nio.ch.IOStatus`）：成功为字节数；UNAVAILABLE / INTERRUPTED /
 //! UNSUPPORTED_CASE 为负状态码，由 FileChannelImpl 退回通用拷贝；其余失败抛 IOException。
 
+use crate::sun::nio::ch::FileDispatcherImpl__Methods as _;
 use crate::prelude::*;
 use super::file_dispatcher_impl::FileDispatcherImpl;
 use super::unix_file_dispatcher_impl_impl::{errno, fd_of, io_exception};

@@ -1,3 +1,5 @@
+use crate::java::io::FileDescriptor__Methods as _;
+use crate::java::io::IOException__Methods as _;
 use crate::prelude::*;
 use super::file_descriptor::FileDescriptor;
 

@@ -7,6 +7,8 @@
 //! u64 承载：比较按位形（JDK 浮点 CAS 比较 `floatToRawIntBits` / `doubleToRawLongBits`），
 //! 回装为原生盒（`Object::from(i8/i16/u16/i32/i64/f32/f64/bool)`）。
 
+use crate::java::lang::IllegalStateException__Methods as _;
+use crate::java::lang::UnsupportedOperationException__Methods as _;
 use crate::prelude::*;
 use super::var_handle::VarHandle;
 use crate::reflect_dispatch::{unbox_bool, unbox_char, unbox_f32, unbox_f64, unbox_i32, unbox_i64};

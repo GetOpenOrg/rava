@@ -1,3 +1,4 @@
+use crate::jdk::internal::misc::CDS__Methods as _;
 use crate::prelude::*;
 use super::cds::CDS;
 use crate::java::lang::Class;

@@ -1,6 +1,9 @@
 //! `java/net/Inet4AddressImpl` 的 ACC_NATIVE（类 1，libnet `Inet4AddressImpl.c`）：仅 IPv4 的名字服务。
 //! 生成类落在 `inet4_address_impl_t.rs`（与 Inet4Address 的共置文件同名主干）。
 
+use crate::java::lang::NullPointerException__Methods as _;
+use crate::java::net::Inet4Address__Methods as _;
+use crate::java::net::UnknownHostException__Methods as _;
 use crate::prelude::*;
 use super::{Inet4Address, Inet4AddressImpl, InetAddress};
 use crate::net_posix;

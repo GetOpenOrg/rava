@@ -1,3 +1,4 @@
+use crate::java::lang::String__Methods as _;
 use crate::prelude::*;
 use super::string::String;
 

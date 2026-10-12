@@ -52,6 +52,8 @@ pub struct ScopeState {
     by_name: BTreeMap<String, String>,
     /// 用到的派生名（binary, 后缀），如 `__VTable`、`__m_base`
     derived: BTreeSet<(String, String)>,
+    /// 用到方法 trait（`X__Methods`，宏生成）的类：匿名导入 `use …::X__Methods as _;`，不认领名字
+    methods: BTreeSet<String>,
 }
 
 impl ScopeState {
@@ -63,6 +65,17 @@ impl ScopeState {
     /// 派生名记录（binary 序）：(binary, 后缀)
     pub fn derived(&self) -> impl Iterator<Item = (&str, &str)> {
         self.derived.iter().map(|(b, s)| (b.as_str(), s.as_str()))
+    }
+
+    /// 方法 trait 记录（binary 序）
+    pub fn methods_traits(&self) -> impl Iterator<Item = &str> {
+        self.methods.iter().map(String::as_str)
+    }
+
+    /// 方法 trait 记录快照（按方法体前后差分出「该方法体所需的方法 trait」，§9.9 K3 收尾：
+    /// 留在声明层的方法体按推断类型解析方法调用，其导入不能按词剪枝）
+    pub fn methods_set(&self) -> BTreeSet<String> {
+        self.methods.clone()
     }
 
     /// binary 的显示名（已认领）
@@ -106,6 +119,11 @@ impl NameScope {
         self.lock().clone()
     }
 
+    /// 方法 trait 记录快照
+    pub fn methods_set(&self) -> BTreeSet<String> {
+        self.lock().methods.clone()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, ScopeState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -146,6 +164,14 @@ impl NameScope {
         let n = self.claim(global, binary);
         self.lock().derived.insert((binary.to_string(), suffix.to_string()));
         format!("{n}{suffix}")
+    }
+
+    /// 登记方法 trait 的使用（匿名导入，不认领名字：不影响本文件其余类的取名）
+    pub fn methods_trait(&self, binary: &str) {
+        let mut st = self.lock();
+        if !st.methods.contains(binary) {
+            st.methods.insert(binary.to_string());
+        }
     }
 
     /// 显示名 → binary（仅本作用域）
