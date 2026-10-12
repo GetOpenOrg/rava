@@ -110,6 +110,7 @@ fn head_len(addr: usize, n: usize) -> usize {
     (addr.wrapping_neg() & (WORD - 1)).min(n)
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// 读 `dst.len()` 字节：头 / 尾不足一字的段各一次整字读取后截取，中间整字逐字 Relaxed 读。
 ///
 /// # Safety
@@ -138,6 +139,7 @@ pub unsafe fn read(addr: usize, dst: &mut [u8]) {
     }
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// 写 `src`：头 / 尾不足一字的段经同字 CAS 合并，中间整字逐字 Relaxed 写。
 ///
 /// # Safety
@@ -164,6 +166,7 @@ pub unsafe fn write(addr: usize, src: &[u8]) {
     }
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// `[addr, addr + n)` 填 `value`（Unsafe.setMemory0）。
 ///
 /// # Safety
@@ -188,6 +191,8 @@ pub unsafe fn fill(addr: usize, n: usize, value: u8) {
     }
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// 拷贝 `n` 字节（memmove 语义，区间可重叠）。
 ///
 /// 源与目标字内偏移相同时（`allocateMemory` 区间之间、缓冲区同偏移拷贝的常见情形）走逐字快路径：

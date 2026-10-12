@@ -153,6 +153,7 @@ fn out_of_bounds() -> JvmError {
     JvmError::illegal_argument("Unsafe access out of array bounds")
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// 从 `(base, offset)` 读 `dst.len()` 字节。
 pub fn read(base: &Object, offset: i64, dst: &mut [u8]) -> Result<()> {
     if base.0.is_jvm_null() {
@@ -167,6 +168,7 @@ pub fn read(base: &Object, offset: i64, dst: &mut [u8]) -> Result<()> {
     }
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// 向 `(base, offset)` 写 `src`。
 pub fn write(base: &Object, offset: i64, src: &[u8]) -> Result<()> {
     if base.0.is_jvm_null() {
@@ -181,6 +183,7 @@ pub fn write(base: &Object, offset: i64, src: &[u8]) -> Result<()> {
     }
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// `(base, offset)` 起 `bytes` 字节填 `value`（Unsafe.setMemory0）；负 bytes → IllegalArgumentException。
 pub fn fill(base: &Object, offset: i64, bytes: i64, value: i8) -> Result<()> {
     let n = len(bytes)?;
@@ -192,6 +195,7 @@ pub fn fill(base: &Object, offset: i64, bytes: i64, value: i8) -> Result<()> {
     write(base, offset, &vec![value as u8; n])
 }
 
+#[inline] // 批量段热路径（copyMemory / setMemory）：thin LTO 跨 crate 导入内联（分诊报告六）
 /// 拷贝 `bytes` 字节（Unsafe.copyMemory0）；负 bytes → IllegalArgumentException。源与目标可重叠
 ///（memmove 语义）；`swap_width > 1` 时按该宽度逐元素翻转字节序（Unsafe.copySwapMemory0）。
 pub fn copy(src_base: &Object, src_offset: i64, dst_base: &Object, dst_offset: i64,
