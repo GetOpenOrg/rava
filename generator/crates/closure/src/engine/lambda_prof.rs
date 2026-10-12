@@ -320,7 +320,7 @@ impl Engine<'_> {
         }
         let hp = |p: &idset::ReprProfile| {
             format!(
-                "n={} dense={} sp={} bytes={:.0}MiB words={:.0}MiB fill={} est_b={:.0}MiB est_s={:.0}MiB est_a={:.0}MiB",
+                "n={} dense={} sp={} bytes={:.0}MiB words={:.0}MiB fill={} est_b={:.0}MiB est_s={:.0}MiB min_span={:.0}MiB min_blk={:.0}MiB est_a={:.0}MiB",
                 p.sets,
                 p.dense_n,
                 p.sparse_n,
@@ -329,6 +329,8 @@ impl Engine<'_> {
                 if p.words == 0 { 0 } else { p.nz_words * 100 / p.words },
                 p.est_blocks as f64 / 1048576.0,
                 p.est_sparse as f64 / 1048576.0,
+                p.est_span as f64 / 1048576.0,
+                p.est_block as f64 / 1048576.0,
                 p.est_adaptive as f64 / 1048576.0,
             )
         };
@@ -435,6 +437,89 @@ impl Engine<'_> {
             args_b as f64 / 1048576.0,
             subrow_b as f64 / 1048576.0,
             self.lcalls.len(),
+        );
+        // 大表深字节·二（§4.16 画像补遗：census deep 合计 ~3GiB，活跃字节另有 ~17GiB 未归因——
+        // 常量格 / 接收者版本记忆 / 摘要与调用点答复 / 枢纽真实深字节（B 树与 Rc<Link>）/ 事件流）
+        let hb2 = |m_cap: usize, slot: usize| m_cap * slot * 9 / 7;
+        let mut pvals_b = hb2(self.pvals.capacity(), std::mem::size_of::<(usize, Vec<PV>)>());
+        for v in self.pvals.values() {
+            pvals_b += v.capacity() * std::mem::size_of::<PV>();
+        }
+        let recv_fp_b = hb2(self.recv_fp.capacity(), std::mem::size_of::<(usize, HashMap<u32, recv_fp::RecvFp>)>())
+            + self.recv_fp.values().map(|m| hb2(m.capacity(), std::mem::size_of::<(u32, recv_fp::RecvFp)>())).sum::<usize>()
+            + self.recv_fp.values().flat_map(|m| m.values()).map(|f| f.prof_bytes()).sum::<usize>();
+        let refl_b = hb2(self.refl_seen.capacity(), std::mem::size_of::<(usize, HashMap<u32, field_lookup::ReflSeen>)>())
+            + self.refl_seen.values().map(|m| hb2(m.capacity(), std::mem::size_of::<(u32, field_lookup::ReflSeen)>())).sum::<usize>()
+            + self.refl_seen.len() * std::mem::size_of::<field_lookup::ReflSeen>();
+        let site_used_b = hb2(self.site_used.capacity(), std::mem::size_of::<(usize, site_rets::SiteTable)>())
+            + self.site_used.values().map(|t| t.len() * std::mem::size_of::<(u32, site_rets::SiteAns)>()).sum::<usize>();
+        let shared_b = hb2(self.shared.capacity(), std::mem::size_of::<(MemberRef, Vec<share::Shared>)>())
+            + self.shared.values().map(|v| v.len()).sum::<usize>() * std::mem::size_of::<share::Shared>() * 3;
+        let nret_b = hb2(self.nret.capacity(), std::mem::size_of::<(usize, PV)>()) + self.nret.len() * std::mem::size_of::<PV>()
+            + hb2(self.sret.capacity(), std::mem::size_of::<(usize, PV)>()) + self.sret.len() * std::mem::size_of::<PV>();
+        let btrees_b = self.dcallers.values().map(|s| s.len() * 10).sum::<usize>()
+            + self.lcallers.values().map(|s| s.len() * 14).sum::<usize>()
+            + self.mirror_watch.values().map(|s| s.len() * 18).sum::<usize>()
+            + self.obj_watch.values().map(|s| s.len() * 14).sum::<usize>()
+            + self.sret_readers.values().map(|s| s.len() * 10).sum::<usize>()
+            + self.oret_watch.len() * 16
+            + self.refs.iter().map(|s| s.len() + 56).sum::<usize>()
+            + self.unresolved.iter().map(|s| s.len() + 56).sum::<usize>();
+        // 枢纽真实深字节：Hub 结构 + recvs/plain B 树 + links 的 Rc<Link>（含实参 Args）+ 其余集合
+        let mut hubs_b = self.hubs.len() * std::mem::size_of::<Hub>();
+        for h in &self.hubs {
+            hubs_b += h.recvs.len() * 6 + h.plain.len() * 10 + h.edged.len() * 8 + h.skeys.len() * 12;
+            hubs_b += h.ltargets.len() * 10 + h.lhubs.len() * 6 + h.lbind.len() * 14;
+            hubs_b += h.special.values().map(|v| 16 + v.len() * 4).sum::<usize>();
+            if let Some(v) = h.vals.as_ref() {
+                hubs_b += v.len() * std::mem::size_of::<PV>();
+            }
+            for l in h.links.values() {
+                hubs_b += 16 + std::mem::size_of::<Link>() + l.a.capacity() * 24;
+                for a in &l.a {
+                    if let Some(v) = a {
+                        hubs_b += v.capacity() * std::mem::size_of::<Feed>();
+                        for f in v {
+                            if let Feed::S(s) = f {
+                                hubs_b += s.classes.heap_bytes() + s.open.heap_bytes();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 事件流（anev 为条目数；Event 含 String / Vec<V>，内层按均摊 32B 估）
+        let events_b = self.methods.values().filter_map(|m| m.analysis.as_ref()).map(|a| a.events.len()).sum::<usize>()
+            * (std::mem::size_of::<Event>() + 32);
+        let img_b = self.img.as_ref().map_or(0, |b| std::mem::size_of_val(&**b))
+            + self.ext_vm.as_ref().map_or(0, |b| std::mem::size_of_val(&**b));
+        let misc_b = hb2(self.obj_queries.capacity(), std::mem::size_of::<(usize, obj_fields::ObjBound)>())
+            + self.obj_queries.len() * std::mem::size_of::<obj_fields::ObjBound>()
+            + self.obj_dirty.len() * std::mem::size_of::<(usize, obj_fields::ObjDirty)>()
+            + self.obj_dirty.values().map(|d| std::mem::size_of_val(d)).sum::<usize>()
+            + self.site_cands.values().map(|v| 16 + v.len() * 4).sum::<usize>()
+            + self.gathers.capacity() * std::mem::size_of::<(gather::Slot, u32, bool)>()
+            + self.level_ctxs.len() * 12
+            + self.ctx_free_memo.len() * std::mem::size_of::<(MemberRef, bool)>()
+            + self.ctx_flat_memo.len() * std::mem::size_of::<(MemberRef, bool)>();
+        eprintln!(
+            "{tag} census deep2 pvals={:.0}MiB recv_fp={:.0}MiB refl={:.0}MiB site_used={:.0}MiB shared={:.0}MiB nret={:.0}MiB btrees={:.0}MiB hubs={:.0}MiB events={:.0}MiB img={:.0}MiB misc={:.0}MiB szPV={} szEvent={} szV={} szHub={} szLink={}",
+            pvals_b as f64 / 1048576.0,
+            recv_fp_b as f64 / 1048576.0,
+            refl_b as f64 / 1048576.0,
+            site_used_b as f64 / 1048576.0,
+            shared_b as f64 / 1048576.0,
+            nret_b as f64 / 1048576.0,
+            btrees_b as f64 / 1048576.0,
+            hubs_b as f64 / 1048576.0,
+            events_b as f64 / 1048576.0,
+            img_b as f64 / 1048576.0,
+            misc_b as f64 / 1048576.0,
+            std::mem::size_of::<PV>(),
+            std::mem::size_of::<Event>(),
+            std::mem::size_of::<V>(),
+            std::mem::size_of::<Hub>(),
+            std::mem::size_of::<Link>(),
         );
         let hub_recvs: usize = self.hubs.iter().map(|h| h.recvs.len()).sum();
         let hub_special: usize = self.hubs.iter().flat_map(|h| h.special.values()).map(|v| v.len()).sum();

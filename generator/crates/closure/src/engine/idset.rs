@@ -60,9 +60,13 @@ pub(super) struct ReprProfile {
     pub(super) len_hist: [u64; 7],
     /// fill 直方图（非零字 / 字数）：<5% / <20% / <50% / <80% / ≥80%
     pub(super) fill_hist: [u64; 5],
-    /// 块式估计 / 纯稀疏估计（len×4×1.25 容量余量）/ 逐集合自适应估计（三者与现状取小，字节）
+    /// 块式估计 / 纯稀疏估计（len×4×1.25 容量余量）/ 逐集合自适应估计（字节）：
+    /// `est_blocks`、`est_sparse` 为全部换该形态；`est_span` / `est_block` 为逐集合取「现状与该形态较小者」
+    /// （span 感知形态 / 块式压缩各自的净收益），`est_adaptive` 为三者与现状取小
     pub(super) est_blocks: u64,
     pub(super) est_sparse: u64,
+    pub(super) est_span: u64,
+    pub(super) est_block: u64,
     pub(super) est_adaptive: u64,
 }
 
@@ -133,6 +137,8 @@ impl IdSet {
                 // 纯稀疏估计：有序 u32 数组（容量按 1.25 倍摊还），宽距低密度集合的最小形态
                 let sp = n as u64 * 5 + 24;
                 p.est_sparse += sp;
+                p.est_span += sp.min(cur);
+                p.est_block += est.min(cur);
                 p.est_adaptive += est.min(cur).min(sp);
                 // fill 直方图按本集合的非零字占比
                 let local_nz: u64 = d.sum.iter().map(|s| u64::from(s.count_ones())).sum();
