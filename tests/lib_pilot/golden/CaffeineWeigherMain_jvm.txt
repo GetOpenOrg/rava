@@ -1,0 +1,6 @@
+PASS both-present
+  present after evict: [a, b] evicted(size): [c]
+PASS evicted-new-entry
+PASS explicit-not-size
+PASS maximum-weight
+DONE CaffeineWeigherMain

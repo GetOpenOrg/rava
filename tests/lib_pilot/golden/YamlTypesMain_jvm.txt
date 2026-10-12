@@ -1,0 +1,16 @@
+PASS int
+PASS long
+PASS float
+PASS bool-yes
+PASS null-tilde
+PASS date
+PASS flow-list
+PASS block-list
+PASS flow-map
+PASS nested-keys
+PASS server-port
+PASS server-host
+PASS multi-doc-size
+PASS multi-doc-2
+PASS empty-doc-null
+DONE YamlTypesMain

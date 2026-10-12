@@ -1,0 +1,5 @@
+# AspectJ AOP（注解面；运行期需织入，golden 后置或带 agent，见 README）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["aspectjrt"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"

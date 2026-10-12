@@ -1,0 +1,11 @@
+PASS swap-write-bytes
+PASS swap-read
+PASS swap-long
+PASS swap-value
+PASS swap-short-value
+PASS big-endian-bytes
+PASS big-endian-read
+PASS writer-output-stream
+PASS charseq-read
+PASS charseq-after-skip
+DONE IoEndianMain

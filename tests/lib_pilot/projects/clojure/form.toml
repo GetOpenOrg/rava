@@ -1,0 +1,5 @@
+# Clojure 互操作（多语言 jar 面）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["clojure", "spec.alpha", "core.specs.alpha"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"

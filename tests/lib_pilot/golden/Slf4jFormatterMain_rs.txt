@@ -1,0 +1,10 @@
+PASS basic
+PASS short-args
+PASS escaped
+PASS null-arg
+PASS array-as-single
+PASS no-placeholder
+PASS many-args
+PASS throwable-appended
+PASS throwable-returned
+DONE Slf4jFormatterMain

@@ -1,0 +1,14 @@
+PASS find-method
+PASS invoke
+PASS invoke-private
+PASS field-read
+PASS field-write
+PASS do-with-methods
+  declared+inherited count=13
+PASS short-name
+PASS qualified
+PASS is-primitive-wrap
+PASS resolve-primitive-name
+PASS is-primitive-or-wrapper
+PASS classpath-resource
+DONE SpringReflectUtilsMain

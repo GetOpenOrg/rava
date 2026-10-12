@@ -1,0 +1,8 @@
+PASS child-appender-count
+PASS root-bubbled-count
+PASS after-additivity-off-child
+PASS after-additivity-off-root
+PASS effective-level
+PASS event-meta
+PASS thread-name
+DONE LogbackConfigMain

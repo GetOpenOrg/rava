@@ -1,0 +1,6 @@
+PASS rename-and-ignore
+PASS unknown-tolerated
+PASS polymorphic-ser
+PASS polymorphic-deser
+PASS polymorphic-deser-type
+DONE DatabindAnnotationMain

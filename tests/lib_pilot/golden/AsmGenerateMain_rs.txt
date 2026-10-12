@@ -1,0 +1,7 @@
+PASS bytes-length>100
+PASS magic-cafebabe
+PASS class-header
+PASS field
+PASS method-ctor
+PASS method-answer
+DONE AsmGenerateMain

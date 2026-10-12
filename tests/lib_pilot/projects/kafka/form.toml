@@ -1,0 +1,5 @@
+# Kafka 客户端 Mock 面（MockProducer/MockConsumer，无需 broker）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["kafka-clients"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"

@@ -1,0 +1,9 @@
+PASS advised-greet
+PASS advised-default-method
+PASS interceptor-calls
+PASS is-jdk-proxy
+PASS target-type
+PASS is-aop-proxy
+PASS handler-not-null
+PASS chain-order
+DONE SpringProxyJdkMain

@@ -1,0 +1,17 @@
+PASS is-creatable [true, true, true, true, true, true, false, false, false]
+PASS is-parsable [true, false, true, false]
+PASS to-int
+PASS to-int-default
+PASS to-long
+PASS to-double
+PASS to-float-default
+PASS create-integer
+PASS create-long
+PASS create-bigdecimal
+PASS compare-int
+PASS compare-long
+PASS compare-short
+PASS max
+PASS min
+PASS max-double
+DONE Lang3NumberUtilsMain

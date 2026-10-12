@@ -1,0 +1,5 @@
+# 模板引擎三件（Thymeleaf / FreeMarker / Velocity）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["thymeleaf", "freemarker", "velocity-engine-core", "commons-lang3", "slf4j-api"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"

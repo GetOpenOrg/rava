@@ -1,0 +1,8 @@
+PASS projection
+PASS projection-qty
+PASS select
+PASS select-first
+PASS select-last
+PASS select-then-project
+PASS project-sum
+DONE OgnlCollectionMain

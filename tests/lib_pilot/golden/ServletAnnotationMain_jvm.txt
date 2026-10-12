@@ -1,0 +1,13 @@
+PASS servlet-name
+PASS url-patterns
+PASS init-param-name
+PASS init-param-value
+PASS load-on-startup
+PASS async-supported
+PASS filter-name
+PASS filter-patterns
+PASS filter-servlet-names
+PASS listener-present
+PASS runtime-retention
+PASS annotation-target-type
+DONE ServletAnnotationMain

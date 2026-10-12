@@ -1,0 +1,17 @@
+PASS notnull-ok true
+PASS isTrue-ok true
+PASS hasText-ok true
+PASS notEmpty-ok true
+PASS noNullElements-ok true
+PASS isInstanceOf-ok true
+PASS isAssignable-ok true
+PASS state-ok true
+msg-notnull: IllegalArgumentException: 对象不能为空
+msg-istrue: IllegalArgumentException: 条件不满足
+msg-hastext: IllegalArgumentException: 文本为空
+msg-notempty: IllegalArgumentException: 列表为空
+msg-nonull: IllegalArgumentException: 含 null
+msg-isinstance: IllegalArgumentException: 类型不符: java.lang.Integer
+msg-state: IllegalStateException: 状态非法
+msg-supplier: IllegalArgumentException: supplier 消息
+DONE SpringUtilAssertMain

@@ -1,0 +1,5 @@
+# 路由注解面（Micronaut / JAX-RS / Spring Web 注解元数据）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["micronaut-http", "jakarta.ws.rs-api", "spring-web", "spring-beans", "spring-core", "spring-jcl"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"
