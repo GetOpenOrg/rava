@@ -235,9 +235,10 @@ fn hw_head(head: &str) -> Option<(String, String, String)> {
     };
     let (trait_name, j) = ident_at(head, i)?;
     let stem = trait_name.strip_prefix("__")?;
-    let cls = stem.strip_suffix("Hw").filter(|s| !s.is_empty())?;
-    let rest = &trait_name["__".len() + cls.len() + "Hw".len()..];
-    if !rest.is_empty() && !rest.chars().all(|c| c.is_ascii_digit()) {
+    // 尾序号（`__XHw2`）剥去后须以 `Hw` 收尾
+    let base = stem.trim_end_matches(|c: char| c.is_ascii_digit());
+    let cls = base.strip_suffix("Hw").filter(|s| !s.is_empty())?;
+    if base.len() != cls.len() + "Hw".len() {
         return None;
     }
     i = skip_sp(head, j);
@@ -265,7 +266,7 @@ fn hw_head(head: &str) -> Option<(String, String, String)> {
     // 尾随 where 子句（trait 声明侧照搬）
     let tail = &head[i..].trim_end()[..head[i..].trim_end().len().saturating_sub(1)];
     let where_c = match tail.trim().strip_prefix("where ") {
-        Some(w) => format!(" {} ", w.split_whitespace().collect::<Vec<_>>().join(" ")),
+        Some(w) => format!(" where {} ", w.split_whitespace().collect::<Vec<_>>().join(" ")),
         None if tail.trim().is_empty() => String::new(),
         None => return None,
     };
@@ -318,7 +319,8 @@ fn decl_params(params: &str) -> String {
 /// `fn 名(参数) [-> 返回]` 的声明签名：参数规范化（无体声明不接受模式），其余原样
 fn decl_sig(sig: &str) -> String {
     let Some(open) = sig.find('(') else { return sig.trim().to_string() };
-    let close = balanced(sig, open, '(', ')');
+    // `balanced` 的 start 语义 = 开括号之后（初始深度 1 = 已开一层）
+    let close = balanced(sig, open + 1, '(', ')');
     let params = decl_params(&sig[open + 1..close.saturating_sub(1).max(open + 1)]);
     let head = sig[..open].trim().to_string();
     let tail = sig[close..].trim().to_string();
@@ -377,24 +379,23 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
                 attrs.push(t.to_string());
                 continue;
             }
-            // 条目头：`fn …{` / `const …;`（跨行签名累积）
+            // 条目头：`fn …{` / `const …;`（跨行签名累积；签名止于首个 `{` / `;`）
             if t.starts_with("fn ") || t.starts_with("unsafe fn ") || t.starts_with("const ") || t.starts_with("unsafe const ") {
-                let mut sig = t.to_string();
                 let is_const = t.starts_with("const") || t.starts_with("unsafe const");
+                let mut sig = t.to_string();
                 let mut m = k;
-                if is_const {
-                    while m < lines.len() && !sig.trim_end().ends_with(';') {
-                        sig.push(' ');
-                        sig.push_str(lines[m].trim());
-                        m += 1;
-                    }
-                } else {
-                    while m < lines.len() && !sig.trim_end().ends_with('{') {
-                        sig.push(' ');
-                        sig.push_str(lines[m].trim());
-                        m += 1;
-                    }
+                let done = |s: &str| if is_const { s.contains(';') } else { s.contains('{') };
+                while m < lines.len() && !done(&sig) {
+                    sig.push(' ');
+                    sig.push_str(lines[m].trim());
+                    m += 1;
                 }
+                let end = if is_const {
+                    sig.find(';').unwrap_or(sig.len())
+                } else {
+                    sig.find('{').unwrap_or(sig.len())
+                };
+                let sig = sig[..end].to_string();
                 k = m;
                 let name = sig
                     .split(|c: char| c == '(' || c == '<' || c == ':')
@@ -408,8 +409,7 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
                     let cut = sig.find(" =").unwrap_or(sig.len());
                     sig[..cut].trim().to_string()
                 } else {
-                    let cut = sig.rfind('{').unwrap_or(sig.len());
-                    decl_sig(&sig[..cut])
+                    decl_sig(&sig)
                 };
                 if !name.is_empty() {
                     items.push(HwItem { name, attrs: std::mem::take(&mut attrs), sig: decl });

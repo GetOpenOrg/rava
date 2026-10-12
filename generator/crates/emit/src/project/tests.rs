@@ -39,6 +39,10 @@ fn runtime(root: &Path) -> PathBuf {
         &rt.join("Cargo.toml"),
         "[package]\nname = \"java_runtime\"\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\nrava_coro = { path = \"../rava_coro\" }\nrava_rawmem = { path = \"../rava_rawmem\" }\n",
     );
+    // 标记层基础 crate（§9.9 K4 阶段 1 起 prepare_scratch 要求其存在）
+    let marker = root.join("runtime").join("java_marker");
+    put(&marker.join("Cargo.toml"), "[package]\nname = \"java_marker\"\nversion = \"0.1.0\"\n");
+    put(&marker.join("src/lib.rs"), "// marker\n");
     let meta = root.join("runtime").join("java_meta");
     put(&meta.join("Cargo.toml"), "[package]\nname = \"java_meta\"\nversion = \"0.1.0\"\n");
     put(&meta.join("build_script/main.rs"), "fn main() {}\n");

@@ -328,7 +328,7 @@ pub fn class_text(
 fn hw_trait_decl(sname: &str, ord: u32, blk: &input::handwritten::HwBlock) -> Vec<String> {
     let suffix = if ord == 1 { String::new() } else { ord.to_string() };
     let where_c = blk.where_c.trim();
-    let where_part = if where_c.is_empty() { String::new() } else { format!(" {where_c} ") };
+    let where_part = if where_c.is_empty() { " ".to_string() } else { format!(" {where_c} ") };
     let mut out = vec![
         format!("/// 手写伴生扩展 trait（K4-2a）：`_impl.rs`/`_ext.rs` 对 wrapper 的固有 impl 改此承载（第 {ord} 块）。"),
         format!("/// wrapper struct 挪入 java_marker 后固有 impl E0390；签名是伴生 impl 的机械镜像。"),

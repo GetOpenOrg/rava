@@ -223,10 +223,11 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
         let hw_impl = i.trait_.as_ref().is_some_and(|(_, tr, _)| {
             let last = tr.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
             let stem = last.strip_prefix("__").unwrap_or(&last);
-            let cls = stem.strip_suffix("Hw").unwrap_or(stem);
+            let base = stem.trim_end_matches(|c: char| c.is_ascii_digit());
+            let cls = base.strip_suffix("Hw").unwrap_or("");
             last.starts_with("__")
                 && !cls.is_empty()
-                && stem[cls.len()..].chars().all(|c| c.is_ascii_digit())
+                && base.len() == cls.len() + "Hw".len()
                 && ty.as_ref().is_some_and(|t| t.last().map(String::as_str) == Some(cls))
         });
         let outer = std::mem::replace(&mut self.self_ty, ty);

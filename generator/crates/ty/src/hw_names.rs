@@ -18,7 +18,10 @@ pub struct HwNames {
 
 fn matches(rust: &str, member: &str) -> bool {
     let f = rust.strip_prefix("__impl_").unwrap_or(rust);
-    f == member || f.strip_prefix(member).is_some_and(|r| r.starts_with('_'))
+    // 两侧都可能是带重载后缀的形态（登记点传 Java 名或 owner 视角的 rust 名）
+    f == member
+        || f.strip_prefix(member).is_some_and(|r| r.starts_with('_'))
+        || member.strip_prefix(f).is_some_and(|r| r.starts_with('_'))
 }
 
 impl HwNames {

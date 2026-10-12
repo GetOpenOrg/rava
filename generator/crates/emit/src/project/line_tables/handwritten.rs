@@ -312,7 +312,7 @@ impl A {
         }];
         let text = "use super::__SHw;\nimpl __SHw for S {\n    fn m(&self) -> Result<()> {\n        Ok(())\n    }\n}\n";
         let t = companion_table("java_runtime/src/p/s_impl.rs", text, &hws).expect("命中");
-        assert_eq!(t.rows, vec![(3, 0, LINE_UNKNOWN), (5, NO_METHOD, 0)]);
+        assert_eq!(t.rows, vec![(3, 0, LINE_UNKNOWN), (6, NO_METHOD, 0)]);
     }
 
     #[test]

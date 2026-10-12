@@ -385,7 +385,16 @@ def fix_callers(src: str, check: bool) -> int:
             if not check:
                 out_lines = text.split("\n")
                 last_use = max((i for i, l in enumerate(out_lines) if l.startswith("use ") and l.endswith(";")), default=-1)
-                out_lines.insert(last_use + 1, "\n".join(lines))
+                insert_at = last_use + 1
+                if last_use < 0:
+                    # 无先导 use：跳过文件头的 `//!` 文档与 `#![...]` 内属性（内文档前不得有条目）
+                    while insert_at < len(out_lines) and (
+                        out_lines[insert_at].startswith("//!") or out_lines[insert_at].startswith("#![")
+                    ):
+                        insert_at += 1
+                    if insert_at < len(out_lines) and out_lines[insert_at].strip() == "":
+                        insert_at += 1
+                out_lines.insert(insert_at, "\n".join(lines))
                 with open(p, "w", encoding="utf-8") as fh:
                     fh.write("\n".join(out_lines))
     print(f"[{'CHECK ' if check else ''}K4-2a fix-callers] 补导入文件 {changed} 份")
