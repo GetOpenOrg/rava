@@ -45,6 +45,7 @@ for p in json.load(sys.stdin)["packages"]:
 build_rava "$ROOT"
 cd "$ROOT"
 for t in $TESTS; do
+  cd "$ROOT"
   f=$(find tests/e2e -name "$t.java" | head -1)
   build/analyzer-target/release/rava build "$f" --java-home "$JAVA_HOME" \
     --runtime runtime/java_runtime --clean --stop-after emit --out "$OUT/new.$t" \
