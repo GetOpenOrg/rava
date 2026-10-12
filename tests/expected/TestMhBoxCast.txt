@@ -1,0 +1,24 @@
+int-box 42 43 44
+int-inst true true false java.lang.Integer
+long-box 42 44 java.lang.Long
+bool-box true false java.lang.Boolean
+char-box C D 0
+byte-box 8 6
+short-box 110 210
+float-box 2.5 3.5 java.lang.Float
+double-box 4.5 7.5 java.lang.Double
+prim-ctx 20 E 10.5
+subword-invoke x/1/2/true/3/4/5.5/6.25
+subword-exact y/8/9/false/7/6/5.0/4.0
+subword-with z/0/5/true/2/1/0.5/0.25
+with-int 51 52 true java.lang.Integer
+with-kinds 10 G true java.lang.Long java.lang.Character
+getter-box 5 5 java.lang.Integer
+identity-box 8 9 java.lang.Integer
+ref-exact 30 40 java.lang.Integer
+ref-invoke 50 60
+mh-wmte-int-to-long
+mh-wmte-char-to-int
+mh-with-cce-int-to-double ClassCastException
+wmte-int-ref
+wmte-int-obj
