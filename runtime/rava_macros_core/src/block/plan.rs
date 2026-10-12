@@ -263,10 +263,11 @@ mod tests {
         let out = super::super::expand(TokenStream2::from_str(CLASS).unwrap()).to_string();
         proc_macro2::extra::invalidate_current_thread_spans();
         assert!(!out.contains("compile_error"), "{out}");
-        assert!(out.contains("pub fn __vt (& self) -> & dyn B__VTable"), "{out}");
+        // `__vt` 随方法 trait（§9.9 K4）：声明层文件含 trait 声明与实现
+        assert!(out.contains("fn __vt (& self) -> & dyn B__VTable ;"), "{out}");
         assert!(out.contains("pub trait B__Methods"), "{out}");
-        assert!(out.contains("pub fn __get_x (& self) -> i32"), "{out}");
-        assert!(out.contains("pub fn _init_not_null"), "{out}");
+        assert!(out.contains("fn __get_x (& self) -> i32 ;"), "{out}");
+        assert!(out.contains("fn _init_not_null (& mut self) ;"), "{out}");
         assert!(out.contains("pub safe fn __jb_B__alloc () -> __Handle ;"), "{out}");
         for absent in [
             "pub struct B {", "__from_parts", "is_jvm_null", "BINARY_NAME",

@@ -1,3 +1,6 @@
+use crate::java::lang::{Boolean__Methods as _, Byte__Methods as _, Double__Methods as _,
+                              Float__Methods as _, Integer__Methods as _, Long__Methods as _,
+                              Short__Methods as _};
 use crate::java::lang::Boolean__Methods as _;
 use crate::java::lang::Byte__Methods as _;
 use crate::java::lang::Character__Methods as _;

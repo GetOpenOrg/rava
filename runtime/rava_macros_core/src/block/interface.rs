@@ -13,6 +13,7 @@ use quote::{format_ident, quote};
 use syn::{GenericParam, Ident, Type};
 
 use super::class_init;
+use super::gen::layer::Layer;
 use super::gen::wrapper::split_parts;
 use super::erasure::{
     erase_signature, erase_type, erasure_hits_param, erasure_hits_ret, expand_non_virtual_fn, flat_type_tokens,
@@ -222,7 +223,12 @@ pub(crate) fn expand_interface(
     )
     .unwrap_or_else(|e| e.to_compile_error());
 
-    quote! {
+    // §9.9 K4：载体拆层。标记段 [`iface_marker`]（与签名无关：struct、身份 std impl、
+    // `__from_image` / `__IMAGE_NULL`、`From` 两向、`BINARY_NAME`、`is_jvm_null`）随标记文件
+    // 入 `java_marker` crate；声明段（vtable trait、statics、初始化状态机、`I__Methods` 及其
+    // 实现——`__default_*` 随 §9.9 K4 移入方法 trait）留声明 crate（impl 的接收者是外来类型，
+    // 孤儿规则允许：trait 本地）。`Full` 拼回两段，项序与拆前一致。
+    let iface_decl_head = quote! {
         #[allow(non_camel_case_types)]
         pub trait #vtable_ident: 'static + __ThreadSafe {
             #(#vtable_methods)*
@@ -230,7 +236,8 @@ pub(crate) fn expand_interface(
 
         #(#static_storage)*
         #init_state
-
+    };
+    let iface_marker = quote! {
         #[derive(::core::clone::Clone)]
         pub struct #struct_ident #impl_g #where_c {
             __ref: __IfaceRef,
@@ -298,11 +305,22 @@ pub(crate) fn expand_interface(
                 ObjectVTable::is_jvm_null(&*self.__ref.0)
             }
         }
+    };
+    match meta.layer {
+        // 标记层：只展开载体身份面（I__Methods 的定义与实现留声明 crate——其分派外壳引用
+        // 本接口 vtable trait，标记 crate 不可见）
+        Layer::Marker => iface_marker,
+        _ => quote! {
+            #iface_decl_head
 
-        // 载体成员移入方法 trait I__Methods（§9.9 K6 前置项）：static 方法 / static
-        // 字段访问器 / `__class_init` / 实例分派与继承转发；const fn（__from_image）、
-        // 关联常量（BINARY_NAME / __IMAGE_NULL）、`is_jvm_null`、`__default_*` 留固有
-        #carrier_members
+            #iface_marker
+
+            // 载体成员移入方法 trait I__Methods（§9.9 K6 前置项）：static 方法 / static
+            // 字段访问器 / `__class_init` / 实例分派与继承转发；const fn（__from_image）、
+            // 关联常量（BINARY_NAME / __IMAGE_NULL）、`is_jvm_null` 留固有（§9.9 K4：载体
+            // struct 随标记层，后三者属标记段；`__default_*` 已入方法 trait）
+            #carrier_members
+        },
     }
 }
 
@@ -509,8 +527,9 @@ mod tests {
         for m in ["fn m (& self) -> Result < i32 > ;", "fn d (& self) -> Result < () > ;", "fn s () -> Result < i32 > ;", "fn __class_init ()"] {
             assert!(tr.contains(m), "{m} 应在 trait 声明里: {tr}");
         }
-        // default 体持有处与 null 探测留固有
-        assert!(out.contains("pub fn __default_d (& self)"), "{out}");
+        // `__default_d` 随方法 trait（§9.9 K4：载体 struct 搬标记 crate 后固有不可跨 crate）；
+        /// null 探测 `is_jvm_null` 留标记段固有（身份面）
+        assert!(tr.contains("fn __default_d (& self) -> Result < () > ;"), "{tr}");
         assert!(out.contains("pub fn is_jvm_null (& self) -> bool"), "{out}");
         // `__default_d` 的最终回退在 trait impl 里（self . __default_d 调用）
         assert!(out.contains("self . __default_d ("), "{out}");

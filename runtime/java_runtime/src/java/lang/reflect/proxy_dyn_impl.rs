@@ -9,6 +9,9 @@
 //! - 基本类型实参按生成体的装箱形态（`Integer.valueOf` 等）重装箱：接口载体侧只有原生值盒，
 //!   InvocationHandler 对实参做 `(Integer) args[i]` 须得到翻译出的包装类实例。
 
+use crate::java::lang::{Boolean__Methods as _, Byte__Methods as _, Double__Methods as _,
+                              Float__Methods as _, Integer__Methods as _, Long__Methods as _,
+                              Short__Methods as _};
 use crate::java::lang::Boolean__Methods as _;
 use crate::java::lang::Byte__Methods as _;
 use crate::java::lang::Character__Methods as _;

@@ -46,6 +46,20 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         }
     });
 
+    // 虚分派 / 字段访问入口（S7 计划 §3.1 取法 A，§9.9 K4）：按本类 display 深度向运行时类
+    // 存储取本类视图（一次间接调用 + 一次槽类型比较）。随方法 trait（§9.9 K4：引用本类
+    // vtable trait，wrapper struct 搬入标记 crate 后固有 impl 不可跨 crate——调用点与访问器
+    // 同经 `X__Methods` 解析，本文件外壳（trait impl 内）自然在作用域）。
+    let vtable_trait_ident_vt = &ctx.vtable_trait_ident;
+    let depth_vt = ctx.meta.all_superclasses.len() as u16;
+    wrapper_methods.push(quote! {
+        #[doc(hidden)]
+        #[inline]
+        pub fn __vt(&self) -> &dyn #vtable_trait_ident_vt {
+            self.__r.view::<dyn #vtable_trait_ident_vt>(#depth_vt)
+        }
+    });
+
     // 字段访问器委托（own + 继承字段）。读取处是 GIL 安全点（`gil::safepoint`：自旋等待
     // 他线程写入的循环借此让出）。vtable 访问器签名已 Object 化（A-1 去形参）：
     // 擦除字段的类型化转换（From<Object> / Into<Object>）发生在 wrapper 委托边界 ——
