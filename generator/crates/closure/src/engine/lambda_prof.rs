@@ -580,6 +580,8 @@ impl Engine<'_> {
         }
         self.ctx_prof_dump(&tag);
         self.hub_prof_dump(&tag);
+        // 小分配 soup 逐表深字节归因（§4.17）：deep3 大表一行 + deep3b 小表与对账一行
+        self.deep3_dump(&tag);
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {

@@ -105,6 +105,41 @@ pub(super) struct KeyedState {
     pub(super) carriers: Option<Rc<BTreeSet<String>>>,
 }
 
+impl KeyedState {
+    /// 深堆字节（census deep3 行，只读；`Rc<str>` 内容按指针去重经 `d` 记账）
+    pub(super) fn deep_bytes(&self, d: &mut deep3::Deep) -> usize {
+        const BT: usize = 8; // B 树节点摊还
+        let keys = |k: &Keys, d: &mut deep3::Deep| -> usize {
+            match k {
+                Keys::Any => 0,
+                Keys::Set(s) => {
+                    s.len() * (8 + BT) + s.iter().map(|x| d.rc_str(x)).sum::<usize>()
+                }
+            }
+        };
+        self.gates.capacity() * std::mem::size_of::<KGate>()
+            + self.gates.iter().map(|g| {
+                8 + keys(&g.keys, d)
+                    + g.held.len() * (4 + 16)
+                    + g.held.values().map(|v| v.len() * (4 + BT)).sum::<usize>()
+                    + g.opens.len() * (4 + BT)
+            }).sum::<usize>()
+            + self.at.capacity() * 24 * 9 / 7
+            + self.class_keys.capacity() * 24 * 9 / 7
+            + self.class_keys.values().map(|k| keys(k, d)).sum::<usize>()
+            + self.holders.capacity() * 40 * 9 / 7
+            + self.holders.values().map(|v| v.len() * (4 + BT)).sum::<usize>()
+            + self.open_watch.capacity() * 40 * 9 / 7
+            + self.open_watch.values().map(|v| v.len() * (4 + BT)).sum::<usize>()
+            + self.slots.capacity() * 40 * 9 / 7
+            + self.slots.keys().map(|k| d.rc_str(&k.1)).sum::<usize>()
+            + self.key_fields.iter().map(|m| std::mem::size_of::<MemberRef>() + BT + d.member(m)).sum::<usize>()
+            + self.carriers.as_ref().map_or(0, |c| {
+                c.len() * (24 + BT) + c.iter().map(|s| s.capacity() + 1).sum::<usize>()
+            })
+    }
+}
+
 /// 构造器链追溯深度上限
 const MAX_CHAIN: u8 = 8;
 

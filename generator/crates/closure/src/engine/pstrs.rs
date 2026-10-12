@@ -66,6 +66,25 @@ pub(super) struct PStrs {
     active: Vec<PSlot>,
 }
 
+impl PStrs {
+    /// 深堆字节（census deep3 行，只读；`IdSet` 经 `heap_bytes`、B 树按节点摊还）
+    pub(super) fn deep_bytes(&self) -> usize {
+        const BT: usize = 8; // B 树节点摊还
+        self.sets.capacity() * 40 * 9 / 7 + self.sets.values().map(|s| s.heap_bytes()).sum::<usize>()
+            + self.succ.capacity() * 40 * 9 / 7 + self.succ.values().map(|s| s.len() * (16 + BT)).sum::<usize>()
+            + self.pred.capacity() * 40 * 9 / 7 + self.pred.values().map(|s| s.len() * (16 + BT)).sum::<usize>()
+            + self.sites.capacity() * 40 * 9 / 7 + self.sites.values().map(|s| s.len() * (4 + BT)).sum::<usize>()
+            + self.inputs.capacity() * 40 * 9 / 7 + self.inputs.values().map(|s| s.len() * (20 + BT)).sum::<usize>()
+            + self.demand.capacity() * 40 * 9 / 7 + self.demand.values().map(|s| s.len() * (12 + BT)).sum::<usize>()
+            + self.xdemand.capacity() * 40 * 9 / 7 + self.xdemand.values().map(|s| s.len() * (12 + BT)).sum::<usize>()
+            + self.top_m.capacity() * 8 * 9 / 7
+            + self.top_h.capacity() * 4 * 9 / 7
+            + self.offsite.capacity() * 8 * 9 / 7
+            + self.top_f.capacity() * 8 * 9 / 7
+            + self.active.capacity() * 16
+    }
+}
+
 /// 非常量输入为字段写入值（而非调用点实参）时的序号
 const FIELD_VALUE: usize = usize::MAX;
 
