@@ -1789,3 +1789,18 @@ owner = "fix-seed-reg"
 diagnose = "RAVA_DBG_METH + RAVA_DBG_FIELD（支持逗号多键）跑种子 0/1 对照 [field-put]（首个 <- Top 的写点）与通配未知原因行；RAVA_DBG_RET 打印被调成员汇合格 / per / site 答复来源"
 doc = "docs/plans/2026-10-11-seed-regression-fix.md"
 since = "2026-10-12"
+
+[[pattern]]
+id = "unbox-root-virtual-stub"
+stage = "output"
+symptom = "Method.invoke / Field.set 传翻译包装类实例给基本类型形参时取值错或拒收：hashCode 位形取值恒 0（如 widen-local-short 得 0 应 -299）、Character 文本路径 IAE（argument type mismatch）、TestReflectBoxCast narrow 行 Float 1.5 → 0.0"
+match = [["widen-local-short 1"], ["widen-char IAE"], ["argument type mismatch", "TestUnboxWrapperFaces"]]
+tests = ["TestWidenFacesInvoke", "TestUnboxWrapperFaces", "TestReflectBoxCast"]
+cause = "运行时经 ObjectVTable 桥的 hashCode / toString 虚分派对闭包分析器不可见：程序自身不触达包装类这些槽时它们不在调用链上（input/src/build.rs::in_chain），方法体按 class_writer/stub.rs::stub_body 发『vtable 安全默认值』存根——hashCode → Ok(0)、toString → Ok(二进制名文本)。rd::unbox_* 的 P-B hashCode 取值臂（Short 0、Float 0、Integer 经翻译实例同样暴露）与 __obj_str 文本路径（Character 多字符文本解析失败 → None → IAE）双双落在存根上。Integer 曾『回归通过』是 invoke 站点装箱产生原生盒（downcast_ref 先命中）未走到该臂。生成代码铁证（作业 wfx-gen3，TestWidenFacesInvoke scratch 的 java_base_body_1/src/body/java/lang/）：short.rs L48-50 桥属性 #[hash_code_vtable = \"Short\"] 俱在、L191-193 槽体 `pub fn hashCode(..) -> Result<i32> { Ok(0) }` 存根；character.rs L383-386、float.rs L242-245 同形；integer.rs L349-361 为真体 `Integer::hashCode_i(this.__get_value())`（该程序里 Integer.hashCode 在链上）。修法（fix-widen，P-C）：unbox_* 对翻译包装类经实例字段协议（__instance_field，Field.get / Unsafe 按名单元同一数据面）直读本类 final 基本字段 value，不依赖方法体在链与否，Long/Double 按位精确，种类不符回落文本路径"
+introduced = "9157a73e（P-B 结构化取值落地；文本路径的存根暴露面更早存在，Short/Character 无实参级见证）"
+fixed = ["748e0987（unbox_* 承载字段直读 + 分层见证 TestWrapperValueFaces；验收作业 wfx-acc1 两靶测例 + rtpp-verify4 七例清单 9/9 PASS）"]
+status = "fixed"
+owner = "fix-widen"
+diagnose = "症状面看反射实参拆箱取值路径（rd::unbox_*）；疑存根时在测试里加同族包装类的直呼调用点（hashCode / toString，入链即真体）复跑——直呼对、反射错 ⇒ 存根；对照生成 scratch 里该类文件的 hashCode / toString 方法体是否 Ok(0) / 二进制名存根"
+doc = "docs/reports/2026-10-11-rt-perf-profiling.md §三.4 更正块、§七.0"
+since = "2026-10-12"

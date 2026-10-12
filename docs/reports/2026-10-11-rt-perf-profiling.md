@@ -169,6 +169,37 @@ Float 的 hashCode 路径（→ `floatToIntBits` 链）对 3.0f 应答 0（根�
 Float / Long / Double 维持文本路径**。收窄后 A/B 的 int 路数字仍然成立（回归与 A/B 用例
 只经 int 实参）。
 
+**【10-12 fix-widen 更正与终局】**：上述 §三.4 的两个判断都需要更正——
+
+1. **「Integer / Short / Byte 回归通过」是见证不足**：当时的回归与 A/B 用例对 Integer 走的是
+   invoke 站点装箱的**原生盒**（`downcast_ref::<i32>` 先命中，未到 hashCode 臂），Short /
+   Byte 的翻译包装实例则根本没有测例触达。batch-1012 新测例 TestWidenFacesInvoke
+   （fdddd6b5，作业 b1012-widen5）实测：翻译 Short 经 hashCode 取值应答 **0**
+   （`widen-local-short 1`，应 -299）、翻译 Character 经 toString 文本路径 IAE
+   （`widen-char IAE`）——P-B 的 hashCode 臂与文本路径**双双落在存根上**。
+2. **Float.hashCode 对 3.0f 应答 0 与本簇同根因，且不是 `floatToIntBits` 链缺陷**：根因是
+   **运行时经 ObjectVTable 桥的 hashCode / toString 调用对闭包分析器不可见**——程序自身
+   不触达这些槽时（`in_chain` = false，`input/src/build.rs::in_chain`），方法体按
+   `stub.rs::stub_body` 发安全存根：hashCode → `Ok(0)`、toString → `Ok(二进制名文本)`。
+   Float 的 0、Short 的 0、Character 的多字符文本（解析失败 → IAE）全是这两行存根的应答。
+   生成代码铁证（作业 wfx-gen3，TestWidenFacesInvoke scratch 的
+   `java_base_body_1/src/body/java/lang/`）：short.rs L48-50 的桥属性
+   `#[hash_code_vtable = "Short"]` 俱在而 L191-193 槽体是 `Ok(0)` 存根，character.rs /
+   float.rs 同形；integer.rs 为真体（该程序里 Integer.hashCode 在链上）。
+   TestReflectBoxCast 当时 Float 行能走通，是 `+ fl` 字符串拼接让 Float.toString 有了翻译
+   调用点（入链 → 真体）；直呼站点入链后翻译体本身正确（TestWrapperValueFaces 分层见证：
+   直呼 / 擦除 Object 桥分派 / 反射拆箱三层一致）。
+3. **终态修法 = P-C 承载字段直读**（fix-widen）：`unbox_*` 对翻译包装类改经实例字段协议
+   （`__instance_field`，与 Field.get / Unsafe 按名单元同一数据面）直读本类 final 基本字段
+   `value`——不依赖任何方法体是否在闭包链上，Long / Double 也按位精确（NaN / -0.0 位形
+   保留），P-B 的无分配收益保留且扩展到全部八包装类；种类不符回落文本路径。§三.4 的
+   P-B 收窄口径由 P-C 取代（`reflect_dispatch.rs` 文件头注记有完整演进记录）。
+   验收（fix-widen，作业 wfx-acc1，748e0987）：TestWidenFacesInvoke / TestUnboxWrapperFaces /
+   TestWrapperValueFaces 3/3 PASS，rtpp-verify4 七例清单（TestReflectLdcHotLoop /
+   TestReflectBoxCast / TestReflectFieldMethod / TestInvokeNullArgs / TestIfaceAssignWalk /
+   PartitionInteger / TestUnboxWrapperFaces）全 PASS——PartitionInteger run 48.19 s 与基线
+   48–50 s 持平，TestReflectBoxCast 期望文件无需修正（narrow 行 1.5 原本正确）。
+
 回归（rtpp-verify3，fc68236d 档，7 例）：PartitionInteger PASS（run 49.4 s，与基线
 48–50 s 持平——微修复不伤 stream 路径）、TestIfaceAssignWalk（新）PASS、
 TestInvokeNullArgs / TestReflectFieldMethod / TestReflectLdcHotLoop PASS、
@@ -258,6 +289,15 @@ TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
    应答 0——P-B 的 Float 位形取值因此被否决；这本身是一个可疑的翻译面缺陷（或 hashCode
    桥接缺口），值得单独立测例核查（`Float.valueOf(3.0f).hashCode()` 期望 1077936128）。
    另外 43f37f63（us1）43 µs/迭代与本测 4.3 µs/迭代差约 10 倍未闭合（§二）。
+   → **10-12 fix-widen 已收口**：同簇根因 = 闭包外根虚方法槽为存根（hashCode → Ok(0)、
+   toString → 二进制名），非 floatToIntBits 缺陷；`Float.valueOf(3.0f).hashCode()` 直呼
+   （入链）= 1077936128 正确，见 TestWrapperValueFaces 与 §三.4 更正块。unbox 取值改
+   P-C 承载字段直读后不再依赖 hashCode / toString 槽。**残余暴露面**（本步未修，单列）：
+   翻译类（不限包装类）的根虚方法槽在「类在闭包、方法不在链」时一律为存根——经擦除
+   Object 接收者的虚分派（`invoke/virtual_/bare.rs` 根 vtable 单次直调路径）落到它上面：
+   hashCode 恒 0（Map 桶退化）、equals 存根 panic（stub_call）、toString 恒二进制名；
+   根治面 = 闭包种子（seeds.toml 增「值视图」族：包装类成员触达时补种根虚方法）或
+   P-A 协议臂，随反射建模 / S7 K 系排期。
 
 1. **Method.invoke 分派键重建（最大单项，String 簇 ~17% + 其分配 ~16% 的一部分）**：
    `__member_key`（`method_impl.rs:36`）每次 invoke 从 clazz/name/parameterTypes 重建
