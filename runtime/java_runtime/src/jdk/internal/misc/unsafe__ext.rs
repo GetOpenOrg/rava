@@ -116,6 +116,7 @@ pub(super) fn prim(o: &Object, offset: i64, width: usize, what: &str,
     panic!("stub: jdk/internal/misc/Unsafe.{} (offset={} 无共享存储：非基本类型数组 / 非静态字段 id / 运行时类无该平铺基本类型字段)", what, offset)
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 读（`op` 恒 None）。原生内存走普通读（直接内存不要求对齐；`prim` 的原生内存臂是原子读-改-写，
 /// 要求按宽度对齐）。
 pub(super) fn get(o: &Object, offset: i64, width: usize, what: &str) -> Result<u64> {
@@ -125,6 +126,7 @@ pub(super) fn get(o: &Object, offset: i64, width: usize, what: &str) -> Result<u
     prim(o, offset, width, what, &mut |_| None)
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 无条件写。原生内存走普通写（同 [`get`]）。
 pub(super) fn put(o: &Object, offset: i64, width: usize, what: &str, v: u64) -> Result<()> {
     if crate::native_memory::is_raw(o) {
@@ -133,6 +135,7 @@ pub(super) fn put(o: &Object, offset: i64, width: usize, what: &str, v: u64) -> 
     prim(o, offset, width, what, &mut |_| Some(v)).map(|_| ())
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 比较交换：当前值（低 `width` 字节）等于 `expected` 则写 `x`；返回见证值（交换前的当前值）。
 pub(super) fn cas(o: &Object, offset: i64, width: usize, what: &str, expected: u64, x: u64) -> Result<u64> {
     let e = expected & mask(width);

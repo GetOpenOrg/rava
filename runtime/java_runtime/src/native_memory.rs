@@ -98,6 +98,7 @@ fn len(bytes: i64) -> Result<usize> {
     rava_rawmem::length(bytes).map_err(raw_err)
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// `(base, offset)` 处 `width`（1 / 2 / 4 / 8）字节值的原子读-改-写（Unsafe / VarHandle 的 CAS、交换、
 /// getAndAdd 族）。值是本机字节序零扩展的位形；`op(旧)` 给出新值则写入其低 `width` 字节，返回旧值，
 /// 给 None 即不写。基本类型数组经元素原子单元（区间在单个元素内为该元素的 CAS，跨元素见
@@ -112,6 +113,7 @@ pub fn update(base: &Object, offset: i64, width: usize, op: &mut dyn FnMut(u64) 
     with_prim_array!(base, |a| a.__update_bytes(start, width, &mut *op)).flatten().ok_or_else(out_of_bounds)
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 普通读（Unsafe get 族，volatile 由调用方加栅栏）：`(base, offset)` 处 `width` 字节值（零扩展）。
 /// 直接内存不要求对齐（未对齐时逐字读取，与 HotSpot 非对齐普通访问同为非整体原子）。
 pub fn load(base: &Object, offset: i64, width: usize) -> Result<u64> {
@@ -122,6 +124,7 @@ pub fn load(base: &Object, offset: i64, width: usize) -> Result<u64> {
     update(base, offset, width, &mut |_| None)
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 普通写（Unsafe put 族，volatile 由调用方加栅栏）：`v` 的低 `width` 字节写到 `(base, offset)`。
 pub fn store(base: &Object, offset: i64, width: usize, v: u64) -> Result<()> {
     if base.0.is_jvm_null() {
@@ -209,6 +212,7 @@ pub fn copy(src_base: &Object, src_offset: i64, dst_base: &Object, dst_offset: i
     write(dst_base, dst_offset, &buf)
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// `(base, offset)` 是否按原生内存寻址：base 为 null（直接内存）或基本类型数组。
 /// 其余对象（实例字段偏移、引用数组）由 Unsafe 的字段 / 引用访问器处理。
 pub fn is_raw(base: &Object) -> bool {

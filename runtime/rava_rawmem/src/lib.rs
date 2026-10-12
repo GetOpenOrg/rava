@@ -258,6 +258,7 @@ pub unsafe fn copy(src: usize, dst: usize, n: usize) {
     }
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 普通读：`addr` 处 `width`（1..=8）字节的本机字节序值（零扩展）。不跨字时为单次原子读。
 ///
 /// # Safety
@@ -274,6 +275,7 @@ pub unsafe fn load(addr: usize, width: usize) -> u64 {
     bits_of(&b[..width])
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 普通写：`v` 的低 `width`（1..=8）字节写到 `addr`。对齐的 8 字节为单次原子写，其余字内写为
 /// 同字 CAS 合并；跨字写逐字完成（与 HotSpot 非对齐普通访问同为非整体原子）。
 ///
@@ -295,6 +297,7 @@ pub unsafe fn store(addr: usize, width: usize, v: u64) {
     }
 }
 
+#[inline] // 直接内存热路径：跨 crate（java_runtime ↔ 语料 crate）thin LTO 下显式导入内联（普通段 +25% 回退，分诊报告六）
 /// 原子读-改-写：`addr` 处 `width`（1 / 2 / 4 / 8）字节值（本机字节序零扩展）。`op(旧)` 给新值即
 /// 原子替换，给 None 即不写；返回旧值。顺序一致（Java CAS 的 volatile 读写语义）。CAS 重试时 op
 /// 重新求值（须为纯函数）。
