@@ -1089,8 +1089,17 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
       6.42 MB、DeepCopy 2215 个（字节数脚本首版 xargs 分批少计，修为逐文件求和，4e182e4e）。
     - `s7k6b-seed`（jp1，`scripts/diag/s7k6_seed_sets.sh 31e4762d`，四例 × 种子 0/1/2 闭包集合）、
       `s7k6b-det`（us1，`closure_independent_of_*` 两项）、`s7k6b-peak`（sg1，`s7k6_peak.sh
-      31e4762d`，三例逐 crate 固定切段重建峰值）交回时在跑 / 排队（集群被 JDK25 扫尾占用），
-      结果回收法见下「K6 交接」。
+      31e4762d`，三例逐 crate 固定切段重建峰值）**交回时在跑 / 排队**（集群被 JDK25 扫尾占用；
+      seed 首跑两次脚本外故障——worktree 已存 + 被回收重派，已修脚本幂等续跑 fb938aa3），结果
+      回收法见下「K6 交接」。**本机补证**（dev，同 JDK 21）：① 闭包集合对照——HelloWorld ×
+      种子 0/1/2，新（s7-k6）对基线（31e4762d）的类 / 方法 / 反射成员集合逐项全同
+      （641/2108/61，与 bfx-seed 基线数字相同）；② **确定性两项本机过**
+      （`closure_independent_of_hash_seed` / `closure_independent_of_order`，2 passed / 1 ignored
+      （`_large`），release 档 3655 s）；③ **构造性证据**：本分支对 `closure` / `instr` / `ty` /
+      `closure_cmd` 等分析器全部源码的 diff 为空（改动全在宏展开与 emit 侧）——闭包集合性质由
+      构造保证。TestSerialLookupPairing 的本机对照出现 2709 → 6475（多出 JCA provider 族）的
+      假差异：与 dev 上并行的 JDK25 作业 / 共享缓存环境有关（同口径 HelloWorld 全同、分析器源码
+      零差异可排除代码回归），以服务器 seed 作业（隔离检出、同脚本双侧）为准。
     - **本机峰值 A/B**（`rustc_profile.sh`，`-Z time-passes` 的 rustc 自计 RSS，同机隔离）：
       HelloWorld 底段 1331 → 1444 MB（**+8.5%**）、上段 decl_1 613 → 644 MB（**+5.1%**）、
       CollectorsDemo 底段 1413 → 1453 MB（**+2.8%**），均在 ±10% 预算内；增量来源＝标记文件对
@@ -1108,6 +1117,24 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     TestCoerceBoxCast、TestMhBoxCast、TestReflectBoxCast、TestUnboxWrapperFaces、
     TestWidenFacesInvoke、TestWrapperValueFaces、ReflectionAPI。本机已过四例（HelloWorld、
     InterfaceDispatch、TestGenerics、TestDynamicProxy——含 1843 例的装箱工厂协议面）。
+  - **K6 交接（10-12 晨，子代理到点停止；作业在跑，回收法如下）**：分支 s7-k6 @ fb938aa3
+    （实现 2e3e9c2f + 脚本 5e7b21b8 / 4e182e4e / fb938aa3 + 文档 f8f53d6b / 592533ae），已推
+    origin / github。已收：`s7k6b-macro2`（jp2，宏单测 plan 41 / 缺省 35）、`s7k6b-seg2`
+    （kr2，三例切段逐类一致——HelloWorld 788 / CollectorsDemo 809 / DeepCopy 2681 文件全同，
+    标记文件 542 / 559 / 2215 个）；本机已过：确定性两项（hash_seed / order，release 3655 s）、
+    HelloWorld 三种子闭包集合对基线全同、四例 + CollectorsDemo 共五例 emit→链接→运行逐字一致、
+    峰值 A/B（HW 底段 +8.5% / 上段 +5.1% / CD 底段 +2.8%）。在跑（收尾即出）：
+    - `s7k6b-seed`（jp1）：幂等续跑——23 份闭包 json 已在前两次运行产物里，缺
+      base.TestSerialLookupPairing s2，之后出对照表；日志尾 `seed-sets: ALL-IDENTICAL` 即过，
+      全表在 `cluster_results/job/s7k6b-seed/`（`--fetch` 已声明 summary.txt 与 *.log）。
+    - `s7k6b-det`（us1 排队）：`cargo test -p driver --test closure_cli closure_independent`——
+      **本机已过（两项 ok）**，服务器作业为重复确认，可等可撤。
+    - `s7k6b-peak`（sg1 在跑）：`s7k6_peak.sh 31e4762d`——逐 crate 表在日志尾与
+      `01/build/s7k6-peak/summary.txt`、rows.txt（fetch 已声明）；判定口径 = 声明 crate 峰值对
+      基线不超 +10%（DeepCopy 底段记录不作判据）。本机同工具 A/B 已在 ±10% 内。
+    - 回收命令：`cat cluster_results/job/<tag>/summary.json` 看 status/rc；`tail
+      cluster_results/job/<tag>/01_*.log`。若 seed 需重派：同 tag 重跑分发器即可（脚本已幂等，
+      fb938aa3 起）。
   - **K7 / K8 衔接**：K7（共置手写随宿主）独立可并行——标记文件按类同段落盘，宿主判定不受影响；
     K4 落地后标记文件整体挪入 `java_marker` crate，届时 D8 图只剩 inherit / hidden 边（⑤ 口径）
     的验证归 K8 档案验收（连同标记 crate 自身体量——本轮已随 `s7k6b-seg` 产出逐例统计）。
