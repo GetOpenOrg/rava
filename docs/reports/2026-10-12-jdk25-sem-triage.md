@@ -268,3 +268,7 @@ FractionReduction 已实证转过。分类与验收以 release 为准；dev 档�
    VarHandle ISE 3 例（用 run1 产物取 flavor 实例的按名字段面证据）、超时 5 例（run1 600s 档 +
    gdb 挂点）、AbstractCollection.spliterator 存根 1 例。
 5. **junit 8 例 OOM** 归 G1 线不变；DES/DeepCopy 类 11G 槽转译 OOM 在 run1 将再现，归大槽重跑。
+6. **run1 槽位校准（实测）**：DataEncryptionStandard 转译错误 34m52s、DeepCopy 43m03s——11G 作业槽
+   转译段 OOM（资源类），原 22G 扫描上二者是 E0308 编译错。**闭包 ≥2500 类的重组（E0308 族约 1/3）
+   在云槽只能到转译段**，两组清单对这批以「原 22G 扫描签名（E0308）+ 修复后语义待验」记，大槽复跑
+   才能给终值；小组（≤2300 类）在云槽可全流程。
