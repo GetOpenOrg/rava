@@ -27,6 +27,14 @@
 //! 保不动点；且签名以 `Rc` 地址作内容同一性，划分依赖分配历史（`RAVA_CTX_FLAT=3` 下 `closure_independent_of_order`
 //! 失败，g1c4-det）。合并只在最终不动点（无剩余工作）才是纯存储操作，而那对峰值无益。位 1/2 保留为实验性
 //! 近似通道（opt-in，缺省关闭；试金石不崩已达成：DeepCopy 位 1/2 单开 rc=0、~112 s / 3.1 GB，§4.13 曾 OOM 18 GiB）。
+//!
+//! **预算降级口径（§4.15，本节改道）**：显式承认合并是近似，不再追求「零漂移」——`RAVA_EQ_BUDGET`（字节，
+//! 可带 K/M/G 后缀）设定内存预算：排空点采样当前 RSS，达预算才做一轮等价类合并（通道 1|2 全开，不看
+//! `RAVA_CTX_FLAT` 位 1/2），合并后 RSS 回落即停，再次爬升到预算再触发——分析在预算附近锯齿推进而非线性增长。
+//! 未达预算前输出与基线逐项相同（零合并即零漂移，g1c5 实测 A 档）；超预算后的漂移以语料漂移率为验收指标
+//! （强制低预算档量化 mc / gaps / methods 的相对变化）。RSS 触发与 `Rc` 地址签名使该档天然**非确定**，
+//! 确定性单测只在缺省档有口径。`RAVA_EQ_STEP` 兼做触发退避：上次尝试后新增节点不足步长时不重跑
+//! 分划细化（O(图) 一轮在百万节点级是秒级开销）。
 
 use std::time::Instant;
 
@@ -43,6 +51,19 @@ fn eq_step() -> usize {
 }
 /// 分划细化最大轮数（稳定即提前退出）
 const EQ_ROUNDS: usize = 8;
+
+/// `RAVA_EQ_BUDGET` 的字节量解析：纯数字按字节；可带二进制后缀 K / M / G（如 `12G` = 12×2^30）。
+/// 解析失败按 0（关闭）。构造时读一次，缺省路径不读环境变量
+pub(super) fn parse_budget(s: &str) -> usize {
+    let s = s.trim();
+    let (num, mul) = match s.as_bytes().last() {
+        Some(b'K' | b'k') => (&s[..s.len() - 1], 1 << 10),
+        Some(b'M' | b'm') => (&s[..s.len() - 1], 1 << 20),
+        Some(b'G' | b'g') => (&s[..s.len() - 1], 1 << 30),
+        _ => (s, 1),
+    };
+    num.trim().parse::<usize>().ok().map_or(0, |n| n.saturating_mul(mul))
+}
 
 /// 常量格内容（`PV` 只有 `PartialEq`）的可哈希 / 可比较键：载体与克隆签名用
 #[derive(PartialEq, Eq, Hash)]
@@ -99,6 +120,10 @@ pub(super) struct Eqm {
     /// 观测：检查点数 / 合并的节点等价类数 / 并掉的节点数 / 登记的克隆等价组数 / 累计细化轮数 / 耗时 ms
     pub(super) stats: [u64; 6],
     last_nodes: usize,
+    /// 预算降级观测：预算触发的检查点数 / 最近一次触发的 RSS（MiB）/ 最近一次触发的节点数
+    pub(super) budget_hits: u64,
+    pub(super) budget_trig_rss: u64,
+    pub(super) budget_trig_nodes: u64,
 }
 
 impl Default for Eqm {
@@ -111,6 +136,9 @@ impl Default for Eqm {
             mates: HashMap::default(),
             stats: [0; 6],
             last_nodes: 0,
+            budget_hits: 0,
+            budget_trig_rss: 0,
+            budget_trig_nodes: 0,
         }
     }
 }
@@ -152,10 +180,17 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn eq_merge_due(&self) -> bool {
-        if self.ctx_flat_mode & 3 == 0 {
+        // 缺省档（通道关 + 预算关）在此即返回，不读任何环境变量（缺省路径结构与 g1c5-det8 验证时相同）
+        if self.ctx_flat_mode & 3 == 0 && self.eq_budget == 0 {
             return false;
         }
         let n = self.graph.node_count();
+        if self.eq_budget > 0 {
+            // 预算降级口径（§4.15）：RSS 达预算才做（排空点采样；含全部驻留项，直指槽上限），
+            // 上次尝试后新增节点不足步长时退避——分划细化一轮 O(图)，百万节点级为秒级
+            let rss = (stats::cur_rss_mb() as usize) << 20;
+            return rss >= self.eq_budget && n >= self.eqm.last_nodes + eq_step();
+        }
         let (at, step) = (eq_at(), eq_step());
         n >= at && n >= self.eqm.last_nodes + step
     }
@@ -164,8 +199,15 @@ impl<'a> Engine<'a> {
     pub(super) fn eq_merge_checkpoint(&mut self) {
         let t0 = Instant::now();
         self.eqm.last_nodes = self.graph.node_count();
+        let over_budget = self.eq_budget > 0;
+        if over_budget {
+            self.eqm.budget_hits += 1;
+            self.eqm.budget_trig_rss = stats::cur_rss_mb();
+            self.eqm.budget_trig_nodes = self.graph.node_count() as u64;
+        }
         self.eqm.stats[0] += 1;
-        let mode = self.ctx_flat_mode & 3;
+        // 预算降级：通道 1|2 全开（不看 RAVA_CTX_FLAT）；显式位 1/2 档维持原口径
+        let mode = if over_budget { 3 } else { self.ctx_flat_mode & 3 };
         // ── 克隆级：同成员的候选（标记通道开的克隆 + 本体），按克隆签名分等价组 ──────────
         let mut by_anchor: HashMap<usize, (Option<usize>, Vec<usize>)> = HashMap::default();
         for (i, ((key, ctx), mn)) in self.methods.iter().enumerate() {
@@ -195,6 +237,7 @@ impl<'a> Engine<'a> {
         groups.sort_unstable();
         if groups.is_empty() {
             self.eqm.stats[5] += t0.elapsed().as_millis() as u64;
+            self.eq_budget_note(&t0, 0, 0);
             return;
         }
         // 克隆签名：（pvals 内容序号向量, 分析指针, 各槽载体内容集, 各槽 pstr 集, 污染槽位）
@@ -226,6 +269,7 @@ impl<'a> Engine<'a> {
         }
         if mate_groups.is_empty() {
             self.eqm.stats[5] += t0.elapsed().as_millis() as u64;
+            self.eq_budget_note(&t0, 0, 0);
             return;
         }
         // ── 节点级：参与克隆的 P/R/S 节点（按代表），初始键 =（克隆等价组, 种类, 位置）多重集 ──
@@ -450,6 +494,31 @@ impl<'a> Engine<'a> {
         self.eqm.stats[2] += merged_nodes;
         self.eqm.stats[3] += new_mates;
         self.eqm.stats[5] += t0.elapsed().as_millis() as u64;
+        // 退避基准取**合并后**的节点数：预算档合并常整组收缩（节点数大幅下降），按合并前计数会让
+        // 下次触发等节点重新长回合并前规模——预算锯齿会失灵。显式位 1/2 档同样受益（实验口径，无基线锁定）
+        self.eqm.last_nodes = self.graph.node_count();
+        self.eq_budget_note(&t0, merged_cls, merged_nodes);
+    }
+
+    /// 预算触发的一轮检查点收尾记录（stderr 一行；预算关（缺省 / 显式位 1/2 档）无输出）：
+    /// 触发时 RSS / 预算、合并类数与节点数、合并后节点数与 RSS、耗时——sb3 / S0 曲线与「合并扛不扛得住预算」
+    /// 的判定都以此行 + `--lambda-prof` 的 census 行为准
+    fn eq_budget_note(&self, t0: &Instant, cls: u64, nodes: u64) {
+        if self.eq_budget == 0 {
+            return;
+        }
+        eprintln!(
+            "[eq-budget #{}] trig_rss={}MiB budget={}MiB nodes_before={} classes={} merged_nodes={} nodes_after={} rss_after={}MiB ms={}",
+            self.eqm.budget_hits,
+            self.eqm.budget_trig_rss,
+            self.eq_budget >> 20,
+            self.eqm.budget_trig_nodes,
+            cls,
+            nodes,
+            self.graph.node_count(),
+            stats::cur_rss_mb(),
+            t0.elapsed().as_millis()
+        );
     }
 
     /// 克隆 t 的等价前置签名：常量格、分析共享指针、各槽载体内容集、各槽 pstr 集、污染槽位。
@@ -494,4 +563,23 @@ struct CloneSig {
     carriers: Vec<(u16, Vec<u32>)>,
     pstrs: Vec<(u16, Vec<u32>)>,
     taints: Vec<u16>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_budget;
+
+    #[test]
+    fn eq_budget_parse() {
+        assert_eq!(parse_budget(""), 0);
+        assert_eq!(parse_budget("0"), 0);
+        assert_eq!(parse_budget("1024"), 1024);
+        assert_eq!(parse_budget("4k"), 4 << 10);
+        assert_eq!(parse_budget("16M"), 16 << 20);
+        assert_eq!(parse_budget("12G"), 12 << 30);
+        assert_eq!(parse_budget("12 G"), 12 << 30);
+        // 解析失败 / 溢出按 0（关闭）
+        assert_eq!(parse_budget("abc"), 0);
+        assert_eq!(parse_budget("99999999999999999999G"), 0);
+    }
 }

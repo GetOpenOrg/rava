@@ -220,9 +220,10 @@ impl Engine<'_> {
             self.hub_sites.len(),
             self.mref_keys.len(),
         );
-        // 排空点等价类合并（eqmerge.rs）：累计检查点 / 合并类 / 并掉节点 / 克隆组 / 细化轮 / 耗时 / 标记克隆数
+        // 排空点等价类合并（eqmerge.rs）：累计检查点 / 合并类 / 并掉节点 / 克隆组 / 细化轮 / 耗时 / 标记克隆数 /
+        // 预算降级（预算字节 / 触发数 / 最近触发 RSS；预算关时全 0）
         eprintln!(
-            "{tag} eqmerge ckpts={} classes={} nodes={} groups={} rounds={} ms={} marked={}",
+            "{tag} eqmerge ckpts={} classes={} nodes={} groups={} rounds={} ms={} marked={} budget={}MiB bhits={} btrig_rss={}MiB",
             self.eqm.stats[0],
             self.eqm.stats[1],
             self.eqm.stats[2],
@@ -230,6 +231,9 @@ impl Engine<'_> {
             self.eqm.stats[4],
             self.eqm.stats[5],
             self.eqm.marks.len(),
+            self.eq_budget >> 20,
+            self.eqm.budget_hits,
+            self.eqm.budget_trig_rss,
         );
         // 内存剖析（同上，定位 RSS 尖峰）：分配器计数 + 主要驻留结构的字节估计。
         // rss_max 为上一段 dump 间隙的采样峰值；live（活跃字节）与 rss 之差是分配器滞留

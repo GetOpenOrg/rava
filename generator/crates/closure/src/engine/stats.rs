@@ -439,9 +439,12 @@ impl<'a> Engine<'a> {
             self.site_cap
         ]);
         // 排空点等价类合并（eqmerge.rs）：[检查点数, 合并的节点等价类数, 并掉的节点数, 登记的克隆等价组数,
-        // 累计细化轮数, 耗时 ms, 标记通道的克隆数]
+        // 累计细化轮数, 耗时 ms, 标记通道的克隆数, 预算字节, 预算触发数, 最近触发 RSS MiB]
         let mut eq = self.eqm.stats.to_vec();
         eq.push(self.eqm.marks.len() as u64);
+        eq.push(self.eq_budget as u64);
+        eq.push(self.eqm.budget_hits);
+        eq.push(self.eqm.budget_trig_rss);
         v["eq_merge"] = json!(eq);
         v
     }

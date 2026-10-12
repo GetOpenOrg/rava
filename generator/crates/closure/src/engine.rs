@@ -325,6 +325,9 @@ pub struct Engine<'a> {
     site_capped: HashSet<Rc<str>>,
     /// 宽分配点阈值（`RAVA_SITE_CAP` 覆盖；0 = 关闭）。语料上取实测上界之上、零触发（objscan，性能计划 §4.14）
     site_cap: usize,
+    /// 等价类合并的内存预算（`RAVA_EQ_BUDGET`，字节，可带 K/M/G 后缀；0 = 关闭，缺省）。预算降级口径
+    /// （§4.15）：排空点 RSS 达预算才做一轮合并（通道 1|2 全开，近似档、接受语料漂移率验收）
+    eq_budget: usize,
     /// 形参常量克隆上下文 → 其堆上下文（外层上下文，`NOCTX` 即无）：克隆只以调用点区分节点，分配点链与外层相同（`ctxsel.rs`）
     ctx_heap: HashMap<u32, u32>,
     /// 容器形态判定缓存（类型 id）

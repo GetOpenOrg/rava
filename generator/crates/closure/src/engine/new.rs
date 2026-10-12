@@ -110,6 +110,8 @@ impl<'a> Engine<'a> {
             site_variants: HashMap::default(),
             site_capped: HashSet::default(),
             site_cap: std::env::var("RAVA_SITE_CAP").ok().map_or(SITE_CAP, |v| v.parse().unwrap_or(SITE_CAP)),
+            // 预算降级合并（eqmerge.rs §4.15）：RSS 预算（字节，K/M/G 后缀）；0 = 关闭（缺省，路径零影响）
+            eq_budget: std::env::var("RAVA_EQ_BUDGET").ok().map_or(0, |v| eqmerge::parse_budget(&v)),
             ctx_heap: HashMap::default(),
             containers: HashMap::default(),
             dflt_alloc: HashSet::default(),
