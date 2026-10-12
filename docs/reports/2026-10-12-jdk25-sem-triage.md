@@ -97,3 +97,143 @@ FractionReduction 已实证转过。分类与验收以 release 为准；dev 档�
 4. 派发器均为 setsid 脱离进程，本子代理结束后继续运行；如需停止：`pkill -f "job j25s-rA"` 等。
 5. 未竟事项：junit 8 例 OOM（G1 线）、HttpLoopback native 缺口、resource-bundle-by-name、
    StackFrameInfo 反射流（G1 线）均维持 open 登记，不在本分支修复。
+
+---
+
+# 第二轮（j25-r2，2026-10-13）
+
+分支 `j25-r2`（基 batch-1014 @ 1b644fbc，含 j25-sem escape 修复与 lib-tests 全部内容），
+修复提交落在 `j25-r2-fix`（e05dcd0a + 979b759a）。作业 tag 前缀 `j25r-`。
+
+## 0. 口径
+
+- **输入**：2026-10-13 主会话扫尾重跑（release + 22G 槽，基线 e44f78d6「生成器审查余项收口」）
+  ——1127 例总盘子 994 过 / 133 败。133 = junit 族 OOM 8（闭包规模，G1 线，不属本轮）+ **语义类 125（本轮对象）**。
+- **重要口径修正**：主会话复跑基线 e44f78d6 **不含 batch-1013 合批内容**（adf4cc1f 起：coerce-check、
+  plainseg-bisect、invoke-key-opt、b1013-fix）也不含 batch-1014（lib-tests、j25-sem）。即 125 例中的一部分
+  在 batch-1014 上应已消解；TestCoerceBoxCast / TestMhBoxCast 在 e44f78d6 上是幽灵失败（测试文件不存在，
+  日志为 "No test files found"，coerce-check 才入库这两例）。
+- **expected 口径**：expected 全部由参考构建 21.0.11 生成；被测为 JDK 25 转译体。凡两版 JDK 自身行为
+  差异属版本差异口径（§3.4），不算转译缺陷。
+- 复跑配方：`--release --jdk 25 --transpile-timeout 2400 --run-timeout 600 --build-timeout-scale 2`，
+  服务器 kr2/sg2/us1/jp1（dev 批闸门避让），tag `j25r-run1`（14 作业 × 125 例）。
+
+## 1. 输入 125 例本地聚类（error_logs 全量挖掘）
+
+| 簇 | 例数 | 阶段 | 签名 |
+|---|---|---|---|
+| E0308 symbol_lookup | 65 | compile | `java/lang/foreign/symbol_lookup.rs:190:71` expected `Result<Optional<MemorySegment>>` found `Result<Optional<Object>>` |
+| Unsafe.getX 解析失败（MH 族） | ~25 | run | InternalError: NoSuchMethodException `jdk.internal.misc.Unsafe.get{Int,Double,Reference}(Object,long)…/invokeVirtual`，栈 DirectMethodHandle.makePreparedFieldLambdaForm → MethodHandleNatives.resolve |
+| 版本差异（输出不一致） | 4 | output | TestParseDoubleEdge（hex 浮点错误消息）/ TestNativeFrameTrace（sleepNanos 链）/ TestObjectWaitFrames（wait 行号）/ TestSimpleDateFormatRound（时区短名） |
+| 运行超时 | 5 | run timeout | AmicablePairs、RamanujanPrimes、TestArraysSetAll、TestCommonPool、TestParallelArrayCas（均 >300s） |
+| folds 违约 | 2 | transpile | 活指令 pc=NNN invokeinterface 顺序落入 dead_pcs（TestCollectionsFactories@122,300、TestListOf@635） |
+| condy switch 标签 | 1 | transpile | switch 标签形态 Dynamic(17,"I","Ljava/lang/Class;")（TestPatternSlotReuse） |
+| 幽灵（文件不存在） | 2 | — | TestCoerceBoxCast、TestMhBoxCast（coerce-check 入库后为真实新例，首次跑 JDK25） |
+| getClassContext 多一帧 | 2 | output | TestClassContextDispatch、TestSecurityManagerContext 行首多 `java.lang.SecurityManager` |
+| Console 编码 NPE | 1 | run | CheckOutputDeviceIsATerminal：Console.<clinit> → Charset.forName(null) IAE |
+| native 缺失 | 3 | run | Class.getClassFileVersion0（TestClassNestNatives）、UnixFileDispatcherImpl.available0（TestFilesApi、FileIODemo） |
+| stub（链外方法） | 1 | run | TestModuleLayerDefine：java/util/AbstractCollection.spliterator 存根 |
+| VarHandle ISE | 3 | run | TestVolatilePrimitiveAccess / TestCallerSensitiveLookup / TestSecurityProperties：VarHandle.setVolatile/getAndAdd/compareAndSet 无消息 IllegalStateException |
+| 其余单例 run error | ~15 | run | 逐例见 §5 清单（TestEcSignVerify 等安全族多数预期属 MH 族——首错即 Unsafe.getX） |
+
+（例数为日志签名口径；MH 族实际认领以 j25r-run1 复跑为准——凡经 Field/VarHandle/MH 的用例首访即挂同一错。）
+
+## 2. 复跑两组（j25r-run1 @ 1b644fbc，服务器拥挤排队中——完成后回填）
+
+- **基线升级已消解**（预期至少：escape 修复的 7 例栈溢度族 FunctionalCompositionTest/RealNumberSet/
+  TestFunctionalInterface/TestHttpLoopback×2/TestPrimitiveSpinedBuffer/TestStreamMore；两幽灵例转为真实新例）
+- **仍失败**：（回填）
+
+## 3. 逐簇根因与修复（j25-r2-fix）
+
+### 3.1 SAM 合成对象 vtable 条目类型分歧（E0308，65 例）— 已修 e05dcd0a
+
+- 根因：`sam_objects.rs` 的 SAM 条目签名取接口发射擦除声明（`erased_declaration`——具体参数化类型按
+  Signature 恢复），闭包 fn 类型取 SAM 描述符擦除视图（`SamSpec::erased_sig`）。JDK25
+  `java.lang.foreign.SymbolLookup.find` 返回 `Optional<MemorySegment>`：描述符只到裸 `Optional`（擦除视图
+  `Optional<Object>`），两视图在具体参数化类型位置分歧，条目体 `(self.0)(arg0)` 直呼即 E0308。JDK21 档案
+  无此形态（SAM 返回类型为泛型实例化的接口），JDK25 首触。该文件在 java_base_decl——一切含 JDK 档案的
+  构建全挂，故 65 例一簇。
+- 修法：条目签名与擦除签名逐位置（参数 + 返回）比对，分歧位置经 Object 边界桥接（装箱再按目标类型
+  `From<Object>` 擦除重建——只搬句柄，与宏 `result="checkcast"` 同口径）。无分歧时输出零变化。
+
+### 3.2 手写边界类方法表随反射事实裁剪（MH 族 ~25 例）— 已修 979b759a
+
+- 根因（证据链）：JDK25 `DirectMethodHandle.makePreparedFieldLambdaForm` 改经
+  `unsafeMethodName(isGetter,isVolatile,wrapper)` 辅助取 Unsafe 访问器名（switch-map 数组 + StringBuilder，
+  JDK21 为 `LambdaForm$Kind.methodName` 枚举常量字段读）→ 分析器推不出按名反射事实 → `Unsafe` 不入
+  `meta_method_classes` → 档案侧 `Keep` 裁剪（`rava_meta_tables::render` retain）把方法表行清零 → 运行期
+  `MethodHandleNatives.resolve` → `__declared_method_meta` 落空 → NoSuchMethodError。行本身在壳文件里
+  一直在（本机 slot11 JDK21 残留构建实证 `unsafe_.rs` 的 `// [meta] #[java_native(name="getDouble"…)]` 与
+  meta_tables 行；JDK21 缓存 closure.json 的 reflect.members 含全 getX 族）。
+- 修法：`write_archive` 扫描壳文本的 `#[impl_methods]` 标记（手写边界类，76 类），其类名并进 Keep 的
+  methods 集——手写层成员由人维护、MemberName 可在运行期以计算名触达是这类类的固有形态；JDK21 侧行为
+  不变（事实集合本已含这些类）。二进制代价：76 类的方法行（千行级）。
+
+### 3.3 folds 活调用死顺序（TestCollectionsFactories / TestListOf）— 已修 e05dcd0a
+
+- 根因：`Set.of().add("x")` 恒抛 UnsupportedOperationException——调用点活、顺序后继（pop/goto）全克隆
+  不可达。report.rs 已有「按不返回导出」缓解但门控在 `is_concrete`（须有具体求值克隆）；本形态知识来自
+  派发面定论（无具体克隆），违约原样导出 → 发射层 apply_fold 拒绝。语义论证：常量折叠的分支指令本身
+  可达，造不出「调用活而顺序后继死」——该形态必为不返回调用，门控可撤。
+- 修法：Operand::Method 形态的 folds 违约一律转 noreturn_calls（撤 is_concrete 门控）。
+
+### 3.4 typeSwitch 基本类型 Class 标签（TestPatternSlotReuse）— 已修 e05dcd0a
+
+- 根因：对象 switch 的基本类型无条件模式（`case int` 等）以 `ConstantBootstraps.primitiveClass` condy
+  （`Dynamic(bsm,"I","Ljava/lang/Class;")`）装载类字面量；`labels()` 未识别该形态（JDK21+ javac 同形态，
+  语料首触）。typeSwitch 语义：基本类型标签匹配对应包装类实例。
+- 修法：bsm 为 primitiveClass 且描述符 `Ljava/lang/Class;` 的 Dynamic 标签按名（基本类型描述符）经
+  `wrapper_of` 归一为装箱类 `Label::Class`（与 Class 标签同一出口）。
+
+### 3.5 标准流编码属性 null（CheckOutputDeviceIsATerminal）— 已修 e05dcd0a
+
+- 根因：`system_props_raw_impl::tty_encoding` 只在流为终端时给值；e2e 管道下 `stdout.encoding` null。
+  JDK25 `Console.<clinit>` 读 stdin/stdout.encoding 作 `Charset.forName` 实参 → IAE "Null charset name" →
+  ExceptionInInitializerError。本机实测真机 JDK21/25 管道下 `stdout.encoding=UTF-8`、JDK25
+  `stdin.encoding=UTF-8`（JEP 400 缺省字符集兜底）。
+- 修法：非终端流按 "UTF-8"（终端仍本地编码），JDK21/25 与真机一致。
+
+### 3.6 两缺口 native — 已修 979b759a
+
+- `Class.getClassFileVersion0()`（JDK24+ API）：= `jdk_feature() + 44`（语料类同源同版本；TestClassNestNatives
+  断言状态路径触达）。
+- `UnixFileDispatcherImpl.available0(FileDescriptor)`（FileChannelImpl.available 后端）：字符设备/FIFO/socket
+  取 FIONREAD、其余 fstat size − lseek(cur)，虚拟句柄走 jdk_resources（TestFilesApi、FileIODemo）。
+
+### 3.7 未修——根因已写清
+
+- **版本差异 4 例**（TestParseDoubleEdge/TestNativeFrameTrace/TestObjectWaitFrames/TestSimpleDateFormatRound）：
+  本机真机 JDK21/25 双跑实证——转译体输出与真机 JDK25 **逐字一致**，差异全部来自两版 JDK 自身行为
+  （FloatingDecimal 错误分类、Thread.sleep→sleepNanos 链、Object.java 行号、时区短名策略）。属 expected
+  口径（21.0.11 生成）问题，归主会话裁决：refjdk 25 重生成 expected 或按 JDK 版本分档。登记
+  `jdk25-version-output-diff`（open）。
+- **getClassContext 多一帧 2 例**（TestClassContextDispatch/TestSecurityManagerContext）：JDK25 该方法改
+  StackWalker 实现（`walk(s -> s.map(declaringClass).skip(1)…)`，真机流头恰为 SecurityManager.getClassContext
+  被 skip(1) 吃掉）；我们的帧枚举头部多一帧（疑 walk 回调帧 lambda$getClassContext$0——声明类同为
+  SecurityManager——或 walker 机制帧过滤口径差一）。JDK21 该方法是手写 native（过滤自洽）故不显现。需
+  运行期帧列表取证（j25r-run1 产物或 gdb）；候选修法：`__anchor_stream` 过滤口径对齐 HotSpot（从 walk
+  调用者帧起取）。登记 `jdk25-getclasscontext-extra-frame`（open）。
+- **VarHandle 无消息 ISE 3 例**（TestVolatilePrimitiveAccess/TestCallerSensitiveLookup/TestSecurityProperties）：
+  `_field_coords` → `_field_offset`（`__unsafe_long_cell("fieldOffset")` 按名协议）落空 → `_state_err()`。
+  JDK21/25 的 Field 族 flavor 类逐字段对比完全一致（`final long fieldOffset` 都在），疑点在运行期 flavor
+  实例的按名字段面（构造路径 JDK25 改 `makeFieldHandle(MemberName,Class,boolean)` 3 参 / findVarHandle 走
+  getFieldVarHandle）——需 j25r-run1 复跑产物进一步定位（与 §3.2 修复可能相关：EventHelper 静态 VH 的
+  compareAndSet 栈即此簇）。
+- **运行超时 5 例**：JDK21 侧同例已过（lc3-fix 后）；JDK25 挂起机制未取证（复跑 600s 档 + 产物后再定，
+  候选：ForkJoin/并行流等待面在 JDK25 新形态）。本轮未修。
+- **TestModuleLayerDefine（AbstractCollection.spliterator 存根）**：链外方法存根，JDK25 闭包形状差一轮
+  取证；第一轮报告的 module-unnamed-handwritten（e50d4ba3）不覆盖本形态。未修。
+
+## 4. 验收（j25r-fixv @ 979b759a，作业排队中——完成后回填）
+
+| 项 | 状态 |
+|---|---|
+| 每簇代表例 JDK25 PASS（13 例：XmlDomParse/SecureRandomApi/SerialEnumNoInit + GetFields/BoxedValueSemantics/FieldDemo + CollectionsFactories/ListOf + PatternSlotReuse + CheckOutputDeviceIsATerminal + ClassNestNatives/FilesApi/FileIODemo） | 🔄 j25r-fixv 作业 1 |
+| JDK21 回归 7 例（FunctionalCompositionTest/PatternSlotReuse/GetFields/CheckOutputDeviceIsATerminal/CollectionsFactories/HelloWorld/ReflectInvokePerReceiver） | 🔄 j25r-fixv 作业 2 |
+| generator cargo check（--release --tests，heavy_lock） | ✅ 全部修复提交过 |
+| java_runtime | 服务器构建覆盖（本机无 closure_input 不可检；rustfmt 解析过） |
+
+## 5. j25r-run1 两组清单（回填）
+
+（等 14 作业完成）
