@@ -399,8 +399,16 @@ impl<'a> Engine<'a> {
                 let hot: HashSet<u32> = code.insns.iter().zip(&cold).filter(|(_, c)| !**c).map(|(x, _)| x.offset).collect();
                 a.events.retain(|(off, _)| hot.contains(off));
             }
-            // 摘要常驻到下次失效（读者重跑 / 重分析按偏移比对都要用），收掉构建期的余量
+            // 摘要常驻到下次失效（读者重跑 / 重分析按偏移比对都要用），收掉构建期的余量；
+            // 内层实参 Vec 同收（§4.17：`pop_args` 按形参数预留、`insert` 接收者翻倍，
+            // 虚调用普遍带 ~1/3 容量余量；事件驻留整个分析期）
             a.events.shrink_to_fit();
+            for (_, e) in a.events.iter_mut() {
+                match e {
+                    Event::Invoke { args, .. } | Event::Indy { args, .. } => args.shrink_to_fit(),
+                    _ => {}
+                }
+            }
             let a = Rc::new(a);
             if let (Some((params, mirrors)), Some(deps)) = (entry, deps) {
                 self.share_record(m, (params, mirrors, queries.clone()), sites, &a, deps);
