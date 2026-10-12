@@ -156,7 +156,11 @@ impl<'a> Engine<'a> {
                     pend.add_all(&d);
                     fire.push((ms, d));
                 }
-                pend.add_all(&std::mem::take(&mut self.graph.delta[c as usize]));
+                let dc = std::mem::take(&mut self.graph.delta[c as usize]);
+                if !dc.is_empty() {
+                    self.fwork_bytes -= super::flow::tset_bytes(&dc);
+                }
+                pend.add_all(&dc);
                 edges.extend(std::mem::take(&mut self.graph.edges[c as usize]));
             }
             for &b in &comp[1..] {

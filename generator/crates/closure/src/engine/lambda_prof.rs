@@ -183,6 +183,7 @@ impl Engine<'_> {
         if let Some(p) = self.lprof.as_mut() {
             p.rss_max = 0;
         }
+        self.fwork_bytes_peak = 0;
     }
 
     /// 打印一段前列（stderr，`[lambda-prof #序号 秒]` 前缀）
@@ -261,13 +262,15 @@ impl Engine<'_> {
             top.push((b, i));
         }
         eprintln!(
-            "{tag} census graph nodes={} sets={:.0}MiB/{} edges={}MiB queued_delta={:.0}MiB/{} seen={} members={} fmemo={}MiB nodes_dense≈{}MiB",
+            "{tag} census graph nodes={} sets={:.0}MiB/{}(uniq {}) edges={}MiB queued_delta={:.0}MiB/{} peak={}MiB seen={} members={} fmemo={}MiB nodes_dense≈{}MiB",
             self.graph.node_count(),
             sets_bytes as f64 / 1048576.0,
             sets_n,
+            self.graph.sets.unique(),
             (edges * 8) as f64 / 1048576.0,
             delta_bytes as f64 / 1048576.0,
             delta_nodes,
+            self.fwork_bytes_peak >> 20,
             self.graph.seen_len(),
             self.graph.members.len(),
             self.graph.fmemo_bytes >> 20,

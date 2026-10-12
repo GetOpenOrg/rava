@@ -248,6 +248,8 @@ impl<'a> Engine<'a> {
             static_offset_live: false,
             static_base_waits: Vec::new(),
             fwork: VecDeque::new(),
+            fwork_bytes: 0,
+            fwork_bytes_peak: 0,
             xreaders: HashMap::default(),
             pkey_dirty: BTreeSet::new(),
             lookup_top: HashSet::default(),

@@ -554,6 +554,9 @@ pub struct Engine<'a> {
     static_base_waits: Vec<(u32, Node, u32, hw_mem::Gate)>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
+    /// 待推增量的总堆字节（`queue_delta` / `drain_flows` 增量维护，观测）与段内峰值（dump 时清零）
+    fwork_bytes: usize,
+    fwork_bytes_peak: usize,
     /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑
     xreaders: HashMap<usize, BTreeSet<u32>>,
     /// 拼接键读取点的候选模式有变化、待失效重算的方法（处理完当前单元后统一失效，见 `sysprops_key.rs`）

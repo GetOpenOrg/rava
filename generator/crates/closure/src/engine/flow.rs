@@ -12,6 +12,11 @@ fn memo_bytes(s: &TypeSet) -> usize {
     s.classes.heap_bytes() + s.open.heap_bytes() + 64
 }
 
+/// 类型集的堆字节估计（观测用，O(1)）
+pub(super) fn tset_bytes(s: &TypeSet) -> usize {
+    s.classes.heap_bytes() + s.open.heap_bytes() + std::mem::size_of::<TypeSet>()
+}
+
 impl<'a> Engine<'a> {
     // ── 类型流 ──────────────────────────────────────────────────────────────
 
@@ -89,10 +94,18 @@ impl<'a> Engine<'a> {
     /// 代表 r 登记待推增量
     pub(super) fn queue_delta(&mut self, r: u32, delta: &TypeSet) {
         let ix = r as usize;
+        let b0 = tset_bytes(&self.graph.delta[ix]);
         self.graph.delta[ix].add_all(delta);
-        if !self.graph.queued[ix] {
+        // 待推增量的总字节数与其段内峰值（尖峰归因观测：排空波内 fwork 持有的宽集合拷贝量）
+        if self.graph.queued[ix] {
+            self.fwork_bytes += tset_bytes(&self.graph.delta[ix]) - b0;
+        } else {
             self.graph.queued[ix] = true;
             self.fwork.push_back(r);
+            self.fwork_bytes += tset_bytes(&self.graph.delta[ix]);
+        }
+        if self.fwork_bytes > self.fwork_bytes_peak {
+            self.fwork_bytes_peak = self.fwork_bytes;
         }
     }
 
@@ -293,6 +306,9 @@ impl<'a> Engine<'a> {
             let ix = i as usize;
             self.graph.queued[ix] = false;
             let s = std::mem::take(&mut self.graph.delta[ix]);
+            if !s.is_empty() {
+                self.fwork_bytes -= tset_bytes(&s);
+            }
             // 已并入其它代表的节点：增量已随合并转交
             if s.is_empty() || self.graph.rep(i) != i {
                 continue;
