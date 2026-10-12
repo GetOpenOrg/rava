@@ -1,0 +1,5 @@
+# CGLIB 代理族（org.springframework.cglib 重打包版，JDK16+ 可运行）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["spring-core", "spring-jcl"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"

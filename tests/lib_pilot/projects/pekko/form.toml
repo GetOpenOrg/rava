@@ -1,0 +1,5 @@
+# Apache Pekko typed Actor（真并发闸门）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["pekko-actor-typed_3"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"

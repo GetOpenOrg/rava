@@ -1,0 +1,5 @@
+# Scala 集合互操作（多语言 jar 面）
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["scala3-library_3"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"

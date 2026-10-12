@@ -1,0 +1,5 @@
+# commons-collections4 文章示例
+# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["commons-collections4"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"
