@@ -1229,8 +1229,11 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     - **阶段 3 验证作业（tag 前缀 s7k4c-）回收状态**：`s7k4c-macro` ✅（jp2，rc=0，
       36/42——含新守护）；`s7k4c-hw`（口径误用系统 python，作废）/ `s7k4c-hw2`
       （c66f7814，rc=1 编译失败——证据如上）/ `s7k4c-cddp`（同，DeepCopy compile
-      error 3m56.6s）/ `s7k4c-hw3`（kill，证据已足够）；回退后 `s7k4c-hw4`
-      （854dc7f3）验证分支尖 = 阶段 2 形态 + 宏修正可编译可运行。
+      error 3m56.6s）/ `s7k4c-hw3`（kill，证据已足够）；回退后 `s7k4c-hw4` ✅
+      （854dc7f3，jp2 rc=0）：分支尖 = 阶段 2 形态 + 宏修正，HelloWorld
+      emit→编译→rava-link→运行对比 PASS——交接状态可编译可运行。阶段 2 基线验收
+      `s7k4-seed`（jp1）/ `s7k4-det`（us1）/ `s7k4-seg`（kr2）/ `s7k4-peak`（sg1）
+      交回时仍在排队（批闸门），回收法见上「阶段 2 服务器验收」节，收数后归阶段 2 记录。
   - **阶段 2 服务器验收（tag 前缀 s7k4-，基线 s7-k6 a07fbb6f，交回时在跑）**：
     - `s7k4-macro` ✅（jp2，rc=0）：宏单测 **plan 41/41、缺省 35/35**。
     - `s7k4-seed`（jp1）：`s7k6_seed_sets.sh a07fbb6f` 四例 × 种子 0/1/2 闭包集合对照——日志尾
