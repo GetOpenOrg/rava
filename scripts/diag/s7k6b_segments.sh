@@ -20,22 +20,24 @@ build_rava() {  # <目录>
 }
 
 # <scratch>：各声明段 crate 的类文件相对路径清单（`<根>_decl*`；排除标记文件 / mod.rs /
-# 手写真源——手写文件两侧相同，计入也不影响判定，排除以聚焦类文件）
+# 手写真源——手写文件两侧相同，计入也不影响判定，排除以聚焦类文件）。子壳执行：不改变调用方 cwd
 seg_listing() {
   local scratch="$1" c d
-  cd "$scratch"
-  for d in java_base_decl*/src; do
-    [ -d "$d" ] || continue
-    c=$(basename "$(dirname "$d")")
-    find "$d" -name "*.rs" ! -name "mod.rs" ! -name "lib.rs" ! -name "*_m.rs" \
-      | sed "s|^$d/||" | sort | sed "s|^|$c |"
-  done
+  (
+    cd "$scratch" || exit 1
+    for d in java_base_decl*/src; do
+      [ -d "$d" ] || continue
+      c=$(basename "$(dirname "$d")")
+      find "$d" -name "*.rs" ! -name "mod.rs" ! -name "lib.rs" ! -name "*_m.rs" \
+        | sed "s|^$d/||" | sort | sed "s|^|$c |"
+    done
+  )
 }
 
 emit_side() {  # <检出目录> <rava> <tag>
   local dir="$1" rava="$2" tag="$3" t f
-  cd "$dir"
   for t in $TESTS; do
+    cd "$dir"  # 每用例回到检出目录（seg_listing / rava build 均不改变本 shell cwd，保险起见）
     f=$(find tests/e2e -name "$t.java" | head -1)
     echo "[emit] $tag $t"
     "$rava" build "$f" --java-home "$JAVA_HOME" --runtime "$dir/runtime/java_runtime" \
@@ -54,7 +56,10 @@ build_rava "$ROOT"
 emit_side "$ROOT" "$ROOT/build/analyzer-target/release/rava" "new"
 
 BASE_WT="$ROOT/../s7k6b-base-wt-$(basename "$ROOT")"  # 每检出目录独立：同服务器多 tag 并行不共用
-git -C "$ROOT" worktree add "$BASE_WT" "$BASE_REF" > /dev/null 2>&1 || git -C "$ROOT" worktree add --force "$BASE_WT" "$BASE_REF" > /dev/null
+# 首选新建；路径已有登记的 worktree（作业重试 / 本机复跑）则就地 checkout 到基线提交
+if ! git -C "$ROOT" worktree add "$BASE_WT" "$BASE_REF" > /dev/null 2>&1; then
+  git -C "$BASE_WT" checkout -q "$BASE_REF" || { echo "base worktree 不可用：$BASE_WT"; exit 1; }
+fi
 build_rava "$BASE_WT"
 emit_side "$BASE_WT" "$BASE_WT/build/analyzer-target/release/rava" "base"
 
