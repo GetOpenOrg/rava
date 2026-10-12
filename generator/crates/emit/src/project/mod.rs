@@ -16,6 +16,7 @@ pub mod layers;
 pub mod line_tables;
 pub mod layout;
 pub mod lib_crates;
+pub mod marker_side;
 pub mod mod_tree;
 pub mod module_side;
 pub mod overlay;
@@ -326,6 +327,10 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let mut body_plan = layers::split(ctx, &mut ems, &decl_src, &state.method_traits)?;
     // D8：声明层按签名 SCC 分段（上层段类改落 `<根>_decl_<j>`）
     let segs = decl_side::segment(ctx, &mut ems, &decl_src, out_dir);
+    // K6 标记层（§9.9）：已拆层根模块类的标记文件（同段同目录 `<stem>_m.rs`）。须在分段之后
+    // 调用——分段输入是未剥标记部分的声明文本（em.text 不变），切段逐类与之前一致；
+    // 声明文件文本也不变（`decl` 层展开由宏剥去标记部分），只有新增标记文件
+    let marker = marker_side::split(ctx, &mut ems, &decl_src);
     let root_classes = jdk.files.keys().filter(|c| crates.crate_of(c) == crates.root()).count();
     perf.crates = crate_stats(&ems, &body_plan, crates, root_classes, &segs.upper_srcs(out_dir));
     let root_file = match &roots {
@@ -339,12 +344,15 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     perf.mark("layers");
     let mut files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     files.extend(root_file.iter().map(|(p, t)| (p.as_path(), t.as_str())));
+    // 标记文件先于 mod 树落盘：底段 crate 的包 mod.rs 由 `write_mod_tree` 按磁盘扫描
+    // 自动声明 `<stem>_m` 模块（上段由 `segs.write_crates` 按 `marker.hosts` 补行）
+    files.extend(marker.files.iter().map(|(p, t)| (p.as_path(), t.as_str())));
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     perf.mark("write");
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), ctx.opts.jdk_major, crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     }
-    segs.write_crates(&mut w, out_dir, &decl_src)?;
+    segs.write_crates(&mut w, out_dir, &decl_src, &marker.hosts)?;
     perf.mark("mod_tree");
     module_side::write_module_crates(ctx, &mut w, out_dir, segs.top())?;
     libs.write_crates(ctx, &mut w, out_dir, segs.top())?;

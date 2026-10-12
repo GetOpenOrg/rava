@@ -309,7 +309,7 @@ impl ClassMeta {
             } else if path.is_ident("rava_layer") {
                 let s = lit_str(attr)?;
                 m.layer = super::gen::layer::Layer::parse(&s)
-                    .ok_or_else(|| syn::Error::new_spanned(attr, "rava_layer 取 full / decl / body"))?;
+                    .ok_or_else(|| syn::Error::new_spanned(attr, "rava_layer 取 full / decl / body / marker"))?;
             } else if path.is_ident("superclass_reference_fields") {
                 let s = lit_str(attr)?;
                 m.superclass_reference_fields =

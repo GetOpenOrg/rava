@@ -1,11 +1,17 @@
 //! 物理拆层（docs/plans/2026-10-01-rustc-memory-and-crate-split.md §7.5 S4）：同一个
-//! `java_class!` 块按 `#[rava_layer = "decl" | "body"]` 只展开其中一层。
+//! `java_class!` 块按 `#[rava_layer = "decl" | "body" | "marker"]` 只展开其中一层。
 //!
 //! - 缺省（无属性）= 完整展开（用户 crate / 库 crate / Python 生成器）；
-//! - `decl`：声明层（vtable trait、wrapper 及其固有方法外壳、静态存储与类初始化、类型转换），
+//! - `decl`：声明层（vtable trait、wrapper 的 `__vt` 与方法面外壳、静态存储与类初始化），
 //!   落 `java_runtime`；
 //! - `body`：存储层与方法体（`X__inner` 及其全部 vtable / 接口 impl、存储钩子、`__jbm_` 体
-//!   函数、非泛型 `_base` 函数），落实现 crate `java_body_k`，经 `use java_runtime::*` 依赖声明层。
+//!   函数、非泛型 `_base` 函数），落实现 crate `java_body_k`，经 `use java_runtime::*` 依赖声明层；
+//! - `marker`：类型标记层（S7 计划 §9.9 K6）——只展开与签名无关的部分（wrapper struct、身份
+//!   std impl、`__from_parts` / `__from_image` / `__virtual_view` / `is_jvm_null` / `__nn`、
+//!   `BINARY_NAME`、描述符 `X__DESC` / `X::__DESC`、`From<X> for Object` / `From<Object> for X` /
+//!   `From<X> for Anc` 上转、alloc / offsets 钩子的外部声明）。文本不含 `__VTable` / `__Methods`。
+//!   当前形态：标记文件与声明层文件同 crate（`<x>_m.rs`，同目录同段）；K4 把手写基础设施
+//!   （`__Handle` / `Object` 等）分层后，标记文件整体挪入 `java_marker` crate。
 //!
 //! 声明层对存储层的非泛型自由函数（钩子 / 体函数 / base 函数）只留同名的模块级外部声明
 //! （`unsafe extern "Rust"` 块里的 `pub safe fn`，§7.5.4 #6 外壳去一层），按链接符号直连实现层的
@@ -23,6 +29,8 @@ pub(crate) enum Layer {
     Full,
     Decl,
     Body,
+    /// 类型标记层（§9.9 K6）：只展开与签名无关的标记部分（见本文件头注）
+    Marker,
 }
 
 impl Layer {
@@ -31,6 +39,7 @@ impl Layer {
             "full" => Some(Layer::Full),
             "decl" => Some(Layer::Decl),
             "body" => Some(Layer::Body),
+            "marker" => Some(Layer::Marker),
             _ => None,
         }
     }
@@ -111,17 +120,19 @@ pub(crate) fn split_free_fn(binary_name: &str, item: &TokenStream2) -> syn::Resu
     Ok(SplitFn { body, decl, sym })
 }
 
-/// 按层取一组可拆的自由函数：完整 = 原样；声明层 = 一个外部声明块；实现层 = 导出定义
+/// 按层取一组可拆的自由函数：完整 = 原样；声明层 / 标记层 = 一个外部声明块；实现层 = 导出定义
 pub(crate) fn place_fns(
     layer: Layer, binary_name: &str, items: &[TokenStream2],
 ) -> syn::Result<TokenStream2> {
     match layer {
         Layer::Full => Ok(quote! { #(#items)* }),
-        Layer::Decl | Layer::Body => {
+        Layer::Decl | Layer::Body | Layer::Marker => {
             let mut out = Vec::with_capacity(items.len());
             for it in items {
                 let s = split_free_fn(binary_name, it)?;
-                out.push(if layer == Layer::Decl { s.decl } else { s.body });
+                // 实现层放导出定义；声明层 / 标记层放外部声明（标记层的 alloc / offsets 供
+                // 描述符 `X__DESC` 的闭包引用，§9.9 K6）
+                out.push(if layer == Layer::Body { s.body } else { s.decl });
             }
             if layer == Layer::Body {
                 return Ok(quote! { #(#out)* });

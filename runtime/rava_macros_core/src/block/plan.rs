@@ -222,14 +222,58 @@ mod tests {
         assert!(matches!(stay, StayBodies::Unknown));
     }
 
-    /// S7 计划 §9.9 K1：wrapper 只持对象句柄，不含本类视图指针；分派经 `__vt()` 按深度现取
+    /// S7 计划 §9.9 K1：wrapper 只持对象句柄，不含本类视图指针；分派经 `__vt()` 按深度现取。
+    /// 完整展开（无层属性）含 struct 与 `__vt`；声明 / 标记两层的分离由
+    /// `marker_layer_is_signature_free` / `decl_layer_keeps_dispatch_face` 守护
     #[test]
     fn wrapper_holds_handle_only() {
-        let out = super::super::expand(TokenStream2::from_str(CLASS).unwrap()).to_string();
+        let full = CLASS.replace("    #[rava_layer = \"decl\"]\n", "");
+        let out = super::super::expand(TokenStream2::from_str(&full).unwrap()).to_string();
         proc_macro2::extra::invalidate_current_thread_spans();
         assert!(out.contains("pub __r : __Handle ,"), "{out}");
         assert!(!out.contains("__Ref <") && !out.contains("__Ref ::"), "{out}");
         assert!(out.contains("self . __r . view :: < dyn B__VTable > (0u16)"), "{out}");
+    }
+
+    /// §9.9 K6：标记层只展开与签名无关的部分——struct / 身份 impl / `From` 三族 / 描述符 /
+    /// alloc·offsets 钩子外部声明；文本不含 `__VTable` / `__Methods` / `__vt`
+    #[test]
+    fn marker_layer_is_signature_free() {
+        let marker = CLASS.replace("#[rava_layer = \"decl\"]", "#[rava_layer = \"marker\"]");
+        let out = super::super::expand(TokenStream2::from_str(&marker).unwrap()).to_string();
+        proc_macro2::extra::invalidate_current_thread_spans();
+        assert!(!out.contains("compile_error"), "{out}");
+        assert!(out.contains("pub struct B {"), "{out}");
+        assert!(out.contains("pub fn __from_parts"), "{out}");
+        assert!(out.contains("is_jvm_null"), "{out}");
+        assert!(out.contains("impl :: std :: convert :: From < B > for Object"), "{out}");
+        assert!(out.contains("__class_from_object"), "{out}");
+        assert!(out.contains("pub static B__DESC : __ClassDesc"), "{out}");
+        assert!(out.contains("pub const BINARY_NAME : & 'static str = \"a/B\" ;"), "{out}");
+        assert!(out.contains("pub safe fn __jb_B__alloc () -> __Handle ;"), "{out}");
+        for absent in ["__VTable", "__Methods", "__vt", "_init_not_null", "__get_x", "__CLINIT_STATE", "__STATICS"] {
+            assert!(!out.contains(absent), "{absent} 不应在标记层展开里: {out}");
+        }
+    }
+
+    /// §9.9 K6：声明层不再展开标记部分——无 struct / 身份 impl / 转换 / 描述符；
+    /// 保留 `__vt`、方法 trait、访问器等固有遗留与钩子声明
+    #[test]
+    fn decl_layer_keeps_dispatch_face() {
+        let out = super::super::expand(TokenStream2::from_str(CLASS).unwrap()).to_string();
+        proc_macro2::extra::invalidate_current_thread_spans();
+        assert!(!out.contains("compile_error"), "{out}");
+        assert!(out.contains("pub fn __vt (& self) -> & dyn B__VTable"), "{out}");
+        assert!(out.contains("pub trait B__Methods"), "{out}");
+        assert!(out.contains("pub fn __get_x (& self) -> i32"), "{out}");
+        assert!(out.contains("pub fn _init_not_null"), "{out}");
+        assert!(out.contains("pub safe fn __jb_B__alloc () -> __Handle ;"), "{out}");
+        for absent in [
+            "pub struct B {", "__from_parts", "is_jvm_null", "BINARY_NAME",
+            "B__DESC", "impl :: std :: default :: Default for B", "From < B > for Object",
+        ] {
+            assert!(!out.contains(absent), "{absent} 不应在声明层展开里: {out}");
+        }
     }
 
     #[test]
