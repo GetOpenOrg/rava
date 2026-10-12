@@ -206,6 +206,20 @@ driver 编译段在 `--release` 时按内存余量就地决定工作区 `[profil
 - 缺省 auto：fat 全程序链接峰值估计（`mem_budget::Model::of(ReleaseMax)`，大闭包实测 14.5–15.7 GB 的上包络）≤ 探测可用内存（系统 MemAvailable 与 cgroup 余量取小）× 50% 才就地改写 Cargo.toml 为 fat，否则保持 thin——10-06「16 GB 机器 cgroup 内全部标杆可构建」的约束在内存不足的机器上原样成立（探测不到取 thin）；
 - 只改 lto 一行，产物仍在 `target/release/`；`--release-max` / `--release-small` / dev 档不经此；auto fat 实测 OOM 先降级 thin 重编（估计上包络兜底）再走作业数退半；选择与理由记入 `build_status.json` 的 `release_lto` 字段并打印 `[lto]` 行。driver 单测 4 例（钉死 / auto 界值 / 只改 release 段且幂等 / 缺形态报错）。
 
-### 验收（见 tasks.md 现状节与下表；psg-verify1 / psg-spot1 / psg-part1 / psg-utdrv）
+### 验收（kr1 同机；判据：普通段 ≤66 ms、批量 ≤5 ms、CAS 与 446 ms 控制组持平）
 
-（本节由验收数据回填：verify1 数字、spot 7 测、PartitionInteger release、driver 单测。）
+**修复分两半**：① 7977eca4 driver 自动 LTO（内存余量足够的大机器自动回提 fat；kr1 仅 15.9 GB 内存，fat 链接估计 12 GB > 可用 × 50%，auto 在 kr1 正确地保持 thin）；② b46fdb7d 直接内存热路径 `#[inline]`（rava_rawmem 载入/存储/读改写、native_memory 同名与 is_raw、unsafe__ext get/put/cas、access 十个访问器）——thin 下显式导入内联，与 LTO 档位无关的兜底。
+
+- **psg-verify1**（7977eca4，① 无 ②，kr1 auto=thin）普通段 76–78 / CAS 491–532 / 批量 7——确认仅靠档位机制在内存受限机器上不收口，② 必要。
+- **psg-verify2**（b46fdb7d = ① + ②，kr1）：
+
+| 段 | 基线 96fc1cf4（fat，verify1 [before]） | 修复分支 b46fdb7d（thin + inline） | 判据 |
+|---|---|---|---|
+| 普通段 | 61–67（中位 64） | **63–65（中位 63）✓** | ≤66 |
+| CAS | 404–413 | **357–368 ✓**（优于基线：inline 后 getIntVolatile / compareAndSetInt 链也收入） | 与 446 持平 |
+| 批量 | 3 | 7–8 ✗（判据 ≤5）→ 7a84d579 补批量链 #[inline]，psg-verify3 复测（见 tasks.md） | ≤5 |
+
+- **psg-spot1**（7977eca4，dev 档）：直接内存六测 TestDirectBuffer / TestDirectBufferPaging / TestDirectMemoryAtomics / TestByteArrayViewVarHandle / TestUnsafePrimitiveArray / TestVarHandleBitwise 全 PASS；PartitionInteger dev 档 5 min 运行超时为**已知既有**（tasks.md 活跃表无 GC 行：dev 抽查 8/9 即此例超时，release 46 s）。psg-spot2 在 b46fdb7d（含 ②）复跑直接内存五测。**psg-part1**（7977eca4，jp2，release，auto 按 cgroup 9.7 GB 正确选 thin）：PartitionInteger RC=0、输出与期望逐字节一致（OUTPUT_MATCH）。
+- driver 单测 psg-utdrv（b46fdb7d 前的 7977eca4 起跑，cargo test -p driver）与本机 4+8 例（release_lto 与 build_opts 解析）。
+- 本机 cargo check：generator `--release --tests` 过；rava_rawmem `--release --tests` 过；java_runtime 原始检出缺 overlay 生成的 java/jdk/sun 模块，本机不可独立检（既有形态），由服务器构建（spot / part1 / verify2 的全语料编译）覆盖。
+- **候选（未做，另立任务）**：CAS 段 `update` 的 `&mut dyn FnMut` 改泛型内联（sound-rem ② 已验证 −4~−6.5%）；kr1 级 15 GB 机器要拿到 fat 水位需降低 fat 链接峰值（如 fat LTO + 多 codegen-units 档）或收窄声明层（build-memsafe 遗留 1）。
