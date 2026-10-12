@@ -47,8 +47,35 @@ pub use self::mt::{__AtomicRepr, __PrimCell, __RefField, __RefSlot, __SlotRead, 
 /// 只在 debug 档生效：release 档 `Held` 是无 `Drop` 的零大小值，登记与断言整体消去。登记存放在
 /// `exec_context` 的持锁登记载体槽（`hold_slot`）：持锁期间不让出，登记与载体绑定。
 mod held {
+    // 持锁登记的载体槽（原 exec_context::hold_slot，§9.9 K4 随 sync_model 移入标记层）：
+    // 只被本模块的守卫路径使用，随宿主落在标记层基础 crate。
     #[cfg(debug_assertions)]
-    use crate::exec_context::hold_slot;
+    mod slot {
+        use std::cell::{Cell, RefCell};
+
+        /// 槽位登记容量：嵌套持有超过此数的槽位不再登记地址（计数照常），只漏检自持有
+        pub(super) const HOLD_SLOTS: usize = 16;
+
+        pub(super) struct HoldSlot {
+            pub(super) count: Cell<usize>,
+            /// (槽地址, 是否写锁, 加锁位置)；地址 0 为空位
+            pub(super) slots: RefCell<[(usize, bool, Option<&'static std::panic::Location<'static>>); HOLD_SLOTS]>,
+        }
+
+        std::thread_local! {
+            static HOLD: HoldSlot = const {
+                HoldSlot { count: Cell::new(0), slots: RefCell::new([(0, false, None); HOLD_SLOTS]) }
+            };
+        }
+
+        /// 访问本载体的持锁登记槽（不内联，仅 debug 档）；线程局部已销毁（线程退出期）→ None。
+        #[inline(never)]
+        pub(super) fn hold_slot<R>(f: impl FnOnce(&HoldSlot) -> R) -> Option<R> {
+            HOLD.try_with(f).ok()
+        }
+    }
+    #[cfg(debug_assertions)]
+    use slot::{hold_slot, HoldSlot as _};
 
     /// 持锁凭据：存活期间计入当前线程的持锁数（随守卫释放，含 panic 展开路径）
     pub(crate) struct Held {

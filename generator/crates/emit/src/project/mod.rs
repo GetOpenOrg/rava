@@ -389,7 +389,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         let stamped: Vec<&str> = std::iter::once(decl.as_str())
             .chain(seg_names.iter().copied())
             .chain(crates.all().iter().map(|c| c.name.as_str()))
-            .chain([entry::META_CRATE])
+            .chain([overlay::MARKER_CRATE, entry::META_CRATE])
             .chain(body_names.iter().copied())
             .chain(lib_names.iter().copied())
             .collect();

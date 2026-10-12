@@ -167,8 +167,17 @@ fn segment_with_budget(
         })
         .collect();
     let hw = handwritten_files(&ctx.runtime_src());
+    // 标记层基础（§9.9 K4）：手写 INFRA 从底段 crate 移到其下的 java_marker（foundation
+    // 整体不变，只是换了 crate）。其字节照旧计入底段（foundation）体量——D8 的「底段含 INFRA
+    // 不切」口径不变，切段与搬移前逐类一致由构造保证
+    let marker_src = ctx
+        .runtime_src()
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join(super::overlay::MARKER_CRATE).join("src"));
+    let hw_marker = marker_src.as_deref().filter(|p| p.is_dir()).map(handwritten_files).unwrap_or_default();
     // 底段 crate 含全部手写 overlay（保守：手写真源全部计入），参与不分段判定并计入上段的上游体量
-    let base: usize = hw.iter().map(|(_, t)| t.len()).sum();
+    let base: usize = hw.iter().chain(hw_marker.iter()).map(|(_, t)| t.len()).sum();
     if base + weights.iter().sum::<usize>() + budget.fixed <= budget.single {
         return DeclSegs::single(&decl);
     }

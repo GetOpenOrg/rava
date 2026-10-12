@@ -245,6 +245,9 @@ fn linked_crates(ctx: &EmitCtx<'_>) -> Vec<String> {
 /// 反射元数据表 crate 名
 pub const META_CRATE: &str = "java_meta";
 
+/// 标记层基础 crate（§9.9 K4）：由声明层 crate 依赖（workspace 成员以入列声明依赖闭包）
+pub const MARKER_CRATE: &str = "java_marker";
+
 /// user/Cargo.toml 的依赖行：全部模块 crate、java_meta、宏 crate、全部 lib crate（声明序）
 fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str]) -> Vec<String> {
     let mut d: Vec<String> = linked_crates(ctx).iter().map(|c| path_dep(c, c)).collect();
@@ -336,7 +339,7 @@ pub fn write_cargo_files(
         .chain(decl_uppers.iter().copied())
         .chain(bodies.iter().copied())
         .chain(crates.all().iter().map(|c| c.name.as_str()))
-        .chain([META_CRATE])
+        .chain([super::overlay::MARKER_CRATE, META_CRATE])
         .chain(libs.iter().copied())
         .chain([USER_CRATE])
         .map(|m| format!("\"{m}\""))
