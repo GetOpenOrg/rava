@@ -161,7 +161,7 @@ impl UnixFileDispatcherImpl {
             let mode = st.st_mode;
             if (mode & libc::S_IFMT) == libc::S_IFCHR
                 || (mode & libc::S_IFMT) == libc::S_IFIFO
-                || libc::S_ISSOCK(mode)
+                || (mode & libc::S_IFMT) == libc::S_IFSOCK
             {
                 let mut n: libc::c_int = 0;
                 if libc::ioctl(fd, libc::FIONREAD as _, &mut n) < 0 {
