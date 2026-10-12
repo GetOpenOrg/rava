@@ -9,8 +9,13 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BASE_REF="${1:-70dd51f8}"
 shift || true
 TESTS="${*:-HelloWorld CollectorsDemo DeepCopy}"
-OUT="$ROOT/build/s7k6-peak"
+OUT="${PEAK_OUT:-$ROOT/build/s7k6-peak}"
 mkdir -p "$OUT"
+
+# 必须禁用 sccache（2026-10-13 本机踩坑）：touch 只改 mtime，经 sccache 内容缓存命中时
+# rustc 根本不跑（峰值≈cargo 自身 ~23MB）；未命中时真编译也在 sccache 守护进程里，
+# /usr/bin/time 只能看到瘦客户端的 RSS——两种情况峰值全是假数据。
+export RUSTC_WRAPPER=""
 
 JAVA_HOME="${JAVA_HOME:-$(RAVA_REFJDK_ROOT=${RAVA_REFJDK_ROOT:-} scripts/fetch_reference_jdk.sh --check)}"
 
