@@ -111,7 +111,7 @@
    - 遗留：43f37f63（us1）43 µs/迭代 与 本测 4.3 µs/迭代 差 10 倍未闭合（疑 lineage / 机差，见报告 §二）。
    - 见分诊报告 C 节余项（已更新）、无 GC 文档 §六。
 5. **JDK 25 适配**：问题 A（StackFrameInfo 反射元素流，`FrameBuffer.at → ClassFrameInfo.declaringClass` 存根，归反射建模）；DeepCopy / DataEncryptionStandard 转译 OOM；合批后 JDK 25 全量复跑（`--reset-failed --jdk 25`），按其余失败分类处理。见 `docs/reports/2026-10-11-fix-jdk25-handoff.md`。
-6. **闭包分析器手写扫描器**：`&self` 辅助 fn 内 `self.X()` 保留 on_self（`hw-upcall-self-lost-in-helper`，现由手写侧规避）。
+6. **闭包分析器手写扫描器**：✅ 10-12 收口（scanner-self 分支，df026eed + 5f1908c6）：`&self` 辅助 fn 内 `self.X()` 沿全程 `self.f(…)` 调用链保留 on_self——`close_transitive` / `objects::absorb_body` 复用 `value_self` 的 keep 链（`BodyScan::nonself`），调用点按（fn, 链上 self 是否仍是本 fn 的 self）吸收，双链可达时两个变体并存（`self_only` 等全站点判定保守），与弹出顺序无关；字段访问的 on_self 维持原口径。手写侧规避解除（栈遍历两版本 `callStackWalk` 恢复 `__walk_batches`，725249ef 前形态，共两处）。验收：scsf-seed 四例种子 0/1/2 闭包集合对 adf4cc1f（batch-1013 口径）全同；scsf-e2e 抽查 TestStackWalkerFrames / TestStackWalkerLines / TestCallerSensitiveLookup 3/3 PASS；scsf-ut 手写模块 40/40 + 确定性两项过；generator 本机 cargo check 过。`hw-upcall-self-lost-in-helper` 已补 df026eed；修法记入闭包分析器计划 §3.7。
 7. **无 GC 后续**：所有权推断 `Weak`（逃逸到旧对象但成环）；引用类语义随 `Rc` 释放触发；JDK 方法体内区域（需开放世界事实）；`thread_local_lint` 文档头登记 `region_slot` 理由。见无 GC 文档 §六-5。
 8. **健全性审查余项（sound-rem，10-11 交付）**：① rawmem 批量快路径重做 fc2e979d（整字段 8 字 ×8 展开、同偏移拷贝 8 字块先读后写按重叠方向排序；Miri 2 种子 ×10 例过[作业 srem-miri1]；kr1 同机三作业对照 srem-bench4/5/6：批量 4–6（中位 5，判据 ≤5 ✓，57564806 为 7）；CAS 417–428 vs 控制组 5328072a（无 sound-rem）446（改善 4–6.5%）；普通 79–80 vs 控制组 74（+8%，布局漂移，#[inline] 复测无改善）；普通/CAS 对 96fc1cf4 基线的回退主体是 batch-1011i/j/k 自身（控制组即 74/446），转主会话）；② `update` 回调泛型内联 5bb96f9d（rava_rawmem→native_memory→unsafe__ext::prim 全链单态化）；③ 堆数组跨元素 RMW ed4244b1 + 8cf51774（同条双锁死锁修复）：经核旧分条按数组基址取条、同数组本就互斥，原「丢普通元素写」修正为元素内 / 跨元素原子性边界（逐元素原子 + 逐位置一致，无整区间一步原子）；字粒度原子单元因**混宽原子访问 UB**（Miri weak_memory 文档明言）不可行——边界与论证写进 array/store.rs 头注；分条改锁区间覆盖全部对齐字、update_bytes 泛型内联；e2e TestHeapArrayAtomicView；④ byteBufferView ISE 根因已查清未修：flavor 类 `VarHandleByteArrayAsInts$ByteBufferHandle` 不含 `"$Array"` 判定子串 → 落 Field 族 → 无 fieldOffset → `var_handle_ext.rs:138` 无消息 ISE 首次访问即抛（堆 / 直接缓冲同症，byteArrayView 不受影响）；修复（新增 $ByteBufferHandle 视图族）留专项。抽查 srem-spot1 8/9 + srem-spot2 1/1（新测例初版同条双锁死锁挂起，8cf51774 修复后过）。见分诊报告五「余项处置」。
 9. **生成器审查余项**：vendor 迁移 `cp -a` / `mv` 保留 mtime 复验（sg1 上三次中断，需重发）。见分诊报告「生成器修复」节。
@@ -234,7 +234,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏳ jmod 覆盖第 1–4 步（2026-10-03-jmod-coverage.md）
 │   ├─ ⏳ 引用类语义：无 GC 模型（编译期逃逸分析整组释放 + 所有权推断弱引用，2026-10-07-no-gc-memory-model.md）◀── C4
 │   └─ ⏳ JDK 25 适配轮（分支 fix-jdk25，交接 docs/reports/2026-10-11-fix-jdk25-handoff.md）：java_base_decl 三组编译问题已修；JDK 21 两处回归已修（C 闭包翻倍 d279b821 扫描器求值 cfg，DeepCopy 闭包 = 集成头 3001 类；B StackWalkerFrames 725249ef 上调留 native 体内）；待合批。
-│       下一步：① 问题 A，JDK 25 StackFrameInfo 反射元素流（两个 StackWalker 测试存根失败，归 G1 / 反射建模）；② 扫描器 `&self` 辅助内 `self.X()` 上调丢 on_self（分析器侧，`hw-upcall-self-lost-in-helper`）；③ `GSSNameSpi.equals_obj` 潜伏命名缺陷；④ JDK 25 全量剩余分类（版本输出差异 3、fold / dead_pcs 2、condy switch 标签 1、超时 1、DeepCopy / DES OOM）
+│       下一步：① 问题 A，JDK 25 StackFrameInfo 反射元素流（两个 StackWalker 测试存根失败，归 G1 / 反射建模）；② ✅ 扫描器 `&self` 辅助内 `self.X()` 上调丢 on_self（10-12 修，df026eed，规避已解除——见「剩余工作」第 6 条）；③ `GSSNameSpi.equals_obj` 潜伏命名缺陷；④ JDK 25 全量剩余分类（版本输出差异 3、fold / dead_pcs 2、condy switch 标签 1、超时 1、DeepCopy / DES OOM）
 │
 ├─ 【暂缓】
 │   ├─ ✅ build-memsafe 内存友好缺省构建档（10-11 交付，待合入；2026-10-11-build-memsafe.md）

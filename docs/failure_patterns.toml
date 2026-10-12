@@ -1694,9 +1694,9 @@ stage = "run"
 symptom = "JDK 21 TestStackWalkerFrames 运行 null_recv：StackStreamFactory（isMethodHandleFrame）中 Class.getName 接收者判恒 null"
 match = [["null_recv", "java/lang/Class.getName", "stack_stream_factory"]]
 tests = ["TestStackWalkerFrames"]
-cause = "native callStackWalk 把 self.doStackWalk 上调移进 &self 辅助 fn（__walk_batches）。闭包手写扫描器并入被调 fn 体时把其调用标为非 self 接收者（objects.rs / scan.rs absorb_body：on_self = false），上调的接收者与 native 的 this 断开，CallerClassFinder 仅类模式帧缓冲（native 写入的 Class 元素）的流断开，Class 元素被判恒 null。二分：集成头通过；只回退该文件通过；回退生成器改动、回退 STE 手写、改回 let 绑定均不过；上调留在 native 体内通过。手写规则：对 this 的 Java 上调须写在 native 体内，辅助 fn 只做无 self 的准备工作"
+cause = "native callStackWalk 把 self.doStackWalk 上调移进 &self 辅助 fn（__walk_batches）。闭包手写扫描器并入被调 fn 体时把其调用标为非 self 接收者（objects.rs / scan.rs absorb_body：on_self = false），上调的接收者与 native 的 this 断开，CallerClassFinder 仅类模式帧缓冲（native 写入的 Class 元素）的流断开，Class 元素被判恒 null。二分：集成头通过；只回退该文件通过；回退生成器改动、回退 STE 手写、改回 let 绑定均不过；上调留在 native 体内通过。手写规则：对 this 的 Java 上调须写在 native 体内，辅助 fn 只做无 self 的准备工作。10-12 分析器侧已修（df026eed，scanner-self 分支）：调用点按（fn, 链上 self 是否仍是本 fn 的 self）吸收、沿全程 self.f(…) 的调用链保持 on_self（复用 value_self 的 keep 链），手写侧规避随之解除（5f1908c6 恢复 __walk_batches）"
 introduced = "efc32d6f（栈遍历按 JDK 分版本时引入辅助 fn）"
-fixed = ["725249ef"]
+fixed = ["725249ef", "df026eed"]
 status = "fixed"
 owner = "fix-jdk25"
 diagnose = "按文件回退做 TestStackWalkerFrames 抽查二分；查手写 native 体内 self.<Java 方法>( 上调是否经辅助 fn 转手"
