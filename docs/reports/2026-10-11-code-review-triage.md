@@ -174,3 +174,38 @@
 - 下一步：① 57564806 在 kr1 同机复测 DirectMemBench，判据是批量段 ≤5 ms，CAS 和普通段不劣于 a3b7ca0a。命令见下条。② CAS 段的 +6% 来自 `update` 的 `&mut dyn FnMut` 动态调用与两次掩码运算；若要求持平，可以把 `update` 改为泛型 `impl FnMut` 内联（native_memory 调用点不变）。③ 堆数组跨元素读-改-写（见上条）。④ VarHandle 直接缓冲视图 ISE（见上条）。
 - 计时脚本已入库 `scripts/direct_mem_bench.sh`：内嵌 DirectMemBench.java 与期望输出；对当前检出与基线 ref（缺省 96fc1cf4）分别 `run_tests.py --release --keep-artifacts`，再把生成的二进制各跑 5 次。复测命令：`distribute_tests.py --job <tag> --ref 57564806 --servers kr1 --cmd "bash scripts/direct_mem_bench.sh"`。
 - 为跑 Miri，本机装了 nightly 工具链及 miri、rust-src 组件（`~/.rustup/toolchains/nightly-*`，Miri sysroot 在 `~/.cache/miri`）。
+
+## 六、main 普通段 +25% 回退：二分、根因与修复（分支 `plainseg-bisect`，10-12）
+
+tasks.md「剩余工作」第 12 条（用户 10-12 裁决）：kr1 direct_mem_bench 普通段 64→74 ms（96fc1cf4 → batch-1011k 控制组 5328072a，srem-bench5 复现 73–75），回退主体定位 + 修复。判据：普通段 ≤66 ms、批量段 ≤5 ms、CAS 与 446 ms 控制组持平。
+
+### 二分（作业 psg-bis1，kr1 同机同作业，每 sha 独立 worktree 构建 DirectMemBench 各跑 5 次）
+
+| sha | 意义 | `[profile.release]` lto | 普通段 ms | CAS ms | 批量 ms |
+|---|---|---|---|---|---|
+| 96fc1cf4 | 基线（main 当日位） | `true`（fat） | 64–65 | 403–430 | 3 |
+| c6b126cc | batch-1011h 头 | `"thin"` | 87–90 | 474–481 | 3 |
+| fe923a2f | batch-1011j、nogc-escape 合并前一刻 | `"thin"` | 87–88 | 468–478 | 3 |
+| 5df7e9ba | nogc-escape 合并进 1011j | `"thin"` | 87–90 | 467–473 | 3 |
+| 5328072a | batch-1011k 头控制组（srem-bench5） | `"thin"` | 73–75 | 440–455 | 7–8 |
+| 8cf51774 | 5328072a + sound-rem（srem-bench4） | `"thin"` | 79–84 | 414–431 | 4–6 |
+
+**回退在 96fc1cf4..c6b126cc 区间已全量出现**（64→88，+37%），不是 1011i/j/k 的合批内容：c6b126cc 与 fe923a2f 同水位，nogc-escape（5df7e9ba）与 1011i/j 各线对普通段无贡献；1011k 的 rava_rawmem 反而在 thin 下把 88 拉回 74（原子字寻址替逐字节循环）。用户看到的 64→74 是「thin LTO 切换 +24 ms、rawmem 改善 −14 ms」的净额；sound-rem 的 +8%（74→79–84）是 thin 模块摘要漂移，同因。
+
+### 根因（作业 psg-gen1：四个 sha 各 `rava build --stop-after emit` 转译 DirectMemBench，生成树逐文件对照）
+
+- 直接路径的生成物**逐字节一致**（user/direct_mem_bench.rs、jdk_unsupported/sun/misc/unsafe_.rs、java_base 内 jdk/internal/misc 包装；仅 0b91182b 的 `Class::for_class(&str)` 取参形态一处，不在热循环）；手写层（unsafe__ext / native_memory）在 96fc1cf4..fe923a2f 期间无改动。**变慢的不是代码，是代码的优化形态。**
+- 生成的工作区 Cargo.toml：96fc1cf4 为 `lto = true`，c6b126cc/fe923a2f/5df7e9ba 均为 `lto = "thin"`。翻转点在 **0e3cd83d（build-memsafe 合入 batch-1011h，用户 10-06 定内存受限缺省档）**：该合并中 entry.rs 的唯一代码生成差异就是把 `[profile.release]` 的 lto 从 fat 改 thin（fat 移入新档 release-max），其余为构建编排（并行度 / OOM 退半）。
+- 机制：Unsafe 直接内存一次 putInt/getInt 经过 4–6 层跨 4 个 crate 的调用链（user 循环 → sun.misc.Unsafe 包装（jdk_unsupported）→ jdk.internal.misc.Unsafe 绝对地址包装（java_base_body）→ (Object,long) native → unsafe__ext（java_runtime）→ native_memory → rava_rawmem）。fat LTO 全程序单模块把这串整链内联进用户循环；thin LTO 按模块摘要做导入决策，跨 crate 小包装不再稳定内联，每调用多付几纳秒的调用与 Result/Object 约定开销——普通段 204.8 万次 put+get 对此线性放大（+24 ms ≈ 每对 +5.8 ns），CAS 段（500 万次原子调用）与批量段同因同向。生成源码不变（psg-gen1）而三段齐回退、跨 sha 的 thin 数字随语料/运行时编辑漂移（c6b126cc 88 → 5328072a 74；sound-rem 再 +8%），都是 thin 模块导入决策敏感性的表现。
+
+### 修复（7977eca4，本分支）
+
+driver 编译段在 `--release` 时按内存余量就地决定工作区 `[profile.release]` 的 lto 形态（新模块 `generator/crates/driver/src/release_lto.rs`）：
+
+- `--release-lto fat|thin|auto`（`rava build` / `rava compile`，`run_tests.py --release-lto` 同名透传）钉死 / 复现；
+- 缺省 auto：fat 全程序链接峰值估计（`mem_budget::Model::of(ReleaseMax)`，大闭包实测 14.5–15.7 GB 的上包络）≤ 探测可用内存（系统 MemAvailable 与 cgroup 余量取小）× 50% 才就地改写 Cargo.toml 为 fat，否则保持 thin——10-06「16 GB 机器 cgroup 内全部标杆可构建」的约束在内存不足的机器上原样成立（探测不到取 thin）；
+- 只改 lto 一行，产物仍在 `target/release/`；`--release-max` / `--release-small` / dev 档不经此；auto fat 实测 OOM 先降级 thin 重编（估计上包络兜底）再走作业数退半；选择与理由记入 `build_status.json` 的 `release_lto` 字段并打印 `[lto]` 行。driver 单测 4 例（钉死 / auto 界值 / 只改 release 段且幂等 / 缺形态报错）。
+
+### 验收（见 tasks.md 现状节与下表；psg-verify1 / psg-spot1 / psg-part1 / psg-utdrv）
+
+（本节由验收数据回填：verify1 数字、spot 7 测、PartitionInteger release、driver 单测。）

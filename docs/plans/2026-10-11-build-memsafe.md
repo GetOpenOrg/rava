@@ -159,3 +159,9 @@ release 声明层在 4 作业下的实测（上表 7,441 / 5,230 MB）偏低。�
 2. **重型缺省超时不分档位**：3,000 s 只按 dev 定。release 大闭包单作业的耗时接近这个值，release 系列应按档位放大缺省超时。本步未改，待定。
 3. **估计是上包络**：每档以单作业最坏 crate 标定，小闭包会偏保守，少用几个作业。OOM 退半重编是兜底，退到 1 作业仍 OOM 时如实报失败。
 4. **多槽跑批**：run_tests 多槽并行时，各槽的探测互不知晓，槽数仍由跑批脚本按机器内存定（`[build] jobs` 按槽写入）。全局协调不在本步范围。
+
+## 六、补记（2026-10-12，分支 plainseg-bisect）：thin 缺省的运行期代价与按内存余量的自动回提
+
+本计划把 `[profile.release]` 的 lto 从 fat 改为 thin（§二、entry.rs），收益是构建内存受控（§三、§四）。代价在后置测量中显现：thin LTO 下跨 crate 调用链（Unsafe 直接内存的 putInt/getInt 每次经 4–6 层、4 个 crate 的包装）不再整链内联，kr1 DirectMemBench 普通段 64→74 ms（thin 净额；裸切换 +24 ms，被 1011k 的 rava_rawmem 改善 −14 ms 部分抵消）、CAS +12%；生成源码逐字节不变（psg-gen1 四 sha 生成树对照）。二分与数据见分诊报告「六」。
+
+处置（7977eca4）：不改本计划的档位与系数——driver 编译段在 `--release` 时按内存余量就地决定 lto 形态：fat 全程序链接估计（§三 Model 的 ReleaseMax 档）≤ 探测可用内存 × 50% 才把工作区 Cargo.toml 的 lto 行改回 fat，否则维持 thin；`--release-lto fat|thin|auto` 钉死；auto fat 链接 OOM 先降级 thin 再走 §二 的退半。15 GB 机器的 cgroup 探测使大闭包照旧走 thin，§四 结论不受影响；内存充足的大机器（如 kr1）恢复 fat 的运行期水位。估计系数、预算与 OOM 兜底全部复用本计划模型。
