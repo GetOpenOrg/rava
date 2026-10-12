@@ -1821,3 +1821,18 @@ owner = "b1013-fix"
 diagnose = "E0599 指到 java_base_decl 手写 overlay 文件且成员名为 Java 方法 / __class_init：查该文件有无 X__Methods as _ 导入与 use super::* 同包 glob；新缝按「路径调用扫描 × use 表 × 留固有名单 + jvm_native 静态注入面枚举」排查（S7 §9.9 排查方法节）"
 doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「协议面保留名单扩充」"
 since = "2026-10-12"
+
+[[pattern]]
+id = "escape-lambda-virtual-cycle"
+stage = "transpile"
+symptom = "JDK 25：转译在闭包完成后 abort——thread '<unknown>' has overflowed its stack（fatal runtime error: stack overflow），RUST_MIN_STACK=128M 仍溢出（非深而有限）"
+match = [["has overflowed its stack", "closure-cache"], ["fatal runtime error: stack overflow, aborting"]]
+tests = ["FunctionalCompositionTest"]  # rA/rB 复跑将继续认领同簇（见 docs/reports/2026-10-12-jdk25-sem-triage.md §2.3）
+cause = "逃逸分析 escape::analysis 的 call_virtual ↔ call_lambda 纯 Rust 互递归不经 call_summary 工作列表：OLD/FRESH_UNKNOWN 接收者上的 call_virtual 按 SAM 名遍历全部 lambda 站点（analysis.rs:485），call_lambda 对 5|9（invokeVirtual/Interface）实现句柄又直呼 call_virtual、接收者回落 cap=OLD（analysis.rs:549）。SAM 名与实现名互为对方（或单站点 sam==实现名，如 compare/compare、apply/apply 方法引用）即成无限环。JDK 21 档案无此形态，JDK 25 档案首次触达（gdb 栈作业 j25s-rB/sg1）。与 transpile-stack-overflow（consteval 环，b4da5107）不同根因。修法：在途 lambda 站点键 (owner,name,desc) 判环——站点有限，重复键必为环；命中按未知被调保守返回（同 call_target 的 Callee::Native 口径），无环链结果不变"
+introduced = ""
+fixed = ["304edfb1（j25-sem）"]
+status = "pending"
+owner = "j25-sem（JDK25 语义分诊线）"
+diagnose = "转译日志闭包阶段完成后栈溢出即疑本条；gdb -batch -ex run -ex 'bt 30' 看是否 call_virtual(analysis.rs:485) ↔ call_lambda(analysis.rs:549) 交替帧。注意与 consteval 环（b4da5107，穿分派转发方法）区分：本条发生在 emit 阶段的逃逸分析"
+doc = "docs/reports/2026-10-12-jdk25-sem-triage.md"
+since = "2026-10-12"

@@ -83,6 +83,8 @@ pub struct Analysis<'w, 'a> {
     pub(crate) catch_ctx: bool,
     /// 当前指令处发起的调用：被调方的 `catchable`
     pub(crate) site_covered: bool,
+    /// 在途的 lambda 实现句柄虚调（owner, name, desc）：call_virtual ↔ call_lambda 互递归的环判定
+    lambda_stack: Vec<(String, String, String)>,
 }
 
 /// 单个候选区域的步数上限（超出即拒绝）
@@ -142,6 +144,7 @@ impl<'w, 'a> Analysis<'w, 'a> {
             cur: None,
             catch_ctx: false,
             site_covered: false,
+            lambda_stack: Vec::new(),
         };
         a.slot("[]");
         a.slot("<cap>");
@@ -546,7 +549,29 @@ impl<'w, 'a> Analysis<'w, 'a> {
             args.push(v);
         }
         let r = match site.kind {
-            5 | 9 => self.call_virtual(&site.owner, &site.name, &site.desc, args)?,
+            5 | 9 => {
+                // 环判定：call_virtual（OLD / FRESH_UNKNOWN / Lambda 接收者上的同 SAM 站点遍历）
+                // ↔ call_lambda（5|9 实现句柄虚调）是纯 Rust 互递归，不经 call_summary 的工作列表，
+                // 两个 SAM 名与实现名互为对方的站点（或单站点 sam == 实现名，如 compare/compare、
+                // apply/apply 的方法引用）在 OLD 接收者上即成无限环（JDK 25 档案实测 FunctionalCompositionTest
+                // 转译期撑爆线程栈，128 MB RUST_MIN_STACK 仍溢出）。lambda 站点有限，在途集合出现重复键必为环；
+                // 命中按未知被调保守返回（与 call_target 的 Callee::Native 同口径），不影响无环链的结果。
+                let key = (site.owner.clone(), site.name.clone(), site.desc.clone());
+                if self.lambda_stack.iter().any(|k| *k == key) {
+                    let (_, rk) = method_kinds(&site.desc);
+                    Some(match rk {
+                        None => Val::Void,
+                        Some(Kind::Ref) => Val::old(),
+                        Some(Kind::Int) => Val::int_top(),
+                        Some(Kind::Wide) => Val::Wide,
+                    })
+                } else {
+                    self.lambda_stack.push(key);
+                    let r = self.call_virtual(&site.owner, &site.name, &site.desc, args)?;
+                    self.lambda_stack.pop();
+                    r
+                }
+            }
             6 | 7 => match self.w.resolve_direct(&site.owner, &site.name, &site.desc) {
                 Some((ci, i)) => self.call_target(ci, i, args)?,
                 None => None,
