@@ -87,11 +87,25 @@ fn labels(env: &InstrEnv, site: &IndySite, kind: SwitchKind) -> InstrResult<Vec<
                 if let Some(t) = numeric_const_text(other) {
                     return Ok(Label::Int(t));
                 }
-                env.ctx
-                    .class_file()
-                    .and_then(|cf| enum_desc(cf, other))
-                    .map(|(c, n)| Label::Enum(c, n))
-                    .ok_or_else(|| InstrError::OutOfScope(format!("switch 标签形态 {other:?}")))
+                if let Some(cf) = env.ctx.class_file() {
+                    // 基本类型 Class 标签（`case int` 等无条件模式，JDK 21+ javac）：类字面量以
+                    // ConstantBootstraps.primitiveClass 的 condy（(bsm, "I", "Ljava/lang/Class;"）装载；
+                    // typeSwitch 语义：基本类型标签匹配对应包装类实例（与 Class 标签的归一同一出口）
+                    if let Const::Dynamic(idx, name, desc) = other {
+                        if desc == "Ljava/lang/Class;"
+                            && cf.bootstrap_methods.get(usize::from(*idx)).is_some_and(|b| {
+                                b.handle.member.owner == "java/lang/invoke/ConstantBootstraps"
+                                    && b.handle.member.name == "primitiveClass"
+                            })
+                        {
+                            return Ok(Label::Class(wrapper_of(name).unwrap_or_else(|| name.as_str()).to_string()));
+                        }
+                    }
+                    if let Some((c, n)) = enum_desc(cf, other) {
+                        return Ok(Label::Enum(c, n));
+                    }
+                }
+                Err(InstrError::OutOfScope(format!("switch 标签形态 {other:?}")))
             }
         })
         .collect()

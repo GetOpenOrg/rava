@@ -31,8 +31,12 @@ fn objects(n: usize) -> String {
     }
 }
 
-/// 发射记录的方法 → (vtable 擦除条目签名（不含 `fn `）, 形参名, 条目形参类型)
-fn entry_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod, jci: &ClassInfo) -> Option<(String, Vec<String>, Vec<String>)> {
+/// 发射记录的方法 → (vtable 擦除条目签名（不含 `fn `）, 形参名, 条目形参类型, 条目返回类型)
+fn entry_sig_parts(
+    ctx: &EmitCtx<'_>,
+    m: &EmittedMethod,
+    jci: &ClassInfo,
+) -> Option<(String, Vec<String>, Vec<String>, String)> {
     let tparams: BTreeSet<String> = class_params(ctx, jci).into_iter().collect();
     let erased = erased_declaration(&ctx.ty, m, &tparams)?;
     let head = erased["fn ".len()..].to_string();
@@ -40,7 +44,10 @@ fn entry_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod, jci: &ClassInfo) -> Opt
     let parts = split_top_level_trimmed(rest);
     let names = parts.iter().skip(1).map(|p| p.split(':').next().unwrap_or("").trim().to_string()).collect();
     let types = parts.iter().skip(1).map(|p| p.split_once(':').map_or("", |x| x.1).trim().to_string()).collect();
-    Some((head, names, types))
+    // `erased_declaration` 尾形 `.. -> Result<RET>`：RET 自身可含 `<>`，取 `Result<` 之后去掉末个 `>`
+    let ret_from = head.rfind("-> Result<")? + "-> Result<".len();
+    let ret = head[ret_from..].strip_suffix('>')?.to_string();
+    Some((head, names, types, ret))
 }
 
 /// 载体声明签名 → (形参类型（去 self）, 返回类型文本)
@@ -106,6 +113,33 @@ fn emission<'e>(ems: &'e Emissions, bin: &str) -> Result<&'e ClassEmission> {
     ems.get(bin).ok_or_else(|| EmitError::Assert(format!("[sam-objects] 接口未发射: {bin}")))
 }
 
+/// SAM 直调闭包体。条目签名是接口擦除声明（具体参数化类型按 Signature 恢复，
+/// 如 JDK25 `SymbolLookup.find` 的 `Optional<MemorySegment>`），闭包类型是 SAM 描述符的
+/// 擦除视图（`Optional<Object>`）——两者在「具体参数化类型」位置可能发散（JVM 侧靠擦除
+/// 直接通过）。分歧位置经 Object 边界桥接：装箱再按目标侧类型擦除重建（`From<Object>`
+/// 的擦除路径只搬句柄，与宏 `result = "checkcast"` 同口径）
+fn sam_entry_body(ctx: &EmitCtx<'_>, spec: &SamSpec, args: &[String], entry_tys: &[String], entry_ret: &str) -> String {
+    let (eps, eret) = spec.erased_sig(ctx);
+    let mut call_args = Vec::new();
+    for (i, a) in args.iter().enumerate() {
+        let (Some(ety), Some(cty)) = (entry_tys.get(i), eps.get(i)) else {
+            call_args.push(a.clone());
+            continue;
+        };
+        if ety != cty {
+            call_args.push(format!("<{cty} as From<Object>>::from(Object::from({a}))"));
+        } else {
+            call_args.push(a.clone());
+        }
+    }
+    let call = format!("(self.0)({})", call_args.join(", "));
+    if eret != entry_ret {
+        format!("({call}).map(|__r| <{entry_ret} as From<Object>>::from(Object::from(__r)))")
+    } else {
+        call
+    }
+}
+
 /// 闭包接口的 vtable 条目
 fn vtable_entries(
     ctx: &EmitCtx<'_>,
@@ -123,9 +157,9 @@ fn vtable_entries(
     for jm in contract_methods(ctx, jci) {
         let key = (jm.name.clone(), param_part(&jm.desc).to_string());
         let Some(em_m) = jem.find(&jm.name, &key.1) else { continue };
-        let Some((head, args, entry_tys)) = entry_sig_parts(ctx, em_m, jci) else { continue };
+        let Some((head, args, entry_tys, entry_ret)) = entry_sig_parts(ctx, em_m, jci) else { continue };
         let body = if key == sam_key {
-            format!("(self.0)({})", args.join(", "))
+            sam_entry_body(ctx, spec, &args, &entry_tys, &entry_ret)
         } else {
             // 各接口 vtable 的同键条目一律走闭包上的极大 default（JVMS §5.4.6）：子接口覆盖的
             // default 在超接口 vtable 里也必须落到子接口的体，不得回落到超接口自身的声明
