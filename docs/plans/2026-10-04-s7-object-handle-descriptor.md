@@ -1063,6 +1063,44 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     `cargo check --tests` 与 emit 单测 99+2 过；确定性两项（closure_independent_of_order /
     of_hash_seed，b1015-det 作业 32G 上限内在跑，DET_RC 见 /tmp/b1015_det_tests.log）。
     failure_patterns 登记 `user-crate-methods-trait-package-path`。
+- **构造器留固有（10-13，mark-ctor-fix，修 batch-1015 放量首跑 Log4j2ApiMain E0599 构造器族）——
+  生成侧改形 × 手写层直调互为盲区同构第三例**：
+  - **症状与分诊更正**：`88_log4j2/Log4j2ApiMain` e2e 首跑 rs 编译 **E0599 ×21**（19 处构造器
+    `IOException/FileNotFoundException/IndexOutOfBoundsException/ProtocolException/ConnectException/
+    NoRouteToHostException/BindException/SocketException/ConnectionResetException` 的 `new_str`/`new`
+    + `System::getProperty_str` + `InetAddress::getAddress`），分布于 random_access_file / net /
+    e_poll / unix_dispatcher / socket_dispatcher / process_impl 六个伴生手写文件。放量登记时的怀疑
+    「IOException 落 K6 标记层无构造器」**不成立**：标记层本就只含身份面（构造器属声明层方法面），
+    且声明文件块文本内 `new_str` 在场——手写扫描器 `ctors` 路径已按伴生需要登记构造器入闭包
+    （`engine/hw.rs apply_hw`）。真因＝**构造器在 `X__Methods` trait 上而伴生手写文件未导入**。
+  - **为何 1014 过、1015 爆**：K3 把构造器移入 trait 时，b1013-fix 的 25 文件对齐只覆盖当轮验证
+    闭包内声明的伴生（random_access_file/net 等文件的**异常类构造器直调**不在其中——这些文件的
+    宿主类此前从未与 IOException 构造器同闭包出现）；batch-1014 golden 轮的 Log4j2ApiMain 闭包
+    未拉入 RandomAccessFile 宿主（伴生不声明、文件不编译），batch-1015 e2e 首跑闭包（5251 类）
+    首次同时拉入六文件宿主 → 集中爆出。与前两例（method-trait-handwritten-seam /
+    user-crate-methods-trait-package-path）同构：**伴生声明的发生条件由闭包决定，哪个闭包首次
+    拉入宿主事先不可知，per-file 方法 trait 导入无法穷举对齐**。
+  - **修法（宏，`moves_to_trait` 留固有名单再扩充，不类名特判）**：构造器按名字 `new` /
+    `new_<描述符后缀>`（与 `classify_method` 的 Constructor 分支同一名义口径，`main` 除外——入口
+    钩子按 b1015-fix 走 trait 导入）留固有 impl——手写 native 层按 errno / IO 错误构造异常类族是
+    协议面，与 `valueOf_*` / 访问器同级；同 crate 固有 impl 任意模块路径直调可解析，不再依赖
+    调用方导入。误报面：Java 方法名不可能叫 `new`（关键字）；碰巧叫 `new_<x>` 的真方法留固有
+    无语义差（固有优先解析，生成侧调用点两种形态都可解析、匿名导入冗余无害）。宏单测
+    `constructors_stay_inherent` 守护（trait_mirrors_wrapper_generics / std_named_method_stays_
+    inherent 两测的 `fn new` 断言随新口径改为固有侧）。伴生 statics / 实例方法仍走导入：
+    net_impl.rs 补 `System__Methods`（getProperty_str）与 `InetAddress__Methods`（getAddress）。
+  - **同族扫描（两手）**：路径调用 `X::m(` × use 表 × 留固有名单——java_runtime / java_meta /
+    java_support 全量，除上述两静态位外零残余（其余命中均为 std / rava_coro / 泛型形参误报）；
+    camelCase 实例调用全量清点（55 名 / 24 文件）——具实调用点的文件导入均已对齐（本闭包整个
+    java_base_decl 解析轮仅上述 21 错即全量见证），残余风险＝未编译过的伴生文件内的实例直调
+    （静态不可判，同 b1013-fix 排查方法节的既有口径）。
+  - **K6 性质**：本修复只动宏展开与手写 use 行——emit 块文本、D8 分段输入、标记层内容零变化
+    （切段逐类一致由构造保证）；声明层展开体量**方向性收窄**（每构造器少一份 trait 签名双份中的
+    声明份，实现份从 trait impl 挪固有 impl、同 crate 同文件），K4 搬 crate 时构造器与
+    `valueOf_*` 同列「固有跨 crate 失效」遗留名单，届时并入标记层机制或方法 trait。
+  - **验收**：见 tasks.md「10-13 batch-1015 放量首跑 E0599 构造器族」行（Log4j2ApiMain PASS、
+    宏单测 36/42、generator check、种子 / 确定性、抽查）；failure_patterns 登记
+    `ctor-trait-handwritten-seam`（fixed），known_failures 条目随修删除。
 - **K6 本体（10-12，s7-k6 2e3e9c2f + 5e7b21b8，基于 batch-1013 31e4762d）**：`java_class!` 块拆出
   类型标记层（`#[rava_layer = "marker"]`）——类 struct 的声明承载从声明层分离。
   - **与文档分解的偏差（先行记录）**：K6 的文档前提是 K4（手写基础设施分层）与 K5（类初始化骨架

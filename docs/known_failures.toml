@@ -88,9 +88,7 @@ note = "随 75_slf4j 迁入（案乙）：期望按 JVM 真值生成（含 helpf
 deferred = "面外"
 deferred_reason = "helpful NPE 消息属 JVM 诊断文本层（-XX:+ShowCodeDetailsInExceptionMessages 语义），非任何已排框架阶段的 API 面；实现后本例跑绿自动出列"
 
-[[known]]
-test = "Log4j2ApiMain"
-signature = "error[E0599]: no associated function or constant named `new_str` found for struct `io_exception_m::IOException`"
-owner = "待分诊：疑似 K6 标记层过渡（s7-k6 2e3e9c2f <x>_m.rs）与 java_base 手写实现方法面失配——本闭包内 IOException 落 marker 层无构造器，手写 random_access_file_impl.rs 仍调 new_str/new"
-since = "2026-10-13"
-note = "放量首跑的新形态（草稿 §三未预列）：batch-1014 验证轮 GOLDEN_OK（2026-10-12 报告 §二），batch-1015 基线 e2e 首跑复现编译失败（构造器族 E0599：IOException/FileNotFoundException/IndexOutOfBoundsException/ProtocolException/ConnectException 等 10 处）；语料与 cp 未变（log4j-api 单条目），按放量纪律只登记不修"
+# Log4j2ApiMain（E0599 构造器族，放量首跑登记）已修：mark-ctor-fix——构造器 new/new_* 进
+# moves_to_trait 留固有名单（手写层直调协议面，与 valueOf_* 同级）+ net_impl.rs 补
+# System/InetAddress 两导入；条目随修复删除（failure_patterns `ctor-trait-handwritten-seam`）。
+

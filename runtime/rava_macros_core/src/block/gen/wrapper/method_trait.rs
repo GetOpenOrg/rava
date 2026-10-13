@@ -43,6 +43,16 @@ pub(crate) const STD_COLLISIONS: [&str; 11] = [
 /// 协议面，与访问器同级，不应依赖调用方导入方法 trait。按前缀识别（不类名特判）：带描述符后缀的
 /// 重载名只出现在工厂/解析工厂形态；无后缀 `valueOf`（枚举 `valueOf(String)`、Character 唯一
 /// 重载等）仍移入 trait，由生成器登记导入或手写层 use 行对齐。
+///
+/// 构造器（`new` / `new_<描述符后缀>`，与 `util::classify_method` 的 Constructor 名字口径
+/// 一致——`main` 除外，入口钩子按 b1015-fix 走 trait 导入）同样留固有（mark-ctor-fix，§9.9 协议面保留
+/// 名单再扩充）：手写 native 层按 errno / IO 错误构造异常类族（random_access_file / net /
+/// dispatcher / process_impl 等的 `IOException::new_str`、`ProtocolException::new_str` …），
+/// 这些文件的伴生声明按闭包条件发生——哪个闭包拉入宿主类事先不可知，per-file 方法 trait 导入
+/// 无法穷举对齐（b1013-fix 的 25 文件对齐即漏了这批，与 K6 合批互为盲区第三例）。构造器是
+/// 手写层直调的协议面，与 `valueOf_*` / 访问器同级；按名字识别（不类名特判），Java 方法名不可能
+/// 叫 `new`（关键字），碰巧叫 `new_<x>` 的真方法留固有亦无语义差（固有优先解析，生成侧调用
+/// 点两种形态都可解析）。
 fn moves_to_trait(f: &ImplItemFn) -> bool {
     let n = f.sig.ident.to_string();
     f.sig.constness.is_none()
@@ -52,6 +62,7 @@ fn moves_to_trait(f: &ImplItemFn) -> bool {
         && !n.starts_with("__set_")
         && !n.starts_with("__default_")
         && !n.starts_with("valueOf_")
+        && !(n == "new" || n.starts_with("new_"))
 }
 
 /// trait 中的方法声明：签名同实现（形参模式去 `mut` / 非标识符模式改 `_`，无体声明不接受模式），
@@ -203,14 +214,16 @@ mod tests {
         let bounds = out.split("pub struct L < ").nth(1).unwrap().split(" > {").next().unwrap();
         assert!(out.contains(&format!("pub trait L__Methods < {bounds} > : :: core :: marker :: Sized")), "{out}");
         assert!(out.contains(&format!("impl < {bounds} > L__Methods < E > for L < E >")), "{out}");
-        assert!(out.contains("fn new () -> Result < Self > ;"), "{out}");
+        // mark-ctor-fix：构造器 `new` 留固有 impl（手写层直调协议面），trait 声明不再含它
+        assert!(out.contains("pub fn new () -> Result < Self > {"), "{out}");
         assert!(out.contains("fn make (k : i32) -> Result < L < Object > > ;"), "{out}");
         for m in ["fn COUNT () -> Result < i32 > ;", "fn __class_init () -> Result < () > ;"] {
             assert!(out.contains(m), "{m}: {out}");
         }
-        // K3 收尾：访问器 / _init_not_null / __init_on 留固有 impl（trait 项少一份签名）
+        // K3 收尾：访问器 / _init_not_null / __init_on 留固有 impl（trait 项少一份签名）；
+        // mark-ctor-fix 起构造器 `new` 同列
         let tr = out.split("pub trait L__Methods").nth(1).unwrap().split("impl <").next().unwrap();
-        for m in ["fn _init_not_null", "fn __get_n", "fn __init_on"] {
+        for m in ["fn _init_not_null", "fn __get_n", "fn __init_on", "fn new ()"] {
             assert!(!tr.contains(m), "{m} 不应在 trait 声明里: {tr}");
         }
         assert!(out.contains("pub fn _init_not_null (& mut self)"), "{out}");
@@ -224,8 +237,9 @@ mod tests {
     fn std_named_method_stays_inherent() {
         let out = expanded();
         let tr = out.split("pub trait L__Methods").nth(1).unwrap().split("impl <").next().unwrap();
-        assert!(tr.contains("fn new ()"), "{tr}");
+        assert!(!tr.contains("fn new ()"), "构造器留固有（mark-ctor-fix）: {tr}");
         assert!(!tr.contains("fn clone"), "{tr}");
+        assert!(out.contains("pub fn new () -> Result < Self >"), "{out}");
         assert!(out.contains("pub fn clone (& self) -> Result < Object >"), "{out}");
     }
 
@@ -270,5 +284,42 @@ mod tests {
         assert!(!tr.contains("valueOf_"), "装箱工厂不应在 trait 声明里: {tr}");
         assert!(out.contains("pub fn valueOf_i (x : i32)"), "{out}");
         assert!(out.contains("pub fn valueOf_ljava_lang_String (s : String)"), "{out}");
+    }
+
+    /// 构造器（`new` / `new_<描述符后缀>`）留固有 impl（mark-ctor-fix：手写 native 层按 errno /
+    /// IO 错误构造异常类族的协议面，伴生按闭包条件发生、per-file trait 导入无法穷举对齐——
+    /// batch-1015 Log4j2ApiMain E0599 ×21 同构第三例）；`__init_on` 孪生与静态方法仍入 trait
+    #[test]
+    fn constructors_stay_inherent() {
+        use std::str::FromStr;
+        let src = r#"
+        #[binary_name = "java/io/IOException"]
+        #[superclass = "Exception"]
+        pub struct IOException;
+        impl IOException {
+            #[java_method(name = "<init>", descriptor = "()V", access = "public")]
+            pub fn new() -> Result<Self> { Ok(Self::default()) }
+            #[doc(hidden)]
+            pub fn __init_on(mut this: Self) -> Result<Self> { Ok(this) }
+            #[java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public")]
+            pub fn new_str(message: String) -> Result<Self> { Ok(Self::default()) }
+            #[doc(hidden)]
+            pub fn __init_on_str(mut this: Self, mut message: String) -> Result<Self> { Ok(this) }
+            #[java_method(name = "<init>", descriptor = "(Ljava/lang/String;Ljava/lang/Throwable;)V", access = "public")]
+            pub fn new_str_throwable(message: String, cause: Throwable) -> Result<Self> { Ok(Self::default()) }
+        }
+    "#;
+        let out = super::super::super::super::expand(TokenStream2::from_str(src).unwrap()).to_string();
+        assert!(!out.contains("compile_error"), "{out}");
+        let tr = out.split("pub trait IOException__Methods").nth(1).unwrap().split("impl IOException__Methods").next().unwrap();
+        for m in ["fn new ()", "fn new_str (", "fn new_str_throwable ("] {
+            assert!(!tr.contains(m), "构造器 {m} 不应在 trait 声明里: {tr}");
+        }
+        // 固有 impl 保留 pub（手写层 crate 内任意路径直调可解析）
+        for m in ["pub fn new () -> Result < Self >", "pub fn new_str (message : String)", "pub fn new_str_throwable (message : String"] {
+            assert!(out.contains(m), "构造器 {m} 应在固有 impl: {out}");
+        }
+        // 孪生入口与静态方法不受影响（生成侧调用点按账本导入）
+        assert!(tr.contains("fn __init_on_str ("), "{tr}");
     }
 }

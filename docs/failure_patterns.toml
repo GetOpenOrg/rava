@@ -1745,6 +1745,7 @@ status = "pending"
 owner = "fix-iface-obj-overload"
 diagnose = "看报错方法是否为根类公开方法（equals / hashCode / toString）且接收者为接口；查 instr/src/naming.rs mangle_uncached 与 input/src/plan.rs root_keyed 是否同口径"
 doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md C 节；翻译对照 §13.4"
+since = "2026-10-11"
 
 [[pattern]]
 id = "inherited-covariant-bridge-slot-unfilled"
@@ -1759,6 +1760,7 @@ status = "pending"
 owner = "pilot-jackson-core（框架矩阵 #3）"
 diagnose = "对照存根所在类与接收者生成文件：接收者有 inherited_from 的真实方法成员、缺 virtual_in=<祖先> 的 *_super_<m> 桥成员即本条"
 doc = "docs/plans/2026-10-03-framework-pilot-test-matrix.md #3 交付记录"
+since = "2026-10-10"
 
 [[pattern]]
 id = "region-escape-after-group-free"
@@ -1956,4 +1958,21 @@ status = "open"
 owner = "主会话裁决（expected 口径）；非转译缺陷"
 diagnose = "输出差异行先在本机真机 JDK21/25 双跑对照：两侧各与哪个版本一致即定归因"
 doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
+since = "2026-10-13"
+
+[[pattern]]
+id = "ctor-trait-handwritten-seam"
+stage = "compile"
+symptom = "e2e rs 编译 E0599（伴生手写文件按闭包条件首次声明时集中爆出）：no associated function or constant named `new_str` / `new` found for struct `<x>_m::<X>`（IOException/FileNotFoundException/ProtocolException/ConnectException/SocketException 等异常类族），或同类 no method named `getAddress` / `getProperty_str`（静态/实例方法面）"
+match = [["no associated function or constant named `new_str` found for struct `io_exception_m::IOException`"],
+         ["no associated function or constant named `new` found for struct `index_out_of_bounds_exception_m::IndexOutOfBoundsException`"],
+         ["no method named `getAddress` found for reference `&inet_address_m::InetAddress`"]]
+tests = ["Log4j2ApiMain（放量首跑 E0599 ×21：random_access_file / net / e_poll / unix_dispatcher / socket_dispatcher / process_impl 六文件）"]
+cause = "K3 把构造器（new/new_<描述符后缀>）移入 X__Methods 与 b1013-fix 的 25 文件对齐互为盲区第三例（前两例 method-trait-handwritten-seam / user-crate-methods-trait-package-path）：手写 native 层按 errno / IO 错误构造异常类族，其伴生声明按「宿主类 + 依赖类文件在场」逐闭包发生——哪个闭包首次拉入宿主类事先不可知，per-file 方法 trait 导入无法穷举对齐；分诊记录所疑「IOException 落 K6 标记层无构造器」不成立（标记层本就只含身份面，构造器在声明文件块文本内、闭包已含：手写扫描器 ctors 路径有登记），真因是构造器在 trait 上而手写层未导入。修法（mark-ctor-fix）：构造器按名字（new / new_*，与 classify_method 的 Constructor 口径一致、不类名特判）进 moves_to_trait 留固有名单——与 valueOf_* / 访问器同级的协议面，同 crate 固有 impl 任意路径直调可解析；伴生 statics/实例方法仍走导入（net_impl.rs 补 System/InetAddress 两行）。误报面：Java 方法名不可能叫 new（关键字），碰巧叫 new_<x> 的真方法留固有无语义差"
+introduced = "f7b69314（K3 合入 batch-1013；构造器面在验证闭包内未爆出，batch-1015 放量首跑 Log4j2ApiMain 闭包首次声明 random_access_file/net 等伴生才相撞）"
+fixed = ["mark-ctor-fix（构造器留固有 + 宏单测 constructors_stay_inherent；验收见 tasks.md 对应行）"]
+status = "fixed"
+owner = "mark-ctor-fix"
+diagnose = "E0599 指到 java_base_decl 手写 overlay 文件且成员名为 new/new_*：看被调类声明文件块内有无该构造器（有 → 本条；无 → 闭包缺口另归）。同族扫描：手写层 X::m( 路径调用 × 文件 use 表 ×（构造器 | valueOf_* | __ 前缀 | std 同名）留固有名单"
+doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「协议面保留名单扩充」（第三例同构缝补记）"
 since = "2026-10-13"
