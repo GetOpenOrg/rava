@@ -61,6 +61,11 @@ impl NoReturn {
         !self.settled && (!self.created.contains(t) || self.unanalyzed.contains_key(t) || self.waiting.contains_key(t))
     }
 
+    /// 目标是否已建字节码方法节点（`pending_write`：返回常量会随节点分析出现，缺席才可能是暂态）
+    pub(super) fn created(&self, t: &MemberRef) -> bool {
+        self.created.contains(t)
+    }
+
     /// 按对象查询的 ⊥ 答复是否按不可达（`obj_fields.rs`）：定论阶段之前都是。⊥ 随分析只会升为值，
     /// 不在收尾阶段提前退回全局值（退回值比随后到达的按对象值宽，而分析结果只增不撤，结果会依赖处理顺序）
     pub(super) fn bottom_never(&self) -> bool {

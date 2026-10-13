@@ -472,6 +472,9 @@ pub struct Engine<'a> {
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象。按站点存升序表（站点多有几十到上百个对象，比逐条哈希省内存）
     recv_done: HashMap<usize, HashMap<u32, Vec<u32>>>,
+    /// `bytecode.rs::field` 因写入值是被调返回、返回常量未定（`pending_write`）而暂缓并入值集的写站点：
+    /// 方法 → 偏移。方法被失效重算时这些站点必须重跑（事件值不变也要按新格补并入，如返回常量升到 Top）
+    pub(super) pending_skips: HashMap<usize, HashSet<u32>>,
     /// 调用点接收者值集的版本记忆：方法 → 偏移 → 版本与接收者判定（`recv_fp.rs`，同 `recv_done` 作废）
     recv_fp: HashMap<usize, HashMap<u32, recv_fp::RecvFp>>,
     /// 反射调用点（方法 → 偏移）已处理过的 Class 实参值（`field_lookup.rs::ReflSeen`）；同一分析结果下成立，与 `recv_done` 同口径作废
