@@ -1821,3 +1821,18 @@ owner = "b1013-fix"
 diagnose = "E0599 指到 java_base_decl 手写 overlay 文件且成员名为 Java 方法 / __class_init：查该文件有无 X__Methods as _ 导入与 use super::* 同包 glob；新缝按「路径调用扫描 × use 表 × 留固有名单 + jvm_native 静态注入面枚举」排查（S7 §9.9 排查方法节）"
 doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「协议面保留名单扩充」"
 since = "2026-10-12"
+
+[[pattern]]
+id = "field-write-pending-ret-lattice"
+stage = "unit"
+symptom = "closure_independent_of_hash_seed 失败：TestSerialLookupPairing 种子间类集合差 ProtectionDomain$JavaSecurityAccessImpl + JavaSecurityAccess 两类（差集随扰动翻面）"
+match = []
+tests = ["closure_independent_of_hash_seed"]
+cause = "字段写入值是被调方法的返回、被调返回常量格 rvals 尚未建立时（调用方先于被调方含返回点的轮次分析），oracle 答 Unknown 经 putfield 以 Top 并入全局字段值集后不可撤回（格只升不降）；rvals 随后出现经 Dep::Ret 失效重写已晚——写入是否污染依赖分析次序。清单返回事实（getSecurityManager 恒 null）只消除被调体内部的不确定，消除不了这个「写先于读常量」次序窗口；任何手写层 / 输入扰动（阶段 1/2 的 obj_ref/sync_model 挪移等）都会翻出面。修法（cc2cfc3e）：pending_write——写入值恰是无标签、单来源（产生它的调用点）的引用且调用点有唯一字节码目标、目标已建节点、rvals 缺席时暂不并入（fvals/ovals/owild），pending_skips 登记的偏移在方法失效重算时并入 changed 强制重跑（事件值不变也重跑，返回常量升到 Top 时按新格补并入）；真不返回的被调方使写入不可达，不并入同样正确；标记建模旁路调用边的站点（无节点）不属暂态、仍按 Top 并入"
+introduced = "潜伏于闭包分析器返回常量机制自始；e6edfa24/a867b085（S7 K4 阶段 1/2 手写层挪移）扰动次序翻出"
+fixed = ["cc2cfc3e（验收 s7k4s-det1：hash_seed + order 2 过 0 失；s7k4s-tslp1/seed1 四例种子 0/1/2 对 e9597fef ALL-IDENTICAL；s7k4s-link1 HelloWorld+TestStackWalkerFrames 链接级 PASS）"]
+status = "fixed"
+owner = "s7-k4（K4-2a 交接的确定性遗留）"
+diagnose = "cargo test closure_cli closure_independent 或 scripts/diag/s7k6_seed_sets.sh 多种子对照；RAVA_DBG_FIELD=<字段键> 看 [field-put] 是否先 Top 后常量（先写后立返回常量的次序窗口铁证）；--why 差异类看引入链是否经某 ifnull 守卫的字段读"
+doc = "docs/plans/2026-10-11-seed-regression-fix.md §七、S7 计划 §9.9 K4 节确定性遗留闭环"
+since = "2026-10-14"

@@ -1235,14 +1235,31 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
       切段重建对 a07fbb6f）：三例全部 crate 在 ±10% 内，最大涨幅 +3.7%（DeepCopy
       java_base_body_6），声明底段 +2.5%（4 855 → 4 979 MB）——hw 匿名导入行 + trait
       声明文本的代价量级如预期。确定性两项 `closure_independent_of_order` ✅ /
-      `closure_independent_of_hash_seed` ⛔——**二分定归属：非 K4-2a**（s7k4d-det4
-      终态与 s7k4d-detmid（**042465b7 = 阶段 2 尖，K4-2a 之前**）失败逐字相同：
-      TestSerialLookupPairing 种子 0 与 2 的类集合差 `ProtectionDomain$
-      JavaSecurityAccessImpl` + `JavaSecurityAccess` 两类；基线 a07fbb6f
-      （s7k4d-detbase，kr1 rc=0）过 → 阶段 1/2（e6edfa24/a867b085）引入，排队中的
-      s7k4-det 本应暴露）。K4-2a 的四例种子口径（s7k4d-seed2）不受影响（全同）；
-      两工具口径差异疑与闭包缓存指纹（是否计入 hash seed）有关，续作核查
-      `closure::cache` 指纹与阶段 2 输入变化的交互。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
+      `closure_independent_of_hash_seed` ⛔→**✅ 10-14 闭环（cc2cfc3e，s7-k4）**——
+      二分定归属：非 K4-2a（s7k4d-det4 终态与 s7k4d-detmid（**042465b7 = 阶段 2 尖，
+      K4-2a 之前**）失败逐字相同：TestSerialLookupPairing 种子 0 与 2 的类集合差
+      `ProtectionDomain$JavaSecurityAccessImpl` + `JavaSecurityAccess` 两类；基线
+      a07fbb6f（s7k4d-detbase，kr1 rc=0）过 → 阶段 1/2（e6edfa24/a867b085）引入，
+      排队中的 s7k4-det 本应暴露）。**根因（s7k4s-why1 取证）非缓存指纹**：阶段 1/2
+      只扰动分析次序，翻出闭包分析器的潜伏次序敏感——`ObjectStreamClass$2.run@336`
+      写 `domains` 先于 `@333 getProtectionDomains` 返回常量格建立时以 Top 并入
+      全局字段值集（格只升不降，不可撤回），返回常量（恒 Null，`getSecurityManager`
+      清单事实生效、未被旁路）随后出现重写已晚；种子 0/2 只差这次序窗口的落面
+      （s7k4d-seed2 在 19802647 的「全同」是三种子恰好同落过近似面的侥幸）。修法
+      `pending_write`（cc2cfc3e，与 `noreturn.rs`「尚无返回」同一乐观-重算口径）：
+      写入值是无标签单来源（产生调用点）的引用、调用点有唯一字节码目标且目标已建
+      节点、返回常量缺席时暂不并入，`pending_skips` 偏移在失效重算时强制重跑（事件
+      值不变也重跑，防返回常量升 Top 漏并入）；标记建模旁路调用边的站点无节点、
+      不属暂态仍按 Top 并入。机理与验收详录 `docs/plans/2026-10-11-seed-regression-fix.md`
+      §七；failure_patterns 登记 `field-write-pending-ret-lattice`。验收全绿：s7k4s-det1
+      （jp2 rc=0，hash_seed + order **2 过 0 失**，6612s 较修复前慢约三成——暂缓写入
+      多出的失效重算轮）；s7k4s-tslp1 / s7k4s-seed1（rc=0 ×2，`ALL-IDENTICAL`，四例
+      种子 0/1/2 集合对 e9597fef 逐项全同：TSLP 2662×3 / HelloWorld 641×3 /
+      CollectorsDemo 662×3 / DeepCopy 2660×3——修复只影响确定性不影响集合）；
+      s7k4s-link1（kr1 rc=0，HelloWorld + TestStackWalkerFrames 链接级逐字对 JVM
+      PASS）。「两工具口径差异」非缓存指纹（指纹本计入 seed、两口径都不开缓存）：
+      `--jdk 21` 发现与 `--java-home` 参考 21.0.11 解析到不同 JDK、闭包宇宙差 47 类，
+      回归只在发现侧宇宙复现。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
       移动（trait 声明行口径），无类增删）与逐 crate 峰值（s7k6_peak.sh 对 a07fbb6f，
       ±10%）未派发。
   - **K4-2a 验收与交接（10-13）**：
