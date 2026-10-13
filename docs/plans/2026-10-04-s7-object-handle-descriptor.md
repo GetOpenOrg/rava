@@ -1176,6 +1176,77 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     `__default_*` 应在 trait 声明）；**HelloWorld、CollectorsDemo、DeepCopy 三例 emit→编译→
     rava-link→运行输出与 JVM 逐字一致**（覆盖装箱协议面 / 访问器 / 虚分派 / lambda-sam / 接口
     default / 反射 clone 链）。
+  - **K4-2a（✅ 10-13 落地，阶段 3 的前置首步——交接节「可行出路」的实现）——手写伴生
+    固有 impl 迁移到 `__XHw{N}` 扩展 trait**：wrapper struct 挪入 java_marker 后伴生文件的
+    `impl X {` 全部 E0390（阶段 3 受阻根因）；本步把声明层的这一固有依赖转成本地 trait：
+    - **形态**：生成器对每个有 hw 块的类在其声明文件 `java_class!` 块后发射
+      `pub trait __XHw{N}<泛型组>: X__Methods<自类型实参> [where …] { 条目; }`——泛型组 /
+      实参 / where / 条目签名（模式规范化：`mut self`→`self`、`mut x`→`x`、复合模式→`_`）/
+      cfg 属性全部机械镜像自伴生 `impl __XHw{N} for X` 头（`input::handwritten::hw_impl_blocks`
+      文本级扫描）。**多块逐块成 trait**（一 trait 一 impl：`class_impl.rs` 三块 →
+      `__ClassHw` / `__ClassHw2` / `__ClassHw3`；跨文件同理 `string_ext` → `__StringHw`、
+      `string_impl` → `__StringHw2`——块序 = 文件遍历序 × 位置序，与改写脚本同一口径；
+      Rust 不允许同 (trait, 类型) 双 impl，合并块则动体，故逐块）。**块后追加**：拆层后
+      只在声明层（宏块尾文本不进 body crate），标记文件也不含（marker_text 只取宏块）。
+    - **改写**（`scripts/diag/k4_2a_rewrite_hw_impls.py`，幂等）：104 份 `*_impl.rs`/`*_ext.rs`
+      第 0 列固有 impl 块 → `impl __XHw{N} for X {`（体不动；本地辅助类型 `Prim` / `Instance` /
+      `_BitOp` 与手写根类 `Object` 不改——按「名字在本树有定义」判定；fn 体内缩进 impl 不碰）；
+      块内顶层条目剥 `pub` / `pub(crate)` / `pub(super)`（trait impl 条目不允许可见性修饰）；
+      文件头补 `use super::__XHw{N};`（本类全部块——跨块 / 跨文件互调都在作用域）。
+      `--fix-callers`：非伴生手写文件的 hw 调用面（UFCS `X::m(` 与单主接收者 `.m(`）
+      补 `use crate::<包>::__XHw{N} as _;`（16 份；多主 / 常用泛型名跳过，编译错误兜底）。
+    - **调用点导入**：`ty::HwNames`（binary → 各块条目名集）经 `EmitShared` 注入 `TyCtx`，
+      `NameScope` 登记 (binary, 块序号)，`imports::fill` 发射 `use …::__XHw{N} as _;`
+      （与 `X__Methods` 同机制；`prune_uses` 对 `__` 前缀名单恒保留——留体 fn 无需账本）。
+      登记点（按 Java 成员名匹配块：名 / `名_` 重载后缀 / `__impl_` 前缀，双向匹配）：
+      `record_member`（指令链上声明类与接口 owner）、`resolve_static_field`（字段名 + `set_`
+      前缀——手写静态访问器）、phase2 继承转发（手写成员 `__impl_` 体 / 接口载体 target
+      直调——宏合成转发体的调用点所在文件）、字面量锚点（ldc UTF-16 串
+      `String::from_utf16_lit`、类字面量 `Class::for_class`、拼接 `String::of`、静态字段
+      UTF-16 初值）。
+    - **口径保持**：`impl_methods` 名单 = `pub fn` 扫描 ∪ hw 块条目（原 `pub(crate)` /
+      `pub(super)` 条目并入——名单语义本就是「wrapper 上由手写提供」，核过 55 名无一与
+      类模型方法 rust 名相撞，verdict 无翻转；种子集合作业再守一道）；闭包分析器对
+      `impl __XHw{N} for X` 块内条目按 `is_pub` 计（`closure/scan.rs`——闭包 / 种子口径
+      不变）；行表 `companion_fns` 收集 hw trait impl 块（栈帧行表不丢，
+      TestStackWalkerFrames 关键）；`java_runtime/build.rs` `scan_impls` 块态识别 hw
+      trait impl（native_status 实现集不漂移）；D8 体量权重不计 hw 匿名导入行（同接口
+      方法 trait 口径——纯名字解析行，`decl_side::hw_trait_import_bytes`）；trait 声明文本
+      本体（约 110 文件 × 0.3–2 KB）照常计权（段边界允许的「trait 声明行」漂移口径）。
+    - **验证（tag 前缀 s7k4d-，10-13 交接时在跑——回收法见下「K4-2a 验收与交接」）**：
+      宏单测 36/42 ✅（jp2）；input 25 / ty 67 / closure 252 / emit 101 / driver build_cli 17
+      全绿（本机；emit 测试夹具补 java_marker crate——阶段 1 起 9 个 project 测试未运行到
+      的既有破损，本步修复）。链接级（s7k4d-hw1，sg2 挤占后改派 jp1）、种子四例
+      （s7k4d-seed，kr1）、确定性两项（s7k4d-det，us1）交回时在跑（集群被其他会话的
+      rr-* 作业挤占，分发器在 30s 重试循环中等待资源启动——分发器本机 setsid nohup
+      存活，不随会话终止）；切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
+      移动（trait 声明行口径），无类增删）与逐 crate 峰值（s7k6_peak.sh 对 a07fbb6f，
+      ±10%）未派发。
+  - **K4-2a 验收与交接（10-13）**：
+    - **在跑作业回收**：`cat cluster_results/job/s7k4d-hw1|s7k4d-seed|s7k4d-det/summary.json`
+      看 status/rc；日志 `tail …/01_*.log`；分发器（本机 setsid nohup，日志
+      `/tmp/s7k4d-*-dispatch.log`）被杀时同 tag 重派即可（脚本幂等，闭包 json 已在即跳过）。
+      hw1 失败（rc=1）时先看编译错误清单——预期形态为漏登记的 hw 调用点 E0599（补登记点
+      或 fix-callers 名单）与个别签名镜像偏差（hw_trait_decl 对应条目），逐个修后重派。
+    - **未派发作业**：切段 `bash scripts/diag/s7k6b_segments.sh <基线 042465b7（阶段 2 尖）
+      或 a867b085>`（新侧忽略标记文件；差异应全为段边界移动——trait 声明文本 ~110 文件
+      ×0.3–2 KB 计权 + hw 导入行不计权（decl_side::hw_trait_import_bytes））；峰值
+      `bash scripts/diag/s7k6_peak.sh a07fbb6f`（±10% 判据，hw 导入行是纯解析开销）；
+      链接级五例 = HelloWorld / CollectorsDemo / DeepCopy / TestStackWalkerFrames /
+      TestAnnoReflect（`run_tests.py --filter` 多过滤项一次跑）。
+    - **阶段 3 重放（下一步）**：本步落地后 `git cherry-pick c66f7814`（或按「阶段 3」节
+      清单重做）应可过 E0390 面；已知将再撞两处：①`prune_marker_header` 剪 `__VTable` /
+      `__Methods` 后缀单名导入（E0432，交接节已记修法——`prune_uses` 对标记文件头加剪
+      后缀名）；②伴生文件里的 **std trait impl**（`impl From<&str> for String` /
+      `impl Add<…> for String` / `impl Display for String` 等）在 wrapper 挪入 java_marker
+      后是孤儿规则 E0210（非 E0390——固有 impl 之外的另一面，c66f7814 只钩走了 String
+      构造两枚）。处置需设计（搬 java_marker 需行为面 / 留声明层违孤儿规则 / 经
+      `__XHw` 承载 std trait 不可能）——建议先 cherry-pick 看实际错误清单再定。
+      另注意 object_ext.rs 等随迁文件的 `use crate::…::__ClassHw as _;` 在 java_marker
+      侧不可解析（`crate::` 变指 java_marker）——c66f7814 的钩子化会替换这些调用点，
+      重放时按冲突逐个处理。
+    - **机械改写的可重复性**：`scripts/diag/k4_2a_rewrite_hw_impls.py`（幂等；新增伴生
+      固有 impl 后重跑 + `--fix-callers` + 生成器扫描自动跟上；ordinal 随遍历序稳定）。
   - **阶段 3（⛔ 10-12 原子落地受阻，已回退到可编译状态——续作入口）——INFRA 主体搬移 +
     标记文件挪入 java_marker**：
     - **受阻根因（原清单外的结构性缺口，续作必须先解）**：伴生手写文件（`<x>_impl.rs` /
