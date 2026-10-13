@@ -43,11 +43,13 @@ pub(super) enum PSlot {
 pub(super) struct PStrs {
     /// 字面量序号集（`absint::lit`；传递只做位运算）
     sets: HashMap<PSlot, IdSet>,
-    /// 子集边与逆（有序数组形态：B 树节点摊还 24–28B/条 → 数组 16–24B/条，§4.17）
-    succ: HashMap<PSlot, SortedSet<PSlot>>,
+    /// 子集边与逆：行内容共享（§4.18——形态画像 succ 行内容重复度 82–93%：同形调用点的相同目标集 /
+    /// 同一枢纽扇出到多目标的相同前驱集），同内容行共享一份 `Rc<SortedSet>`，共享行插入时克隆改写后
+    /// 重新并池。集合语义（插入去重 + 升序遍历）与逐行独立存储完全一致——行为与确定性不变
+    succ: RowSet,
     /// 读过方法形参槽的按名查找站点（偏移）
     sites: HashMap<(usize, usize), SortedSet<u32>>,
-    pred: HashMap<PSlot, SortedSet<PSlot>>,
+    pred: RowSet,
     /// 流入 String 形参槽的非常量实参：(调用方, 调用偏移, 实参序号（不含接收者）)；
     /// 流入 String 字段槽的非常量写入：(写入方, putfield / putstatic 偏移, [`FIELD_VALUE`])
     inputs: HashMap<PSlot, SortedSet<(usize, u32, usize)>>,
@@ -66,13 +68,130 @@ pub(super) struct PStrs {
     active: Vec<PSlot>,
 }
 
+/// 行内容共享的「槽 → 槽集合」表（§4.18，succ / pred 共用）。同内容行只存一份（`Rc` 按指针共享，
+/// 内容哈希索引 + 内容比对找同类行）；行插入新元素时：唯一持有的行原地改，共享行克隆改写后重新并池
+/// （并到既有同内容行则共享之）。插入返回值、去重口径、遍历升序与逐行独立的 `SortedSet` 完全一致——
+/// 行为与确定性不变。索引按精确指针记账（改写前摘旧、并池后挂新），无死条目积累。
+struct RowSet {
+    rows: HashMap<PSlot, Rc<SortedSet<PSlot>>>,
+    /// 内容哈希 → 行弱引用（碰撞经内容比对）
+    ix: HashMap<u64, Vec<std::rc::Weak<SortedSet<PSlot>>>>,
+}
+
+fn content_hash(v: &SortedSet<PSlot>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.len().hash(&mut h);
+    for e in v.iter() {
+        e.hash(&mut h);
+    }
+    h.finish()
+}
+
+impl Default for RowSet {
+    fn default() -> RowSet {
+        RowSet { rows: HashMap::default(), ix: HashMap::default() }
+    }
+}
+
+impl RowSet {
+    fn get(&self, s: &PSlot) -> Option<&SortedSet<PSlot>> {
+        self.rows.get(s).map(|r| &**r)
+    }
+    /// 在 s 行内插入 x：true = 新插入（与 `SortedSet::insert` 同口径）。
+    /// 行先摘出再放回：唯一持有的行（仅本表引用）原地改，共享行克隆改写后并池
+    fn insert(&mut self, s: PSlot, x: PSlot) -> bool {
+        let mut rc = match self.rows.remove(&s) {
+            Some(rc) => rc,
+            None => {
+                let mut set = SortedSet::default();
+                set.insert(x);
+                let rc = Rc::new(set);
+                let h = content_hash(&rc);
+                self.ix.entry(h).or_default().push(Rc::downgrade(&rc));
+                self.rows.insert(s, rc);
+                return true;
+            }
+        };
+        if rc.contains(&x) {
+            self.rows.insert(s, rc);
+            return false;
+        }
+        let shared = if Rc::strong_count(&rc) == 1 {
+            // 唯一持有：原地改（改前按指针摘旧索引，改后按新内容并池）
+            let old = content_hash(&rc);
+            Rc::get_mut(&mut rc).unwrap().insert(x);
+            let new = content_hash(&rc);
+            self.unlist(old, Rc::as_ptr(&rc));
+            match self.find_shared(new, &rc) {
+                Some(other) => other,
+                None => {
+                    self.ix.entry(new).or_default().push(Rc::downgrade(&rc));
+                    rc
+                }
+            }
+        } else {
+            // 共享行：克隆改写后并池（rc 摘出后仍有他行引用，其索引条目保持有效）
+            let mut v = (*rc).clone();
+            v.insert(x);
+            let h = content_hash(&v);
+            let cand = Rc::new(v);
+            match self.find_shared(h, &cand) {
+                Some(other) => other,
+                None => {
+                    self.ix.entry(h).or_default().push(Rc::downgrade(&cand));
+                    cand
+                }
+            }
+        };
+        self.rows.insert(s, shared);
+        true
+    }
+    /// 内容哈希桶内找同内容行（排除自身指针——`&SortedSet` 即 `Rc` 数据指针，与 `Weak::as_ptr` 同基；
+    /// 顺带清死引用）。找到即共享
+    fn find_shared(&mut self, h: u64, want: &SortedSet<PSlot>) -> Option<Rc<SortedSet<PSlot>>> {
+        let want_ptr = want as *const SortedSet<PSlot>;
+        let bucket = self.ix.get_mut(&h)?;
+        bucket.retain(|w| w.strong_count() > 0);
+        let mut hit = None;
+        for w in bucket.iter() {
+            let rc = w.upgrade().unwrap();
+            if Rc::as_ptr(&rc) as *const SortedSet<PSlot> != want_ptr && *rc == *want {
+                hit = Some(rc);
+                break;
+            }
+        }
+        hit
+    }
+    /// 从内容哈希桶摘除指向 p 的条目（原地改前调用；桶通常长 1）
+    fn unlist(&mut self, h: u64, p: *const SortedSet<PSlot>) {
+        if let Some(bucket) = self.ix.get_mut(&h) {
+            bucket.retain(|w| std::rc::Weak::as_ptr(w) as *const SortedSet<PSlot> != p);
+            if bucket.is_empty() {
+                self.ix.remove(&h);
+            }
+        }
+    }
+    /// 深堆字节（census deep3，只读）：行表列 + **按指针去重的相异行内容**（`Rc` 头 + 容量字节）+ 索引
+    fn deep_bytes(&self) -> usize {
+        let mut seen: HashSet<*const SortedSet<PSlot>> = HashSet::default();
+        let mut b = self.rows.capacity() * (std::mem::size_of::<(PSlot, Rc<SortedSet<PSlot>>)>()) * 9 / 7;
+        for rc in self.rows.values() {
+            if seen.insert(Rc::as_ptr(rc)) {
+                b += 16 + rc.cap_bytes();
+            }
+        }
+        b + self.ix.capacity() * 40 * 9 / 7 + self.ix.values().map(|v| 24 + v.len() * 16).sum::<usize>()
+    }
+}
+
 impl PStrs {
     /// 深堆字节（census deep3 行，只读；`IdSet` 经 `heap_bytes`、B 树按节点摊还）——逐子表
     pub(super) fn deep_items(&self) -> Vec<(&'static str, usize)> {
         vec![
             ("pstr_sets", self.sets.capacity() * 40 * 9 / 7 + self.sets.values().map(|s| s.heap_bytes()).sum::<usize>()),
-            ("pstr_succ", self.succ.capacity() * 40 * 9 / 7 + self.succ.values().map(|s| s.cap_bytes()).sum::<usize>()),
-            ("pstr_pred", self.pred.capacity() * 40 * 9 / 7 + self.pred.values().map(|s| s.cap_bytes()).sum::<usize>()),
+            ("pstr_succ", self.succ.deep_bytes()),
+            ("pstr_pred", self.pred.deep_bytes()),
             ("pstr_sites", self.sites.capacity() * 40 * 9 / 7 + self.sites.values().map(|s| s.cap_bytes()).sum::<usize>()),
             ("pstr_inputs", self.inputs.capacity() * 40 * 9 / 7 + self.inputs.values().map(|s| s.cap_bytes()).sum::<usize>()),
             ("pstr_demand", self.demand.capacity() * 40 * 9 / 7 + self.demand.values().map(|s| s.cap_bytes()).sum::<usize>()),
@@ -165,10 +284,10 @@ impl<'a> Engine<'a> {
 
     /// 子集边 from → to：from 已有的常量立即传递
     pub(super) fn pstr_edge(&mut self, from: PSlot, to: PSlot) {
-        if from == to || !self.pstr.succ.entry(from).or_default().insert(to) {
+        if from == to || !self.pstr.succ.insert(from, to) {
             return;
         }
-        self.pstr.pred.entry(to).or_default().insert(from);
+        self.pstr.pred.insert(to, from);
         self.pstr_wake(to);
         // 污染与常量同沿子集边：新边的来源槽已污染时目标槽随之污染
         if self.slot_tainted(from) {
@@ -541,7 +660,7 @@ impl<'a> Engine<'a> {
             256..=1023 => 5,
             _ => 6,
         });
-        let analyze = |name: &str, t: &HashMap<PSlot, SortedSet<PSlot>>| {
+        let analyze = |name: &str, t: &RowSet| {
             let kidx = |s: &PSlot| match s {
                 PSlot::M(..) => 0,
                 PSlot::H(..) => 1,
@@ -557,7 +676,8 @@ impl<'a> Engine<'a> {
             let mut uniq: HashMap<u64, (usize, usize)> = HashMap::default(); // 内容哈希 → (len, 出现次数)
             let mut hub_j: HashMap<u32, Vec<(usize, std::collections::BTreeSet<usize>)>> = HashMap::default(); // H 行：hub → 各 j 的目标方法集
             let mut top: Vec<(usize, String)> = Vec::new();
-            for (s, v) in t {
+            for (s, rc) in &t.rows {
+                let v: &SortedSet<PSlot> = rc;
                 let n = v.len();
                 rows += 1;
                 edges += n;
@@ -618,13 +738,13 @@ impl<'a> Engine<'a> {
                 // 惰性逆边收益：pred 行中键已入 demand（按名求值遍历到过）的槽的行字节占比
                 let mut hot = 0usize;
                 let mut hot_rows = 0usize;
-                for (s, v) in t {
+                for (s, rc) in &t.rows {
                     if p.demand.contains_key(s) {
-                        hot += v.cap_bytes();
+                        hot += rc.cap_bytes();
                         hot_rows += 1;
                     }
                 }
-                let all: usize = t.values().map(|v| v.cap_bytes()).sum();
+                let all: usize = t.rows.values().map(|rc| rc.cap_bytes()).sum();
                 eprintln!(
                     "{tag} pstr-shape {name} demand_slots={} hot_rows={}/{} hot_bytes={:.0}MiB/{:.0}MiB",
                     p.demand.len(), hot_rows, rows, mib(hot), mib(all),

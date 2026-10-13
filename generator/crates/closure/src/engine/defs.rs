@@ -279,7 +279,7 @@ pub(super) enum Recv {
 /// 有序集合的数组形态（性能计划 §4.17 枢纽结构压缩：`BTreeSet` 节点摊还 6–14 B/条 → 数组 4–8 B/条）。
 /// 只用于「插入去重 + 升序遍历 + len / is_empty」的枢纽站点集合——插入 O(n) 搬移（枢纽集合多为个位到
 /// 千级条目，memmove 代价可忽略），遍历序与 `BTreeSet` 完全相同（升序），行为与确定性不变
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct SortedSet<T: Ord>(Vec<T>);
 
 impl<T: Ord> Default for SortedSet<T> {
@@ -298,6 +298,10 @@ impl<T: Ord> SortedSet<T> {
                 true
             }
         }
+    }
+    /// 是否含 x（`Rc` 共享行插入前的在场检查，避免无谓克隆）
+    pub(super) fn contains(&self, x: &T) -> bool {
+        self.0.binary_search(x).is_ok()
     }
     pub(super) fn len(&self) -> usize {
         self.0.len()
