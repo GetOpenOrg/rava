@@ -71,6 +71,10 @@ pub(super) struct PStrs {
     xdemand: HashMap<usize, SortedSet<(usize, u32)>>,
     /// 正在求值的起点槽
     active: Vec<PSlot>,
+    /// 惰性逆边首访重建观测（§4.19 墙钟回归归因，只累加计数 / 时长，不改变行为）
+    rebuild_n: u64,
+    rebuild_rows: u64,
+    rebuild_ns: u64,
 }
 
 /// 行内容共享的「槽 → 槽集合」表（§4.18，succ / pred 共用）。同内容行只存一份（`Rc` 按指针共享，
@@ -81,6 +85,21 @@ struct RowSet {
     rows: HashMap<PSlot, Rc<SortedSet<PSlot>>>,
     /// 内容哈希 → 行弱引用（碰撞经内容比对）
     ix: HashMap<u64, Vec<std::rc::Weak<SortedSet<PSlot>>>>,
+    /// 热路径观测（§4.19 墙钟回归归因，只累加计数 / 时长，不改变行为）
+    st: RowStat,
+}
+
+/// RowSet 热路径观测：插边 / 去重命中次数、内容哈希走过的元素数（两遍 O(行长) 的量）、
+/// 唯一持有原地改与共享行分叉克隆的耗时、find_shared 并池查找耗时
+#[derive(Default)]
+struct RowStat {
+    inserts: u64,
+    dups: u64,
+    hash_elems: u64,
+    uniq_ns: u64,
+    fork_n: u64,
+    fork_ns: u64,
+    find_ns: u64,
 }
 
 fn content_hash(v: &SortedSet<PSlot>) -> u64 {
@@ -95,7 +114,7 @@ fn content_hash(v: &SortedSet<PSlot>) -> u64 {
 
 impl Default for RowSet {
     fn default() -> RowSet {
-        RowSet { rows: HashMap::default(), ix: HashMap::default() }
+        RowSet { rows: HashMap::default(), ix: HashMap::default(), st: RowStat::default() }
     }
 }
 
@@ -119,11 +138,14 @@ impl RowSet {
     /// 整行放入并并池（惰性逆边首访重建用；同内容行自动共享）
     fn put_row(&mut self, s: PSlot, row: SortedSet<PSlot>) {
         let rc = Rc::new(row);
+        self.st.hash_elems += rc.len() as u64;
         let h = content_hash(&rc);
+        let t = std::time::Instant::now();
         let shared = self.find_shared(h, &rc).unwrap_or_else(|| {
             self.ix.entry(h).or_default().push(Rc::downgrade(&rc));
             rc.clone()
         });
+        self.st.find_ns += t.elapsed().as_nanos() as u64;
         self.rows.insert(s, shared);
     }
     fn insert_opt(&mut self, s: PSlot, x: PSlot, create: bool) -> bool {
@@ -133,6 +155,8 @@ impl RowSet {
                 let mut set = SortedSet::default();
                 set.insert(x);
                 let rc = Rc::new(set);
+                self.st.inserts += 1;
+                self.st.hash_elems += 1;
                 let h = content_hash(&rc);
                 self.ix.entry(h).or_default().push(Rc::downgrade(&rc));
                 self.rows.insert(s, rc);
@@ -141,15 +165,21 @@ impl RowSet {
             None => return false,
         };
         if rc.contains(&x) {
+            self.st.dups += 1;
             self.rows.insert(s, rc);
             return false;
         }
-        let shared = if Rc::strong_count(&rc) == 1 {
+        self.st.inserts += 1;
+        let forked = Rc::strong_count(&rc) > 1;
+        let t = std::time::Instant::now();
+        let shared = if !forked {
             // 唯一持有：原地改。改前按指针摘旧索引——本表对每行至多持一个弱引用，摘除后
             // `Rc::get_mut` 才可用（weak 计数非零时 `get_mut` 返回 None）；改后按新内容并池
+            self.st.hash_elems += rc.len() as u64;
             let old = content_hash(&rc);
             self.unlist(old, Rc::as_ptr(&rc));
             Rc::get_mut(&mut rc).unwrap().insert(x);
+            self.st.hash_elems += rc.len() as u64;
             let new = content_hash(&rc);
             match self.find_shared(new, &rc) {
                 Some(other) => other,
@@ -160,8 +190,10 @@ impl RowSet {
             }
         } else {
             // 共享行：克隆改写后并池（rc 摘出后仍有他行引用，其索引条目保持有效）
+            self.st.fork_n += 1;
             let mut v = (*rc).clone();
             v.insert(x);
+            self.st.hash_elems += v.len() as u64;
             let h = content_hash(&v);
             let cand = Rc::new(v);
             match self.find_shared(h, &cand) {
@@ -172,6 +204,12 @@ impl RowSet {
                 }
             }
         };
+        let dt = t.elapsed().as_nanos() as u64;
+        if forked {
+            self.st.fork_ns += dt;
+        } else {
+            self.st.uniq_ns += dt;
+        }
         self.rows.insert(s, shared);
         true
     }
@@ -279,9 +317,29 @@ mod tests {
 }
 
 impl PStrs {
+    /// 墙钟回归归因行（§4.19，随 `--lambda-prof` dump 打印，只读）：succ / pred 两表的插边计数
+    /// （写入 / 去重命中 / 内容哈希元素数 / 原地改与分叉克隆耗时）与惰性逆边首访重建
+    /// （次数 / 走过的 succ 行数 / 耗时）
+    pub(super) fn perf_line(&self) -> String {
+        let ms = |ns: u64| ns as f64 / 1e6;
+        let f = |name: &str, st: &RowStat| {
+            format!(
+                "{name}(ins={} dup={} hash_elems={} uniq={:.0}ms fork={} fork={:.0}ms find={:.0}ms)",
+                st.inserts, st.dups, st.hash_elems, ms(st.uniq_ns), st.fork_n, ms(st.fork_ns), ms(st.find_ns)
+            )
+        };
+        format!(
+            "{} {} rebuild(n={} rows={} t={:.0}ms)",
+            f("succ", &self.succ.st),
+            f("pred", &self.pred.st),
+            self.rebuild_n,
+            self.rebuild_rows,
+            ms(self.rebuild_ns)
+        )
+    }
+
     /// 深堆字节（census deep3 行，只读；`IdSet` 经 `heap_bytes`、B 树按节点摊还）——逐子表
-    pub(super) fn deep_items(&self) -> Vec<(&'static str, usize)> {
-        vec![
+    pub(super) fn deep_items(&self) -> Vec<(&'static str, usize)> {        vec![
             ("pstr_sets", self.sets.capacity() * 40 * 9 / 7 + self.sets.values().map(|s| s.heap_bytes()).sum::<usize>()),
             ("pstr_succ", self.succ.deep_bytes()),
             ("pstr_pred", self.pred.deep_bytes()),
@@ -643,6 +701,8 @@ impl<'a> Engine<'a> {
             // 惰性逆边：槽首被读者遍历到时沿 succ 全量重建其前驱行（其后由 `pstr_edge` 增量维护）；
             // 重建结果为确定的全集（逐行二分收集后排序插入），与急切双存的内容逐项相同
             if !self.pstr.pred.has_row(&s) {
+                let t = std::time::Instant::now();
+                let succ_rows = self.pstr.succ.rows.len() as u64;
                 let froms: Vec<PSlot> = self.pstr
                     .succ
                     .rows
@@ -655,6 +715,10 @@ impl<'a> Engine<'a> {
                     row.insert(f);
                 }
                 self.pstr.pred.put_row(s, row);
+                let p = &mut self.pstr;
+                p.rebuild_n += 1;
+                p.rebuild_rows += succ_rows;
+                p.rebuild_ns += t.elapsed().as_nanos() as u64;
             }
             let top = match s {
                 PSlot::M(t, _) => self.pstr.top_m.contains(&t),
