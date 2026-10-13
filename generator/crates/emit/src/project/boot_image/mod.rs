@@ -223,7 +223,11 @@ impl<'c, 'a> Plan<'c, 'a> {
         hws.sort();
         for (c, ord) in hws {
             let suffix = if ord == 1 { String::new() } else { ord.to_string() };
-            out.push_str(&format!("use {}::__{}Hw{suffix} as _;\n", self.path(&c), self.ctx.declared(&c)));
+            // path(c) = 包路径::定义名（同 __Methods 行的再导出口径）；hw trait 按包级再导出名
+            let full = self.path(&c);
+            let decl = self.ctx.declared(&c);
+            let pkg = full.strip_suffix(&decl).unwrap_or_default();
+            out.push_str(&format!("use {pkg}__{decl}Hw{suffix} as _;\n"));
         }
         out
     }
