@@ -46,6 +46,16 @@ pub(super) struct SetPool {
     /// 观测：驻留命中（复用既有分配）/ 新登记
     pub(super) hits: u64,
     pub(super) news: u64,
+    /// 画像（§4.20）：新登记时的链式增量 |full\\prev|（对产生该内容的站点的原累计集）——
+    /// Σ|delta| 即差分链表示的元素量上界；直方图分桶 ≤1/≤4/≤16/≤64/≤256/>256
+    pub(super) delta_sum: u64,
+    pub(super) delta_hist: [u64; 6],
+}
+
+/// gathers 相异内容形态画像开关（`RAVA_GATHERS_SHAPE=1`，只读诊断；逐 dump 全量走集有秒级代价，验收运行不开）
+pub(super) fn shape_on() -> bool {
+    static SHAPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SHAPE.get_or_init(|| std::env::var("RAVA_GATHERS_SHAPE").ok().as_deref() == Some("1"))
 }
 
 impl SetPool {
@@ -267,7 +277,26 @@ impl Engine<'_> {
             return (Some((NO_GATHER, full)), None);
         }
         // 内容驻留（§4.19）：同内容集合只此一份分配——站点累计集与汇集节点键共享
+        let n0 = self.gather_pool.news;
         let (full, kh) = self.gather_pool.intern(full);
+        if self.gather_pool.news > n0 {
+            // 画像（§4.20）：该相异内容首次物化时的链式增量（只计数，不改行为）
+            let d = (full.len() - prev.len()) as u64;
+            self.gather_pool.delta_sum += d;
+            self.gather_pool.delta_hist[if d <= 1 {
+                0
+            } else if d <= 4 {
+                1
+            } else if d <= 16 {
+                2
+            } else if d <= 64 {
+                3
+            } else if d <= 256 {
+                4
+            } else {
+                5
+            }] += 1;
+        }
         let g = match self.gather_ids.get(&(slot, put, SetKey(full.clone(), kh))) {
             Some(&g) => g,
             None => {
@@ -298,6 +327,118 @@ impl Engine<'_> {
             }
         };
         (Some((g, full)), Some(g))
+    }
+
+    /// gathers 相异内容形态画像（§4.20 选型证据，`RAVA_GATHERS_SHAPE=1` 时随 `--lambda-prof` dump 打印，只读）：
+    /// 活相异集合（键集 ∪ 站点累计，指针去重）按内容形态分桶，给出三种压缩候选的驻留量上界——
+    /// 区间 / 位段化（稠密 id 段 → 逐集 run 数与 fill）、差分链（增量 Σ|full∖prev|）、字典序前缀共享（trie）。
+    /// 逐 dump 全量走集（Σlen 元素级）有秒级代价，验收运行不开
+    pub(super) fn gathers_shape_dump(&self, tag: &str) {
+        let mib = |b: f64| b / 1048576.0;
+        // 活相异集合 = 键集（gather_ids 键）∪ 站点累计（gather_last / hw 族），指针去重；
+        // 「仅键集持有」= 链中间步（站点已换接到更大集合），单独计长
+        let mut site_ptrs: HashSet<usize> = HashSet::default();
+        let mut site_of: Vec<Rc<[u32]>> = Vec::new();
+        let add_site = |v: &Rc<[u32]>, site_ptrs: &mut HashSet<usize>, site_of: &mut Vec<Rc<[u32]>>| {
+            if site_ptrs.insert(v.as_ptr() as usize) {
+                site_of.push(v.clone());
+            }
+        };
+        for m in self.gather_last.values() {
+            for v in m.values() {
+                add_site(&v.1, &mut site_ptrs, &mut site_of);
+            }
+        }
+        for v in self.hw_gather_last.values().chain(self.hw_rgather_last.values()).chain(self.hw_wgather_last.values()) {
+            add_site(&v.1, &mut site_ptrs, &mut site_of);
+        }
+        let mut all: Vec<Rc<[u32]>> = Vec::new();
+        let mut seen: HashSet<usize> = HashSet::default();
+        let mut key_only_len = 0u64;
+        let mut key_n = 0u64;
+        for k in self.gather_ids.keys() {
+            if seen.insert(k.2.0.as_ptr() as usize) {
+                key_n += 1;
+                if !site_ptrs.contains(&(k.2.0.as_ptr() as usize)) {
+                    key_only_len += k.2.0.len() as u64;
+                }
+                all.push(k.2.0.clone());
+            }
+        }
+        let mut site_n = 0u64;
+        for v in &site_of {
+            if seen.insert(v.as_ptr() as usize) {
+                site_n += 1;
+                all.push(v.clone());
+            }
+        }
+        drop(seen);
+        drop(site_ptrs);
+        // 分桶与区间画像：len 桶（n 与 Σlen）、逐集 run 数（极大连续 id 段）与跨度
+        let mut n_bucket = [0u64; 6];
+        let mut l_bucket = [0u64; 6];
+        let (mut sum_len, mut sum_runs, mut sum_span) = (0u64, 0u64, 0u64);
+        for s in &all {
+            let (r, span) = if s.is_empty() {
+                (0, 0)
+            } else {
+                let mut r = 1u64;
+                for w in s.windows(2) {
+                    r += u64::from(w[1] != w[0] + 1);
+                }
+                (r, (s[s.len() - 1] - s[0]) as u64 + 1)
+            };
+            let b = if s.len() < 4 {
+                0
+            } else if s.len() < 32 {
+                1
+            } else if s.len() < 256 {
+                2
+            } else if s.len() < 4096 {
+                3
+            } else if s.len() < 65536 {
+                4
+            } else {
+                5
+            };
+            n_bucket[b] += 1;
+            l_bucket[b] += s.len() as u64;
+            sum_len += s.len() as u64;
+            sum_runs += r;
+            sum_span += span;
+        }
+        // 字典序前缀共享（trie 上界）：排序后相邻 lcp 之和 = 可共享元素量
+        all.sort_unstable_by(|a, b| a[..].cmp(&b[..]));
+        let mut lcp = 0u64;
+        for w in all.windows(2) {
+            let (a, b) = (&w[0][..], &w[1][..]);
+            let n = a.len().min(b.len());
+            let mut i = 0;
+            while i < n && a[i] == b[i] {
+                i += 1;
+            }
+            lcp += i as u64;
+        }
+        let n = all.len() as u64;
+        let now_bytes = 16.0 * n as f64 + 4.0 * sum_len as f64;
+        let run_bytes = 16.0 * n as f64 + 8.0 * sum_runs as f64;
+        let trie_bytes = 4.0 * (sum_len - lcp) as f64 + 24.0 * n as f64;
+        let chain_bytes = 4.0 * self.gather_pool.delta_sum as f64 + 56.0 * self.gather_pool.news as f64;
+        eprintln!(
+            "{tag} gathers-shape n={n} sum_len={sum_len} now={:.0}MiB keys(n={},only_len={}) sites(n={}) \
+             lenbucket(n)={n_bucket:?} lenbucket(len)={l_bucket:?} runs={sum_runs} run_repr={:.0}MiB fill={:.3} \
+             lex_lcp={lcp} trie_repr={:.0}MiB delta_sum={} chain_repr={:.0}MiB delta_hist={:?}",
+            mib(now_bytes),
+            key_n,
+            key_only_len,
+            site_n,
+            mib(run_bytes),
+            sum_len as f64 / sum_span.max(1) as f64,
+            mib(trie_bytes),
+            self.gather_pool.delta_sum,
+            mib(chain_bytes),
+            self.gather_pool.delta_hist,
+        );
     }
 }
 

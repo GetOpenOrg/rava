@@ -588,6 +588,10 @@ impl Engine<'_> {
         if super::pstrs::shape_on() {
             self.pstr_shape_dump(&tag);
         }
+        // gathers 相异内容形态画像（§4.20 选型证据）：RAVA_GATHERS_SHAPE=1 时才走（逐 dump 全量走集有秒级代价）
+        if super::gather::shape_on() {
+            self.gathers_shape_dump(&tag);
+        }
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {
