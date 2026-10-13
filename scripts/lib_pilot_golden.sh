@@ -63,12 +63,13 @@ mkdir -p golden
 
 # ---- 2026-10-12 迁移批：单文件 pilot 与多文件项目两种直达模式 ----
 # 单文件 pilot 的 cp 表（条目名 = 依赖锁 artifactId；jar 路径按锁序解析，与 e2e_form 同口径）
+# 2026-10-13 放量迁入（docs/plans/2026-10-13-e2e-libpilot-rollout-draft.md §二）：22 绿例 + AsmTransformMain
+# + Slf4jBasicMain 已 git mv 入 tests/e2e/{75_slf4j,78_lang3,79_io,80_servlet,81_jpa,85_spring_core,
+# 88_log4j2,89_asm}（目录级 form.toml 承接 cp），本表同步删去已迁入口的死行；表内只剩未进管道的
+# pilot（其 golden 直达复现入口保留）。
 pilot_cp_table() {
     case "$1" in
-    Slf4jBasicMain|Slf4jFormatterMain|Slf4jSpiMain) echo slf4j-api ;;
     JodaBasicMain|JodaChronologyMain|JodaPeriodMain) echo joda-time ;;
-    Lang3NumberUtilsMain|Lang3ReflectMain|Lang3StringUtilsMain|Lang3TimeFormatMain|Lang3TupleMain) echo commons-lang3 ;;
-    IoCopyMain|IoEndianMain|IoFilenameMain) echo commons-io ;;
     OgnlCollectionMain|OgnlContextMain|OgnlEvalMain) echo ognl,javassist ;;
     JsoupParseMain|JsoupSelectorMain) echo jsoup ;;
     CaffeineManualMain|CaffeineWeigherMain) echo caffeine ;;
@@ -77,14 +78,8 @@ pilot_cp_table() {
     AssertJChainMain) echo assertj-core ;;
     FastjsonPathMain|FastjsonStreamMain) echo fastjson2 ;;
     LogbackConfigMain|LogbackPatternMain) echo logback-classic,logback-core,slf4j-api ;;
-    Log4j2ApiMain) echo log4j-api ;;
     DatabindAnnotationMain|DatabindDeserMain|DatabindSerMain) echo jackson-databind,jackson-core,jackson-annotations ;;
-    ServletAnnotationMain|ServletCookieMain|ServletEnumMetaMain|ServletSessionEventMain) echo jakarta.servlet-api ;;
-    JpaAnnotationMain|JpaEnumMetaMain) echo jakarta.persistence-api ;;
-    SpringGenericResolverMain|SpringReflectUtilsMain|SpringUtilAssertMain) echo spring-core,spring-jcl ;;
     SpringProxyJdkMain) echo spring-aop,spring-core,spring-jcl ;;
-    AsmGenerateMain) echo asm ;;
-    AsmTransformMain|AsmCommonsMain) echo asm,asm-commons ;;
     KotlinStdlibPilotMain) echo kotlin-stdlib ;;
     *) return 1 ;;
     esac
