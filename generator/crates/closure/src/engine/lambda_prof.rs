@@ -299,6 +299,36 @@ impl Engine<'_> {
             self.graph.fmemo_bytes >> 20,
             (self.graph.node_count() * 160) >> 20,
         );
+        // S4 画像（优化方案 §二 S4）：流边按（源种类 → 目标种类）的分布——hub 路由边（HP→P / R→HR）
+        // 是「临时推导边」（由枢纽 plain 路由关系可重导出），与 provenance 边的分野就在这一矩阵里。
+        // dump 时扫一遍边表（kinds 列是现成字节，~0.5s @1.7 亿边，剖析档专用）
+        let mut ek = [0u64; stats::KINDS * stats::KINDS];
+        for (s, es) in self.graph.edges.iter().enumerate() {
+            if es.is_empty() {
+                continue;
+            }
+            let sk = self.graph.kind(s as u32) * stats::KINDS;
+            for &(d, _) in es {
+                ek[sk + self.graph.kind(d)] += 1;
+            }
+        }
+        let mut ekv: Vec<(usize, u64)> = ek.iter().enumerate().filter(|(_, n)| **n > 0).map(|(k, n)| (k, *n)).collect();
+        ekv.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let eks: Vec<String> = ekv
+            .iter()
+            .take(8)
+            .map(|(k, n)| format!("{}->{}={}", stats::KIND_NAMES[k / stats::KINDS], stats::KIND_NAMES[k % stats::KINDS], n))
+            .collect();
+        let khp = stats::kind_ix(&Node::HP(0, 0));
+        let (khr, kp, kr) = (stats::kind_ix(&Node::HR(0)), stats::kind_ix(&Node::P(0, 0)), stats::kind_ix(&Node::R(0)));
+        eprintln!(
+            "{tag} census edges total={} hub_route(HP→P={} R→HR={} 路由MiB={:.0}) top: {}",
+            edges,
+            ek[khp * stats::KINDS + kp],
+            ek[kr * stats::KINDS + khr],
+            ((ek[khp * stats::KINDS + kp] + ek[kr * stats::KINDS + khr]) * 8) as f64 / 1048576.0,
+            eks.join(" "),
+        );
         let kinds: Vec<String> = by_kind
             .iter()
             .enumerate()
@@ -534,14 +564,19 @@ impl Engine<'_> {
         let hub_links: usize = self.hubs.iter().map(|h| h.links.len()).sum();
         let hub_edged: usize = self.hubs.iter().map(|h| h.edged.len()).sum();
         let hub_lam: usize = self.hubs.iter().map(|h| h.lambdas.len()).sum();
+        // S4 画像：plain 路由关系水位（h→t 的 Σ|plain|，与边表里 HP→P/R→HR 行同源对照；
+        // 惰性化后边表路由行归零、plain 保留为唯一载体 + 逆表 Σ 同量）
+        let hub_plain: usize = self.hubs.iter().map(|h| h.plain.len()).sum();
         eprintln!(
-            "{tag} census hubs n={} recvs={}MiB special={}MiB links={}MiB lambdas={} edged={} grow_max={} upgraded={}",
+            "{tag} census hubs n={} recvs={}MiB special={}MiB links={}MiB lambdas={} edged={} plain={}({:.0}MiB) grow_max={} upgraded={}",
             self.hubs.len(),
             hub_recvs * 4 >> 20,
             hub_special * 4 >> 20,
             (hub_links * 16) >> 20,
             hub_lam * 4 >> 20,
             hub_edged >> 20,
+            hub_plain,
+            (hub_plain * 4) as f64 / 1048576.0,
             self.grow_max,
             self.hub_upgraded,
         );
