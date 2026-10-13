@@ -1204,11 +1204,14 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
       直调——宏合成转发体的调用点所在文件）、字面量锚点（ldc UTF-16 串
       `String::from_utf16_lit`、类字面量 `Class::for_class`、拼接 `String::of`、静态字段
       UTF-16 初值）。
-    - **口径保持**：`impl_methods` 名单 = `pub fn` 扫描 ∪ hw 块条目（原 `pub(crate)` /
-      `pub(super)` 条目并入——名单语义本就是「wrapper 上由手写提供」，核过 55 名无一与
-      类模型方法 rust 名相撞，verdict 无翻转；种子集合作业再守一道）；闭包分析器对
-      `impl __XHw{N} for X` 块内条目按 `is_pub` 计（`closure/scan.rs`——闭包 / 种子口径
-      不变）；行表 `companion_fns` 收集 hw trait impl 块（栈帧行表不丢，
+    - **口径保持**：`impl_methods` 名单 = `pub fn` 文本正则 ∪ hw 块内带 `rava_hw_pub`
+      标记的条目（**标记 = 改写前 `pub`**。`pub(crate)`/`pub(super)` 的私有辅助不计——
+      s7k4d-seed 首轮实测 CollectorsDemo 三种子各多 `TypeNotPresentException.<init>`：
+      根因 = class_impl 的 pub(crate) 辅助 `__from_descriptor_checked` 被闭包分析器当
+      is_pub 非成员 fn 计成 vm 钩子、Class 分配时其体被拉入闭包；修法 = 改写脚本对原
+      `pub fn` 条目剥可见性时加原位惰性标记 `#[cfg_attr(any(), rava_hw_pub)]`，只认标记
+      ——Class 名单核对 = 改写前 `pub fn` 集精确恢复）；闭包分析器对 hw 块条目的
+      `is_pub` 同只认标记（`closure/scan.rs`）；行表 `companion_fns` 收集 hw trait impl 块（栈帧行表不丢，
       TestStackWalkerFrames 关键）；`java_runtime/build.rs` `scan_impls` 块态识别 hw
       trait impl（native_status 实现集不漂移）；D8 体量权重不计 hw 匿名导入行（同接口
       方法 trait 口径——纯名字解析行，`decl_side::hw_trait_import_bytes`）；trait 声明文本
@@ -1216,10 +1219,11 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     - **验证（tag 前缀 s7k4d-，10-13 交接时在跑——回收法见下「K4-2a 验收与交接」）**：
       宏单测 36/42 ✅（jp2）；input 25 / ty 67 / closure 252 / emit 101 / driver build_cli 17
       全绿（本机；emit 测试夹具补 java_marker crate——阶段 1 起 9 个 project 测试未运行到
-      的既有破损，本步修复）。链接级（s7k4d-hw1，sg2 挤占后改派 jp1）、种子四例
-      （s7k4d-seed，kr1）、确定性两项（s7k4d-det，us1）交回时在跑（集群被其他会话的
-      rr-* 作业挤占，分发器在 30s 重试循环中等待资源启动——分发器本机 setsid nohup
-      存活，不随会话终止）；切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
+      的既有破损，本步修复）。首轮 `s7k4d-hw1`（jp1）rc=1——日志被 `tail -8` 截断未见失败点（dyn-compare 阶段已
+      跑完＝编译 / 运行 / 对比全过，疑输出尾部汇总被吞），重派 `s7k4d-hw2`（jp1，全量
+      日志）；`s7k4d-seed`（kr1）11/12 同、CollectorsDemo 三种子各多一方法（根因与修法
+      见上——rava_hw_pub 批 19802647），重派 `s7k4d-seed2`（kr1）；确定性两项
+      `s7k4d-det`（us1）交回时在跑。分发器本机 setsid nohup 存活，不随会话终止；切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
       移动（trait 声明行口径），无类增删）与逐 crate 峰值（s7k6_peak.sh 对 a07fbb6f，
       ±10%）未派发。
   - **K4-2a 验收与交接（10-13）**：
