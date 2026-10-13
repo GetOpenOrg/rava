@@ -19,7 +19,11 @@ fn manifest_dir() -> PathBuf {
     std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-const ALLOW: &[(&str, &str, &str)] = &[];
+const ALLOW: &[(&str, &str, &str)] = &[
+    // condy BSM 归属判定：typeSwitch 的 primitiveClass 装载点按 owner 比对运行期元数据
+    //（j25-r2 e05dcd0a，E0308 族修复），非发射用途
+    ("sim/dynamic/type_switch.rs", "ConstantBootstraps", "condy BSM owner 谓词比对，非发射字面量"),
+];
 
 const BINARY_PREFIXES: &[&str] = &["java/", "jdk/", "sun/"];
 const SHORT_NAMES: &[&str] = &["String", "Object", "ArrayList", "HashMap", "System", "Class"];
