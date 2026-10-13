@@ -1123,18 +1123,21 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     （kr2，三例切段逐类一致——HelloWorld 788 / CollectorsDemo 809 / DeepCopy 2681 文件全同，
     标记文件 542 / 559 / 2215 个）；本机已过：确定性两项（hash_seed / order，release 3655 s）、
     HelloWorld 三种子闭包集合对基线全同、四例 + CollectorsDemo 共五例 emit→链接→运行逐字一致、
-    峰值 A/B（HW 底段 +8.5% / 上段 +5.1% / CD 底段 +2.8%）。在跑（收尾即出）：
-    - `s7k6b-seed`（jp1）：幂等续跑——23 份闭包 json 已在前两次运行产物里，缺
-      base.TestSerialLookupPairing s2，之后出对照表；日志尾 `seed-sets: ALL-IDENTICAL` 即过，
-      全表在 `cluster_results/job/s7k6b-seed/`（`--fetch` 已声明 summary.txt 与 *.log）。
-    - `s7k6b-det`（us1 排队）：`cargo test -p driver --test closure_cli closure_independent`——
-      **本机已过（两项 ok）**，服务器作业为重复确认，可等可撤。
-    - `s7k6b-peak`（sg1 在跑）：`s7k6_peak.sh 31e4762d`——逐 crate 表在日志尾与
-      `01/build/s7k6-peak/summary.txt`、rows.txt（fetch 已声明）；判定口径 = 声明 crate 峰值对
-      基线不超 +10%（DeepCopy 底段记录不作判据）。本机同工具 A/B 已在 ±10% 内。
-    - 回收命令：`cat cluster_results/job/<tag>/summary.json` 看 status/rc；`tail
-      cluster_results/job/<tag>/01_*.log`。若 seed 需重派：同 tag 重跑分发器即可（脚本已幂等，
-      fb938aa3 起）。
+    峰值 A/B（HW 底段 +8.5% / 上段 +5.1% / CD 底段 +2.8%）。在跑项 10-12 午后回收（14:47）：
+    - `s7k6b-peak` ✅（sg1，rc=0）：**全部 crate 峰值对 31e4762d 不超 +9.0%**，判定项（声明
+      crate）：HelloWorld decl **+3.0%** / decl_1 **+2.6%**；CollectorsDemo decl **+1.9%** /
+      decl_1 **+1.1%**；DeepCopy（记录不判）decl **+4.2%** / decl_1 **+4.1%** / decl_2
+      **+8.0%**；全表其余 crate 最大 java_meta +9.0%，body 段 −1.4%~+3.7%。全表在
+      `cluster_results/job/s7k6b-peak/01/build/s7k6-peak/summary.txt` 与 rows.txt。
+    - `s7k6b-det`（us1）在跑：`cargo test -p driver --test closure_cli closure_independent`——
+      **本机已过（两项 ok，release 3655 s）**，服务器作业为重复确认，可等可撤。
+    - `s7k6b-seed` 第三次失败（05:08 起跑，rc=1）：幂等跳过未生效——分发器重派的启动清理把
+      前次 json 产物一并清除（重派即从零），随后基线 worktree 的 git 链接被清理破坏
+      （`not a git repository .../.git/worktrees/...`）。**三次失败均为作业基础设施状态
+      （worktree 复用 × 2、清理破坏 × 1），非集合差异**。续作入口：换新 tag（如 s7k6b-seed3）
+      重派一次即全新检出、不触任何复用路径；预期 = 与 bfx-seed / s7k6-seed 同口径
+      ALL-IDENTICAL（本分支分析器源码零 diff，HelloWorld 三种子本机已全同）。回收命令：
+      `cat cluster_results/job/<tag>/summary.json`、`tail cluster_results/job/<tag>/01_*.log`。
   - **K7 / K8 衔接**：K7（共置手写随宿主）独立可并行——标记文件按类同段落盘，宿主判定不受影响；
     K4 落地后标记文件整体挪入 `java_marker` crate，届时 D8 图只剩 inherit / hidden 边（⑤ 口径）
     的验证归 K8 档案验收（连同标记 crate 自身体量——本轮已随 `s7k6b-seg` 产出逐例统计）。
