@@ -45,7 +45,7 @@ JVM 侧 golden 全入口先行；**rs 侧随能力闸门点亮**（缺口分析 
 | querydsl | QuerydslCollectionsDemo | APT 免（PathBuilder） |
 | tomcat | EmbeddedTomcatDemo | 完整应用 |
 | containers | ContainerShowdownDemo | 完整应用（Tomcat / Jetty / Undertow / Netty 四容器回环对比） |
-| frameworks | FrameworkComparisonDemo、HelloEndpoints、RouteAnnotationDemo | 完整应用 |
+| frameworks | FrameworkComparisonDemo、RouteAnnotationDemo；另 HelloEndpoints 为**非入口** holder 类（见下） | 完整应用 |
 
 ## 双版本依赖模块（deps-extra，方案 A）
 
@@ -67,6 +67,13 @@ JVM 侧 golden 全入口先行；**rs 侧随能力闸门点亮**（缺口分析 
 - **现有模块**：`esper`（esper 7.1.0 + antlr4-runtime 4.7，主锁经 hibernate 调解为 4.13.2 会
   ATN 版本失配）；`thymeleaf`（thymeleaf 3.1.3 + ognl 3.3.4，主锁钉 3.4.14 有三个单文件 pilot
   golden 背书；模块另自持 FreeMarker / Velocity 等项目 cp）。
+
+## 非入口类登记
+
+- **HelloEndpoints**（frameworks）：上游「三个框架现在的样子」的**注解编译演示 holder 类**——
+  同一 /hello 接口的 Spring / JAX-RS / Micronaut 三种注解写法各一个静态内部类，私有构造器、
+  **无 main**，路由信息由 RouteAnnotationDemo 反射读取。不参与 golden（无 JVM / rs 输出），
+  上游亦如此（非运行入口），不计入点亮台账。
 
 ## 已知运行前置（测试机上处理）
 
