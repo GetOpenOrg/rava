@@ -668,7 +668,9 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
             for w in type_words_scope(words) {
                 let local = local_defs.contains(w.as_str());
                 if local {
-                    let path = vec!["super".to_string(), base.to_string(), w.clone()];
+                    // 伴生模块名 = 文件全 stem（`inflater_impl`，非去后缀的 base）
+                    let stem = fname.strip_suffix(".rs").unwrap_or(fname);
+                    let path = vec!["super".to_string(), stem.to_string(), w.clone()];
                     out.entry(w).or_insert(path);
                 } else if let Some(segs) = uses.get(w.as_str()) {
                     out.entry(w).or_insert_with(|| segs.clone());
