@@ -159,9 +159,23 @@ impl Deep {
     fn typeset(&mut self, s: &TypeSet) -> usize {
         s.classes.heap_bytes() + s.open.heap_bytes()
     }
-    /// `Rc<[u32]>`（增长枢纽来源 / 汇集对象集等；指针去重）
+    /// `Rc<[u32]>`（增长枢纽来源等；指针去重）——gathers 已改差分链（§4.20，`gset`），此口径暂无调用者
+    #[allow(dead_code)]
     pub(super) fn u32s(&mut self, s: &Rc<[u32]>) -> usize {
         self.once(s.as_ptr() as usize, 7).then(|| 16 + s.len() * 4).unwrap_or(0)
+    }
+    /// 对象集差分链节点（§4.20）：沿祖先每节点计一次（Rc 头 16 + 节点 40 + delta 4B/元素；
+    /// 节点指针去重——跨键 / 站点共享祖先只计一次）
+    pub(super) fn gset(&mut self, node: &Rc<gather::GSet>) -> usize {
+        let mut b = 0usize;
+        let mut cur = Some(Rc::clone(node));
+        while let Some(n) = cur {
+            if self.once(Rc::as_ptr(&n) as *const u8 as usize, 13) {
+                b += 16 + 40 + n.delta_len() * 4;
+            }
+            cur = n.parent_rc().cloned();
+        }
+        b
     }
     /// memo::Inputs（reads 共享 Rc；指针去重）
     pub(super) fn inputs(&mut self, i: &super::memo::Inputs) -> usize {
@@ -390,10 +404,10 @@ impl Engine<'_> {
         tab!("mirror_open", self.mirror_open.values().map(|v| v.capacity() * 12).sum::<usize>() + self.mirror_open.len() * 40 + self.mirror_open_seen.capacity() * 24 * 9 / 7);
         tab!("open_inj", self.open_inj.iter().map(|(_, v)| v.len() * (4 + BT)).sum::<usize>() + self.open_inj.capacity() * 40 * 9 / 7);
         tab!("array_of", self.array_of.capacity() * std::mem::size_of::<((usize, u32), ArrayOfSite)>() * 9 / 7 + self.array_of.values().map(|s| s.mirrors.len() * (4 + BT) + s.dsts.capacity() * std::mem::size_of::<Node>()).sum::<usize>());
-        // 汇集节点族逐子表（§4.19 内容驻留后拆项计量：键集 / 站点累计 / 手写族 / 驻留池开销与命中）
-        tab!("gathers", self.gathers.capacity() * std::mem::size_of::<(gather::Slot, u32, bool)>() + self.gather_ids.capacity() * 40 * 9 / 7 + self.gather_ids.keys().map(|k| d.u32s(&k.2.0)).sum::<usize>()
-            + self.gather_last.capacity() * 40 * 9 / 7 + self.gather_last.values().map(|m| m.capacity() * 40 * 9 / 7).sum::<usize>() + self.gather_last.values().flat_map(|m| m.values()).map(|v| d.u32s(&v.1)).sum::<usize>()
-            + self.hw_gather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>() + self.hw_rgather_last.values().map(|v| 24 + d.u32s(&v.1)).sum::<usize>() + self.hw_wgather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>()
+        // 汇集节点族逐子表（§4.19 拆项；§4.20 对象集改差分链——键 / 站点 / 手写族沿祖先指针去重记账）
+        tab!("gathers", self.gathers.capacity() * std::mem::size_of::<(gather::Slot, u32, bool)>() + self.gather_ids.capacity() * 40 * 9 / 7 + self.gather_ids.keys().map(|k| d.gset(&k.2.0)).sum::<usize>()
+            + self.gather_last.capacity() * 40 * 9 / 7 + self.gather_last.values().map(|m| m.capacity() * 40 * 9 / 7).sum::<usize>() + self.gather_last.values().flat_map(|m| m.values()).map(|v| d.gset(&v.1)).sum::<usize>()
+            + self.hw_gather_last.values().map(|v| 32 + d.gset(&v.1)).sum::<usize>() + self.hw_rgather_last.values().map(|v| 24 + d.gset(&v.1)).sum::<usize>() + self.hw_wgather_last.values().map(|v| 32 + d.gset(&v.1)).sum::<usize>()
             + self.gather_pool.deep_bytes());
         tab!("vm_hubs", self.vm_targets.capacity() * 8 * 9 / 7 + self.vm_open_hubs.capacity() * 8 * 9 / 7 + self.vm_rcall_hubs.capacity() * 24 * 9 / 7
             + self.vm_hub_targets.capacity() * 40 * 9 / 7 + self.vm_hub_targets.values().map(|v| v.capacity() * 8).sum::<usize>());
