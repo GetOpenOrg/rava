@@ -1,5 +1,5 @@
 # 内嵌 Tomcat（完整应用闸门）
 # 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
 deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
-cp    = ["tomcat-embed-core"]
+cp    = ["tomcat-embed-core", "jakarta.annotation-api"]
 fetch = "scripts/fetch_pilot_deps.sh --no-scan"

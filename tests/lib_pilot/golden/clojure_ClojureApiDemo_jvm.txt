@@ -1,0 +1,6 @@
+[+]        (1 2 3 4) => 10
+[upper]    HELLO CLOJURE
+[join]     a-b-c-d
+[持久向量] 原 [1 2 3] 不变，conj 后得到新向量 [1 2 3 4]
+[map inc]  clojure.lang.LazySeq@f0c03
+[结论] 能调；但心智模型不同（不可变、一切皆函数），实践中通常以嵌入 Clojure 运行时的方式共存

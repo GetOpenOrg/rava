@@ -1,0 +1,8 @@
+[utf8编码]  hello okio
+[md5]       7d116b2c464bcfcea3a365ad527f5b8c
+[sha256]    9a6c46448911ae3c16870f31cbbc3bab028820e7572c0104d221d7ebfd03158d
+[base64]    aGVsbG8gb2tpbw==
+[Buffer写入] 总字节数 = 11
+[Buffer读5]  hello
+[Buffer剩余]  okio!（剩余 0 字节）
+[hex解码]   你好

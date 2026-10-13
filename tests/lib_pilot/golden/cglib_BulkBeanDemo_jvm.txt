@@ -1,0 +1,2 @@
+[iPhone 15, 6999.0]
+对象状态: Product{name='iPhone 15', price=6999.0}

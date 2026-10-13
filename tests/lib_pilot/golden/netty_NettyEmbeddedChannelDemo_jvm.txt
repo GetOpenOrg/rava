@@ -1,0 +1,6 @@
+[handler] 收到一行: hello
+[handler] 收到一行: netty embedded
+[outbound] AdaptivePoolingAllocator$AdaptiveByteBuf(ridx: 0, widx: 5, cap: 15)
+[outbound] AdaptivePoolingAllocator$AdaptiveByteBuf(ridx: 0, widx: 14, cap: 42)
+[outbound] 再读 = null（无更多数据）
+[结论] 零端口零线程验证了 Netty 编解码流水线，同一套 handler 可直接上真实网络

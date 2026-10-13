@@ -1,0 +1,1 @@
+本机 6379 未检测到 Redis，请先启动: docker run -d --name redis -p 6379:6379 redis:8

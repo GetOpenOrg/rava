@@ -1,0 +1,6 @@
+[Multimap] fruits=[apple, banana, cherry] (view类型=RandomAccessUnmodifiableMutableList)
+[Multimap] keySet=[vegs, fruits]
+[BiMap] alice->1, inverse: 2->bob
+[BiMap] 值重复被拒绝: IllegalArgumentException
+[adapt] select偶数=[8] toSortedList=[1, 3, 5, 8] makeString=5/3/8/1
+[adapt] 添加后原 JDK List = [5, 3, 8, 1, 99]

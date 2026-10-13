@@ -1,0 +1,7 @@
+[actor] 收到: hello
+[actor] 收到: pekko
+[actor] 收到: actor
+[actor] 收到: model
+[actor] 收到停止指令，即将停止
+[INFO] [10/13/2026 08:11:43.286] [printer-system-pekko.actor.default-dispatcher-5] [CoordinatedShutdown(pekko://printer-system)] Running CoordinatedShutdown with reason [ActorSystemTerminateReason]
+[main] 共处理 4 条消息后系统正常终止

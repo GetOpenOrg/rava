@@ -1,0 +1,8 @@
+[anySatisfy] 有偶数=true, 全小于10=true, 无负数=true
+[partition] 偶数=[4, 2, 6] 奇数=[3, 1, 1, 5, 9]
+[injectInto] sum=31 max=9
+[IntInterval] 1..10 的偶数 = [2, 4, 6, 8, 10]
+[LongList] sum=30000000000
+[DoubleList] average=2.5
+[BooleanList] trueCount=2
+[IntList] sum=15 max=5 median=3.0

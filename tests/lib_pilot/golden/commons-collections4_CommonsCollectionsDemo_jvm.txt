@@ -1,0 +1,9 @@
+[Bag] java=3, go=2, uniqueSorted=[go, java, rust]
+[BidiMap] alice->1, 2->bob
+[MultiValuedMap] fruits=[apple, banana, cherry], keys=[fruits, vegs]
+[FixedSizeList] set(0,'A') 后 = [A, b, c]
+[FixedSizeList] add 被拒绝: UnsupportedOperationException
+[Predicated] add(5) 被拒绝: IllegalArgumentException（只允许偶数）
+[Predicated] 当前元素 = [2, 4]
+[Transformed] add 后自动转大写 = [HELLO, WORLD]
+[SetUtils] 交集=[3, 4], 并集=[1, 2, 3, 4, 5, 6], s1-s2 差集=[1, 2]

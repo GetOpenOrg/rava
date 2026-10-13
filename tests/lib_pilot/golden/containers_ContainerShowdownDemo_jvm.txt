@@ -1,0 +1,7 @@
+Tomcat   -> 200: hello from tomcat
+Jetty    -> 200: hello from jetty
+Undertow -> 200: hello from undertow
+Netty    -> 200: hello from netty
+结论: 四种容器功能等价；性能排序（文章压测）Netty ≈ Undertow > Jetty > Tomcat
+选型: 普通业务选 Tomcat，追求轻量/性能选 Undertow，
+      响应式/WebSocket/网关选 Netty，轻量定制选 Jetty

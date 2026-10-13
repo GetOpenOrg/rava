@@ -1,5 +1,5 @@
 # 嵌入式容器对比（Tomcat / Jetty / Undertow / Netty 回环启动）
 # 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
 deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
-cp    = ["tomcat-embed-core", "jetty-servlet", "jetty-server", "jetty-http", "jetty-io", "jetty-util", "undertow-core", "netty-codec-http", "netty-codec", "netty-handler", "netty-transport", "netty-buffer", "netty-common", "netty-resolver"]
+cp    = ["tomcat-embed-core", "jetty-servlet", "jetty-server", "jetty-http", "jetty-io", "jetty-util", "undertow-core", "netty-codec-http", "netty-handler", "netty-transport", "netty-buffer", "netty-common", "netty-resolver", "netty-codec-base", "jetty-jakarta-servlet-api", "xnio-api", "xnio-nio", "wildfly-common", "wildfly-client-config", "jboss-threads", "jboss-logging", "jakarta.annotation-api", "slf4j-api", "jetty-security"]
 fetch = "scripts/fetch_pilot_deps.sh --no-scan"

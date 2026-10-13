@@ -1,0 +1,3 @@
+[JDK 手写]        [java=4, go=3, kotlin=2]
+[EC topOccurrences] [java=4, go=3, kotlin=2]
+[对照] 两种写法结果一致

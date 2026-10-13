@@ -1,0 +1,25 @@
+[map] 长度: 5
+[map] 长度: 6
+[map] 长度: 9
+[filter链] 3
+[filter链] 2
+[filter链] 5
+[flatMap] 订单A-商品1
+[flatMap] 订单A-商品2
+[flatMap] 订单B-商品1
+[flatMap] 订单B-商品2
+[buffer] [1, 2, 3, 4]
+[buffer] [5, 6, 7, 8]
+[buffer] [9, 10]
+[zip] 张三 → 95分
+[zip] 李四 → 88分
+[merge] B1
+[merge] B2
+[merge] A1
+[merge] A2
+[concat] 第一段
+[concat] 第二段
+[interval] tick 0
+[interval] tick 1
+[interval] tick 2
+[debounce] 触发搜索: java

@@ -1,5 +1,5 @@
 # Netty NIO echo 与 EmbeddedChannel
 # 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
 deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
-cp    = ["netty-codec-http", "netty-codec", "netty-handler", "netty-transport", "netty-buffer", "netty-common", "netty-resolver"]
+cp    = ["netty-codec-http", "netty-codec-base", "netty-handler", "netty-transport", "netty-buffer", "netty-common", "netty-resolver"]
 fetch = "scripts/fetch_pilot_deps.sh --no-scan"
