@@ -1052,10 +1052,17 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     新导出面，按名面零变化）。
   - **同族面排查结论**：`METHODS_SUFFIX` 全部发射点复核——fill.rs（类文件，模块路径 ✅）、
     boot_image（JDK 类，包路径 + glob ✅）、entry.rs（本缺陷，已修）；esper / templates 项目模式同验。
-  - **验收**：guava GOLDEN OK（E0432 → 转绿，无 E0308 残留）；esper/EsperPatternDemo、
-    EsperLengthWindowDemo、templates/ThymeleafDemo 同链验；四例种子 0/1/2 闭包集合对 batch-1015
-    逐项全同 + 确定性两项 + generator `cargo check --tests` 过。failure_patterns 登记
-    `user-crate-methods-trait-package-path`。
+  - **验收**：guava GOLDEN OK（E0432 → 转绿，无 E0308 残留）；templates/ThymeleafDemo 同链验
+    在跑（32G 上限 systemd 单元 b1015-thymeleaf2，闭包 18 GiB 稳定；THY_RC 见
+    /tmp/b1015_thymeleaf.log）；**esper 段如实记录到已知层**：EsperPatternDemo /
+    EsperLengthWindowDemo（项目模式共用闭包输入）在 32G 上限内**闭包不收敛**（PatternDemo 转译
+    RSS 33.1G 被杀；LengthWindow 同症，按用户 10-13 裁决不重复消耗）——属新发现的病态闭包
+    （此前被双版本失配挡住，未入五库病理清单），**归引擎线**；阻断层在 E0432 之前（闭包期，
+    未到 rs 编译），与本修复无关。四例种子 0/1/2 闭包集合对 batch-1015（63617c4d）逐项全同
+    + seed_check 字节确定性 0 diff（HelloWorld / TestSerialLookupPairing）+ generator
+    `cargo check --tests` 与 emit 单测 99+2 过；确定性两项（closure_independent_of_order /
+    of_hash_seed，b1015-det 作业 32G 上限内在跑，DET_RC 见 /tmp/b1015_det_tests.log）。
+    failure_patterns 登记 `user-crate-methods-trait-package-path`。
 - **K6 本体（10-12，s7-k6 2e3e9c2f + 5e7b21b8，基于 batch-1013 31e4762d）**：`java_class!` 块拆出
   类型标记层（`#[rava_layer = "marker"]`）——类 struct 的声明承载从声明层分离。
   - **与文档分解的偏差（先行记录）**：K6 的文档前提是 K4（手写基础设施分层）与 K5（类初始化骨架
