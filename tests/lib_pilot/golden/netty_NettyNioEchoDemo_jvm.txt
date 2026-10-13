@@ -1,0 +1,3 @@
+[echo] 收到 5 条: [echo:msg-1, echo:msg-2, echo:msg-3, echo:msg-4, echo:msg-5]
+[echo] 严格有序回显 = true
+[结论] NIO 传输路径健康；排查文的 io_uring 随机超时仅出现在 Linux 特定内核 + 连接池复用组合，见 docs/gateway-netty-iouring.md

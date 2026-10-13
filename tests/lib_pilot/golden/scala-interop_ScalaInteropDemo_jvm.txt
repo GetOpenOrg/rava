@@ -1,0 +1,5 @@
+[map]      List(1, 2, 3) -> List(2, 4, 6)
+[mkString] 2, 4, 6
+[sum]      6（Java 侧必须手动传 implicit 的 Numeric 参数）
+[回转Java] SeqWrapper [2, 4, 6]
+[结论] 能调，但签名啰嗦；生产代码优先找官方 Java API 门面（如 Spark 的 JavaRDD）

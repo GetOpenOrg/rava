@@ -1,0 +1,9 @@
+[发送] k1 -> partition=0 offset=0
+[发送] k2 -> partition=0 offset=1
+[发送] k3 -> partition=0 offset=2
+[发送] history 记录数 = 3
+[消费] 拉到 3 条：
+[消费] offset=0 key=k1 value=v1
+[消费] offset=1 key=k2 value=v2
+[消费] offset=2 key=k3 value=v3
+[结论] Scala 出身的 Kafka，Java 客户端 API 完全一等公民

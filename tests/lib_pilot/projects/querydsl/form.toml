@@ -1,5 +1,5 @@
 # Querydsl 内存集合查询（PathBuilder 免 APT）
 # 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
 deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
-cp    = ["querydsl-collections"]
+cp    = ["querydsl-collections", "querydsl-core", "mysema-commons-lang", "querydsl-codegen", "codegen-utils", "ecj", "javax.inject"]
 fetch = "scripts/fetch_pilot_deps.sh --no-scan"

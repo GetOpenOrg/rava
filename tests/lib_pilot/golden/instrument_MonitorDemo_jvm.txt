@@ -1,0 +1,3 @@
+订单创建成功：ORDER_001
+【慢查询】OrderService.createOrder 耗时超过 100ms
+ORDER_INFO_ORDER_001

@@ -1,0 +1,4 @@
+[阶段A] 处理数 = 8
+[阶段B] 处理数 = 8
+[B 的首个事件] B:task-1
+[结论] handleEventsWith(A).then(B)：逐事件保证 A 先于 B，两阶段计数一致 = true

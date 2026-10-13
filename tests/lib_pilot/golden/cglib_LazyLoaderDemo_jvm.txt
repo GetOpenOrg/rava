@@ -1,0 +1,6 @@
+创建重量级对象，模拟耗时初始化...
+代理创建完成，尚未真正创建重量级对象
+LazyLoader.loadObject() 被触发
+创建重量级对象，模拟耗时初始化...
+第一次使用: HeavyObject 实例
+第二次使用: HeavyObject 实例

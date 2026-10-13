@@ -1,0 +1,3 @@
+内嵌 Tomcat 已编程式启动（无 server.xml / 无 web.xml）
+GET /hello -> 200: hello from embedded tomcat
+内嵌 Tomcat 已停止

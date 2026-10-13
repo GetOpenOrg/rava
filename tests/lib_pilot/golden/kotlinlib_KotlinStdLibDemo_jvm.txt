@@ -1,0 +1,9 @@
+[forEach] 1 2 3 
+[maxOrNull] 3
+[reversed]  [3, 2, 1]
+[first]     1
+[repeat]    ababab
+[lines]     [a, b, c]
+[isBlank]   true
+[joinToString] [1, 2, 3]
+[joinToString] （对比：Kotlin 源码只需写 list.joinToString()）

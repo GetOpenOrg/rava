@@ -1,0 +1,11 @@
+【前置日志】调用createOrder
+创建订单：ORDER_001
+【后置日志】调用完成
+支付订单（final方法，无法真正被拦截）
+
+【前置日志】调用save
+保存用户
+【后置日志】调用完成
+
+CGLib 代理类是 OrderService 的子类: true
+JDK  代理类是 UserInterface 的实现: true

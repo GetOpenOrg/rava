@@ -1,0 +1,9 @@
+[① RequiredArgsConstructor] 依赖注入: UserRepository / OrderRepository / EmailService
+[② SneakyThrows] 传播的异常类型: NoSuchFileException
+[③ Slf4j] 生成的字段: org.slf4j.Logger
+[④ ToString] 带 callSuper  : LombokAnnotationsDemo.UserEntity(super=LombokAnnotationsDemo.BaseEntity(id=1), name=张三, age=25)
+[④ ToString] 不带 callSuper: LombokAnnotationsDemo.UserEntityNoSuper(name=张三, age=25) ← 丢了id
+[⑤ Builder.Default] 加了默认值  : timeout=3000
+[⑤ Builder.Default] 没加默认值  : timeout=0 ← 变成0
+[⑥ Delegate] add/size 直接可用: size=2, contains(hello)=true
+[⑥ Delegate] 方法未生成: com.example.lombok.LombokAnnotationsDemo$MyList.add(java.lang.Object)

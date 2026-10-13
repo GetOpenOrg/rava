@@ -1,0 +1,9 @@
+[IntList] [10, 20, 30, 40, 50], sum=150, max=50（元素直接以 int 存储，无 Integer 装箱）
+[JDK Stream] [李四, 王五]
+[EC select/collect] [李四, 王五]
+[Bag] java=3, python=1, rust=0, distinct=[python, java, go]
+[ImmutableList] [a, b, c]，尝试修改会抛 UnsupportedOperationException
+[ImmutableList] add 被拒绝: UnsupportedOperationException
+[groupBy 年龄段] {成年=[李四(22), 王五(30)], 未成年=[张三(17), 赵六(15)]}
+[count] 成年人数 = 2
+[makeString] 张三(17) | 李四(22) | 王五(30) | 赵六(15)
