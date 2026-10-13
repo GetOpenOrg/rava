@@ -1,5 +1,10 @@
 //! 引擎：形参字符串常量集——按名查找的名字来自本方法形参时，取流到该形参的全部字符串常量。
 //!
+//! 子集边的存储（§4.18）：succ / pred 行**内容共享**（同形调用点的相同目标集 / 同一枢纽扇出到多目标的
+//! 相同前驱集——形态画像重复度 succ 95% / pred 88%）；pred 更**惰性物化**——只建被按名求值遍历到的槽
+//! （demand 槽仅占 pred 行 0.5%），首访沿 succ 全量重建、其后由 `pstr_edge` 增量维护，内容与急切双存
+//! 逐项相同。
+//!
 //! 单调且与处理顺序无关：
 //! - 集合只并不减，不走形参常量（`pvals`）的汇合格。汇合格先到的常量会被后到的调用点抬为 Top，
 //!   若按汇合结果取常量，结果就取决于调用点接入的先后；
@@ -101,9 +106,30 @@ impl RowSet {
     /// 在 s 行内插入 x：true = 新插入（与 `SortedSet::insert` 同口径）。
     /// 行先摘出再放回：唯一持有的行（仅本表引用）原地改，共享行克隆改写后并池
     fn insert(&mut self, s: PSlot, x: PSlot) -> bool {
+        self.insert_opt(s, x, true)
+    }
+    /// 行已存在才插入（惰性逆边的增量维护：未物化的槽不建行）；返回是否新插入
+    fn insert_existing(&mut self, s: PSlot, x: PSlot) -> bool {
+        self.insert_opt(s, x, false)
+    }
+    /// 行是否已物化（含空行——空行也是「已按 succ 全量重建过」的标记）
+    fn has_row(&self, s: &PSlot) -> bool {
+        self.rows.contains_key(s)
+    }
+    /// 整行放入并并池（惰性逆边首访重建用；同内容行自动共享）
+    fn put_row(&mut self, s: PSlot, row: SortedSet<PSlot>) {
+        let rc = Rc::new(row);
+        let h = content_hash(&rc);
+        let shared = self.find_shared(h, &rc).unwrap_or_else(|| {
+            self.ix.entry(h).or_default().push(Rc::downgrade(&rc));
+            rc.clone()
+        });
+        self.rows.insert(s, shared);
+    }
+    fn insert_opt(&mut self, s: PSlot, x: PSlot, create: bool) -> bool {
         let mut rc = match self.rows.remove(&s) {
             Some(rc) => rc,
-            None => {
+            None if create => {
                 let mut set = SortedSet::default();
                 set.insert(x);
                 let rc = Rc::new(set);
@@ -112,6 +138,7 @@ impl RowSet {
                 self.rows.insert(s, rc);
                 return true;
             }
+            None => return false,
         };
         if rc.contains(&x) {
             self.rows.insert(s, rc);
@@ -182,6 +209,71 @@ impl RowSet {
             }
         }
         b + self.ix.capacity() * 40 * 9 / 7 + self.ix.values().map(|v| 24 + v.len() * 16).sum::<usize>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PSlot, RowSet, SortedSet};
+    use std::rc::Rc;
+
+    fn row(v: &RowSet, s: PSlot) -> Vec<PSlot> {
+        v.get(&s).into_iter().flatten().copied().collect()
+    }
+
+    /// 行内容共享的语义与逐行独立存储一致：插入去重、升序、共享 / 分叉 / 并回
+    #[test]
+    fn rowset_semantics() {
+        let mut v = RowSet::default();
+        let (a, b, c) = (PSlot::M(1, 0), PSlot::M(2, 0), PSlot::M(3, 0));
+        let (x, y, z) = (PSlot::H(7, 0), PSlot::H(8, 0), PSlot::H(9, 0));
+        // 去重口径与 BTreeSet::insert 相同
+        assert!(v.insert(a, x));
+        assert!(!v.insert(a, x));
+        assert!(v.insert(a, y));
+        assert!(v.insert(a, z));
+        assert_eq!(row(&v, a), vec![x, y, z]);
+        // 同内容行共享（同一分配）；分叉（插入新元素）后各自独立、再并回
+        assert!(v.insert(b, x));
+        assert!(v.insert(b, y));
+        assert!(v.insert(b, z));
+        assert_eq!(Rc::as_ptr(&v.rows[&a]), Rc::as_ptr(&v.rows[&b]));
+        assert!(v.insert(b, PSlot::H(1, 0)));
+        assert_eq!(row(&v, b), vec![PSlot::H(1, 0), x, y, z]);
+        assert_eq!(row(&v, a), vec![x, y, z]); // a 不受 b 分叉影响
+        assert!(v.insert(c, x));
+        assert!(v.insert(c, y));
+        assert!(v.insert(c, z));
+        assert!(v.insert(c, PSlot::H(1, 0)));
+        assert_eq!(Rc::as_ptr(&v.rows[&b]), Rc::as_ptr(&v.rows[&c])); // 分叉后同内容并回
+        // 唯一持有行原地改（共享计数不破坏）
+        assert!(v.insert(c, PSlot::F(5)));
+        assert_eq!(row(&v, c).len(), 5);
+        assert_eq!(row(&v, b).len(), 4);
+    }
+
+    /// 惰性逆边口径：未物化的槽不建行（insert_existing 无操作），put_row 后增量可见
+    #[test]
+    fn rowset_lazy_rows() {
+        let mut v = RowSet::default();
+        let (a, b) = (PSlot::M(1, 0), PSlot::M(2, 0));
+        assert!(!v.has_row(&a));
+        assert!(!v.insert_existing(a, b)); // 行不存在：不建
+        assert!(!v.has_row(&a));
+        let mut r = SortedSet::default();
+        r.insert(b);
+        v.put_row(a, r);
+        assert!(v.has_row(&a));
+        assert_eq!(row(&v, a), vec![b]);
+        assert!(v.insert_existing(a, PSlot::M(3, 0)));
+        assert!(!v.insert_existing(a, PSlot::M(3, 0)));
+        assert_eq!(row(&v, a), vec![b, PSlot::M(3, 0)]);
+        // 空行也是「已物化」标记
+        let mut w = RowSet::default();
+        w.put_row(PSlot::F(1), SortedSet::default());
+        assert!(w.has_row(&PSlot::F(1)));
+        assert!(w.insert_existing(PSlot::F(1), PSlot::M(9, 9)));
+        assert_eq!(row(&w, PSlot::F(1)), vec![PSlot::M(9, 9)]);
     }
 }
 
@@ -287,7 +379,9 @@ impl<'a> Engine<'a> {
         if from == to || !self.pstr.succ.insert(from, to) {
             return;
         }
-        self.pstr.pred.insert(to, from);
+        // 惰性逆边（§4.18）：pred 只物化被读者遍历到的槽（形态画像 demand 槽仅占 pred 行的 0.5%，
+        // 3MiB/1013MiB @sb3 1224s）——未物化的槽不建行，首访时沿 succ 全量重建
+        self.pstr.pred.insert_existing(to, from);
         self.pstr_wake(to);
         // 污染与常量同沿子集边：新边的来源槽已污染时目标槽随之污染
         if self.slot_tainted(from) {
@@ -545,6 +639,22 @@ impl<'a> Engine<'a> {
                 break;
             }
             self.pstr.demand.entry(s).or_default().insert(reader);
+            // 惰性逆边：槽首被读者遍历到时沿 succ 全量重建其前驱行（其后由 `pstr_edge` 增量维护）；
+            // 重建结果为确定的全集（逐行二分收集后排序插入），与急切双存的内容逐项相同
+            if !self.pstr.pred.has_row(&s) {
+                let froms: Vec<PSlot> = self.pstr
+                    .succ
+                    .rows
+                    .iter()
+                    .filter(|(_, rc)| rc.may_contain(&s) && rc.contains(&s))
+                    .map(|(f, _)| *f)
+                    .collect();
+                let mut row = SortedSet::default();
+                for f in froms {
+                    row.insert(f);
+                }
+                self.pstr.pred.put_row(s, row);
+            }
             let top = match s {
                 PSlot::M(t, _) => self.pstr.top_m.contains(&t),
                 PSlot::H(h, _) => self.pstr.top_h.contains(&h),

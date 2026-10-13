@@ -303,6 +303,10 @@ impl<T: Ord> SortedSet<T> {
     pub(super) fn contains(&self, x: &T) -> bool {
         self.0.binary_search(x).is_ok()
     }
+    /// 粗判：x 是否可能在 [首, 末] 值域内（有序行的反查前置过滤——惰性逆边重建时逐行先看值域再二分）
+    pub(super) fn may_contain(&self, x: &T) -> bool {
+        !self.0.is_empty() && self.0.first() <= Some(x) && self.0.last() >= Some(x)
+    }
     pub(super) fn len(&self) -> usize {
         self.0.len()
     }
