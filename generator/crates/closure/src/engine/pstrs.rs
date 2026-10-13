@@ -81,15 +81,20 @@ pub(super) struct PStrs {
 /// 内容哈希索引 + 内容比对找同类行）；行插入新元素时：唯一持有的行原地改，共享行克隆改写后重新并池
 /// （并到既有同内容行则共享之）。插入返回值、去重口径、遍历升序与逐行独立的 `SortedSet` 完全一致——
 /// 行为与确定性不变。索引按精确指针记账（改写前摘旧、并池后挂新），无死条目积累。
+///
+/// 内容哈希为**元素哈希之和（可交换）**并随行存储（§4.19 增量哈希——§4.18 的两遍 O(行长) 全量哈希是
+/// 墙钟回归主源之一：唯一持有行每次插边都重扫整行、枢纽扇出行千级条目）：插边时 h_new = h_old + e(x)
+/// 为 O(1)，行克隆不改内容、哈希随内容保持；桶内仍内容比对，碰撞不影响正确性（与 `setstore.rs` 同法）。
 struct RowSet {
-    rows: HashMap<PSlot, Rc<SortedSet<PSlot>>>,
+    /// 行 → (内容哈希, 行内容)。哈希由本表全权维护（创建 / 插边 / 整行放入时更新），恒等于行内容
+    rows: HashMap<PSlot, (u64, Rc<SortedSet<PSlot>>)>,
     /// 内容哈希 → 行弱引用（碰撞经内容比对）
     ix: HashMap<u64, Vec<std::rc::Weak<SortedSet<PSlot>>>>,
     /// 热路径观测（§4.19 墙钟回归归因，只累加计数 / 时长，不改变行为）
     st: RowStat,
 }
 
-/// RowSet 热路径观测：插边 / 去重命中次数、内容哈希走过的元素数（两遍 O(行长) 的量）、
+/// RowSet 热路径观测：插边 / 去重命中次数、内容哈希走过的元素数（增量哈希后只剩建行与整行放入）、
 /// 唯一持有原地改与共享行分叉克隆的耗时、find_shared 并池查找耗时
 #[derive(Default)]
 struct RowStat {
@@ -102,14 +107,22 @@ struct RowStat {
     find_ns: u64,
 }
 
+/// PSlot 元素哈希（可交换和式内容哈希的元素项）：判别位 × 两字段混合后乘散列（与 `setstore.rs` 同式）
+fn slot_elem_hash(e: &PSlot) -> u64 {
+    let (d, a, b) = match e {
+        PSlot::M(t, i) => (0u64, *t as u64, *i as u64),
+        PSlot::H(h, j) => (1, u64::from(*h), *j as u64),
+        PSlot::F(f) => (2, *f as u64, 0),
+        PSlot::V(f) => (3, *f as u64, 0),
+    };
+    let v = d.wrapping_mul(0x9e37_79b9_7f4a_c2bd).rotate_left(32) ^ a.wrapping_mul(0xa24b_aed4_7d1f_8e35) ^ b.rotate_left(17);
+    let m = u128::from(v) * 0x9e37_79b9_7f4a_7c15;
+    (m as u64) ^ (m >> 64) as u64
+}
+
+/// 行内容哈希：元素哈希之和（与顺序无关；增量更新见 [`RowSet::insert_opt`]）
 fn content_hash(v: &SortedSet<PSlot>) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    v.len().hash(&mut h);
-    for e in v.iter() {
-        e.hash(&mut h);
-    }
-    h.finish()
+    v.iter().fold(0u64, |h, e| h.wrapping_add(slot_elem_hash(e)))
 }
 
 impl Default for RowSet {
@@ -120,7 +133,7 @@ impl Default for RowSet {
 
 impl RowSet {
     fn get(&self, s: &PSlot) -> Option<&SortedSet<PSlot>> {
-        self.rows.get(s).map(|r| &**r)
+        self.rows.get(s).map(|(_, r)| &**r)
     }
     /// 在 s 行内插入 x：true = 新插入（与 `SortedSet::insert` 同口径）。
     /// 行先摘出再放回：唯一持有的行（仅本表引用）原地改，共享行克隆改写后并池
@@ -146,60 +159,60 @@ impl RowSet {
             rc.clone()
         });
         self.st.find_ns += t.elapsed().as_nanos() as u64;
-        self.rows.insert(s, shared);
+        self.rows.insert(s, (h, shared));
     }
+    /// 插入的公共实现。内容哈希随行存储并 O(1) 增量更新（§4.19）：唯一持有行改前按存储哈希摘旧
+    /// 索引、改后 h_new = h_old + e(x) 并池；共享行克隆不改内容、哈希沿用，加 e(x) 即新内容哈希
     fn insert_opt(&mut self, s: PSlot, x: PSlot, create: bool) -> bool {
+        let ex = slot_elem_hash(&x);
         let mut rc = match self.rows.remove(&s) {
-            Some(rc) => rc,
+            Some((h, rc)) => {
+                if rc.contains(&x) {
+                    self.st.dups += 1;
+                    self.rows.insert(s, (h, rc));
+                    return false;
+                }
+                (h, rc)
+            }
             None if create => {
                 let mut set = SortedSet::default();
                 set.insert(x);
                 let rc = Rc::new(set);
                 self.st.inserts += 1;
                 self.st.hash_elems += 1;
-                let h = content_hash(&rc);
-                self.ix.entry(h).or_default().push(Rc::downgrade(&rc));
-                self.rows.insert(s, rc);
+                self.ix.entry(ex).or_default().push(Rc::downgrade(&rc));
+                self.rows.insert(s, (ex, rc));
                 return true;
             }
             None => return false,
         };
-        if rc.contains(&x) {
-            self.st.dups += 1;
-            self.rows.insert(s, rc);
-            return false;
-        }
         self.st.inserts += 1;
-        let forked = Rc::strong_count(&rc) > 1;
+        let forked = Rc::strong_count(&rc.1) > 1;
         let t = std::time::Instant::now();
+        let new_h = rc.0.wrapping_add(ex);
         let shared = if !forked {
-            // 唯一持有：原地改。改前按指针摘旧索引——本表对每行至多持一个弱引用，摘除后
-            // `Rc::get_mut` 才可用（weak 计数非零时 `get_mut` 返回 None）；改后按新内容并池
-            self.st.hash_elems += rc.len() as u64;
-            let old = content_hash(&rc);
-            self.unlist(old, Rc::as_ptr(&rc));
-            Rc::get_mut(&mut rc).unwrap().insert(x);
-            self.st.hash_elems += rc.len() as u64;
-            let new = content_hash(&rc);
-            match self.find_shared(new, &rc) {
+            // 唯一持有：原地改。改前按指针摘旧索引（摘除后 `Rc::get_mut` 才可用——weak 计数非零时
+            // 返回 None）；改后按增量哈希并池，不再重扫整行
+            self.unlist(rc.0, Rc::as_ptr(&rc.1));
+            Rc::get_mut(&mut rc.1).unwrap().insert(x);
+            match self.find_shared(new_h, &rc.1) {
                 Some(other) => other,
                 None => {
-                    self.ix.entry(new).or_default().push(Rc::downgrade(&rc));
-                    rc
+                    self.ix.entry(new_h).or_default().push(Rc::downgrade(&rc.1));
+                    rc.1
                 }
             }
         } else {
-            // 共享行：克隆改写后并池（rc 摘出后仍有他行引用，其索引条目保持有效）
+            // 共享行：克隆改写后并池（rc 摘出后仍有他行引用，其索引条目保持有效）；克隆不改内容、
+            // 哈希沿用 h_old，加 e(x) 即新内容哈希——分叉克隆免全量哈希
             self.st.fork_n += 1;
-            let mut v = (*rc).clone();
+            let mut v = (*rc.1).clone();
             v.insert(x);
-            self.st.hash_elems += v.len() as u64;
-            let h = content_hash(&v);
             let cand = Rc::new(v);
-            match self.find_shared(h, &cand) {
+            match self.find_shared(new_h, &cand) {
                 Some(other) => other,
                 None => {
-                    self.ix.entry(h).or_default().push(Rc::downgrade(&cand));
+                    self.ix.entry(new_h).or_default().push(Rc::downgrade(&cand));
                     cand
                 }
             }
@@ -210,7 +223,7 @@ impl RowSet {
         } else {
             self.st.uniq_ns += dt;
         }
-        self.rows.insert(s, shared);
+        self.rows.insert(s, (new_h, shared));
         true
     }
     /// 内容哈希桶内找同内容行（排除自身指针——`&SortedSet` 即 `Rc` 数据指针，与 `Weak::as_ptr` 同基；
@@ -229,7 +242,7 @@ impl RowSet {
         }
         hit
     }
-    /// 从内容哈希桶摘除指向 p 的条目（原地改前调用；桶通常长 1）
+    /// 从内容哈希桶摘除指向 p 的条目（原地改前调用，h 为存储的内容哈希；桶通常长 1）
     fn unlist(&mut self, h: u64, p: *const SortedSet<PSlot>) {
         if let Some(bucket) = self.ix.get_mut(&h) {
             bucket.retain(|w| std::rc::Weak::as_ptr(w) as *const SortedSet<PSlot> != p);
@@ -241,8 +254,8 @@ impl RowSet {
     /// 深堆字节（census deep3，只读）：行表列 + **按指针去重的相异行内容**（`Rc` 头 + 容量字节）+ 索引
     fn deep_bytes(&self) -> usize {
         let mut seen: HashSet<*const SortedSet<PSlot>> = HashSet::default();
-        let mut b = self.rows.capacity() * (std::mem::size_of::<(PSlot, Rc<SortedSet<PSlot>>)>()) * 9 / 7;
-        for rc in self.rows.values() {
+        let mut b = self.rows.capacity() * (std::mem::size_of::<(PSlot, (u64, Rc<SortedSet<PSlot>>))>()) * 9 / 7;
+        for (_, rc) in self.rows.values() {
             if seen.insert(Rc::as_ptr(rc)) {
                 b += 16 + rc.cap_bytes();
             }
@@ -276,7 +289,7 @@ mod tests {
         assert!(v.insert(b, x));
         assert!(v.insert(b, y));
         assert!(v.insert(b, z));
-        assert_eq!(Rc::as_ptr(&v.rows[&a]), Rc::as_ptr(&v.rows[&b]));
+        assert_eq!(Rc::as_ptr(&v.rows[&a].1), Rc::as_ptr(&v.rows[&b].1));
         assert!(v.insert(b, PSlot::H(1, 0)));
         assert_eq!(row(&v, b), vec![PSlot::H(1, 0), x, y, z]);
         assert_eq!(row(&v, a), vec![x, y, z]); // a 不受 b 分叉影响
@@ -284,7 +297,7 @@ mod tests {
         assert!(v.insert(c, y));
         assert!(v.insert(c, z));
         assert!(v.insert(c, PSlot::H(1, 0)));
-        assert_eq!(Rc::as_ptr(&v.rows[&b]), Rc::as_ptr(&v.rows[&c])); // 分叉后同内容并回
+        assert_eq!(Rc::as_ptr(&v.rows[&b].1), Rc::as_ptr(&v.rows[&c].1)); // 分叉后同内容并回
         // 唯一持有行原地改（共享计数不破坏）
         assert!(v.insert(c, PSlot::F(5)));
         assert_eq!(row(&v, c).len(), 5);
@@ -313,6 +326,40 @@ mod tests {
         assert!(w.has_row(&PSlot::F(1)));
         assert!(w.insert_existing(PSlot::F(1), PSlot::M(9, 9)));
         assert_eq!(row(&w, PSlot::F(1)), vec![PSlot::M(9, 9)]);
+    }
+
+    /// 增量哈希不变式：任意插入 / 共享 / 分叉 / 并回 / 整行放入序列后，行内存储的内容哈希
+    /// 恒等于全量重算（§4.19——unlist 按存储哈希摘旧条目，失真即索引泄漏或错摘）
+    #[test]
+    fn rowset_incremental_hash() {
+        use super::content_hash;
+        let mut v = RowSet::default();
+        let keys: Vec<PSlot> = (0..12u32).map(|i| PSlot::H(i, (i as usize) % 3)).collect();
+        let xs: Vec<PSlot> = (0..30u32).map(|i| PSlot::M(i as usize, (i / 7) as usize)).collect();
+        for (k, step) in (0..keys.len()).cycle().zip(0..xs.len()) {
+            if step % 5 == 4 {
+                // 整行放入（惰性逆边首访重建路径）
+                let mut r = SortedSet::default();
+                r.insert(xs[step]);
+                v.put_row(keys[k], r);
+            } else {
+                v.insert(keys[k], xs[step]);
+            }
+            // 共享并回制造分叉：把另一行插成与某行同内容
+            if step % 3 == 0 && k + 1 < keys.len() && step > 0 {
+                v.insert(keys[k + 1], xs[step - 1]);
+            }
+            for (s, (h, rc)) in &v.rows {
+                assert_eq!(*h, content_hash(rc), "slot {s:?} at step {step}");
+                // 索引不变式：每活行在其当前内容哈希桶内恰一个弱引用
+                let p = Rc::as_ptr(rc);
+                let bucket = v.ix.get(h).unwrap_or_else(|| panic!("slot {s:?} no bucket {h}"));
+                let n = bucket.iter().filter(|w| std::rc::Weak::as_ptr(w) as *const _ == p).count();
+                assert_eq!(n, 1, "slot {s:?} weak entries under {h}");
+            }
+        }
+        // 全表行数 = 键数（都建过行）
+        assert_eq!(v.rows.len(), keys.len());
     }
 }
 
@@ -707,7 +754,7 @@ impl<'a> Engine<'a> {
                     .succ
                     .rows
                     .iter()
-                    .filter(|(_, rc)| rc.may_contain(&s) && rc.contains(&s))
+                    .filter(|(_, (_, rc))| rc.may_contain(&s) && rc.contains(&s))
                     .map(|(f, _)| *f)
                     .collect();
                 let mut row = SortedSet::default();
@@ -851,7 +898,7 @@ impl<'a> Engine<'a> {
             let mut uniq: HashMap<u64, (usize, usize)> = HashMap::default(); // 内容哈希 → (len, 出现次数)
             let mut hub_j: HashMap<u32, Vec<(usize, std::collections::BTreeSet<usize>)>> = HashMap::default(); // H 行：hub → 各 j 的目标方法集
             let mut top: Vec<(usize, String)> = Vec::new();
-            for (s, rc) in &t.rows {
+            for (s, (_, rc)) in &t.rows {
                 let v: &SortedSet<PSlot> = rc;
                 let n = v.len();
                 rows += 1;
@@ -913,13 +960,13 @@ impl<'a> Engine<'a> {
                 // 惰性逆边收益：pred 行中键已入 demand（按名求值遍历到过）的槽的行字节占比
                 let mut hot = 0usize;
                 let mut hot_rows = 0usize;
-                for (s, rc) in &t.rows {
+                for (s, (_, rc)) in &t.rows {
                     if p.demand.contains_key(s) {
                         hot += rc.cap_bytes();
                         hot_rows += 1;
                     }
                 }
-                let all: usize = t.rows.values().map(|rc| rc.cap_bytes()).sum();
+                let all: usize = t.rows.values().map(|(_, rc)| rc.cap_bytes()).sum();
                 eprintln!(
                     "{tag} pstr-shape {name} demand_slots={} hot_rows={}/{} hot_bytes={:.0}MiB/{:.0}MiB",
                     p.demand.len(), hot_rows, rows, mib(hot), mib(all),
