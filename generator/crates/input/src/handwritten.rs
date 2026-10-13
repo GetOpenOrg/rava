@@ -246,6 +246,11 @@ fn hw_head(head: &str) -> Option<(String, String, String)> {
         return None;
     }
     i = skip_sp(head, j);
+    // trait 名后的自类型实参组（`impl<T: …> __XHw<T> for X<T>`——泛型 trait 的 impl 应用形参）
+    if head[i..].starts_with('<') {
+        let (_, j2) = angle_group(head, i)?;
+        i = skip_sp(head, j2);
+    }
     if !head[i..].starts_with("for") {
         return None;
     }
