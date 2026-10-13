@@ -11,6 +11,8 @@ use super::native_method_accessor_impl::NativeMethodAccessorImpl;
 use crate::java::lang::reflect::Method;
 use crate::java::lang::reflect::InvocationTargetException;
 use super::__NativeMethodAccessorImplHw;
+use crate::java::lang::reflect::__MethodHw as _;
+use crate::java::lang::reflect::__ConstructorHw as _;
 
 /// 目标抛出的异常包装为 InvocationTargetException（JVM 同）；实参拆箱失败的
 /// IllegalArgumentException 直抛。

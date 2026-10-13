@@ -9,6 +9,8 @@ use super::direct_constructor_handle_accessor_native_accessor::DirectConstructor
 use crate::java::lang::reflect::Constructor;
 use crate::java::lang::reflect::InvocationTargetException;
 use super::__DirectConstructorHandleAccessor_NativeAccessorHw;
+use crate::java::lang::reflect::__MethodHw as _;
+use crate::java::lang::reflect::__ConstructorHw as _;
 
 /// 目标抛出的异常包装为 InvocationTargetException（JVM 同）；实参拆箱失败的
 /// IllegalArgumentException 直抛。

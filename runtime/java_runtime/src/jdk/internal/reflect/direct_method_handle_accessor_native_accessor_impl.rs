@@ -10,6 +10,8 @@ use super::direct_method_handle_accessor_native_accessor::DirectMethodHandleAcce
 use crate::java::lang::reflect::Method;
 use crate::java::lang::reflect::InvocationTargetException;
 use super::__DirectMethodHandleAccessor_NativeAccessorHw;
+use crate::java::lang::reflect::__MethodHw as _;
+use crate::java::lang::reflect::__ConstructorHw as _;
 
 /// 目标抛出的异常包装为 InvocationTargetException（JVM 同）；实参拆箱失败的
 /// IllegalArgumentException 直抛。

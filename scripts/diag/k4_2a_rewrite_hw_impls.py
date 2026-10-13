@@ -311,7 +311,7 @@ def rewrite_file(path: str, text: str, local_types: set[str], counters: dict[str
 def scan_hw_items(src: str) -> dict[str, dict[int, set[str]]]:
     """伴生树里 `impl __XHw{N} for X` 块的条目名：类 → {ordinal: 名集}。"""
     out: dict[str, dict[int, set[str]]] = {}
-    hwre = re.compile(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)\s+for\s+(\w+)")
+    hwre = re.compile(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)(?:<[^>]*>)?\s+for\s+(\w+)")
     for rel in walk_sorted(src):
         if not (rel.endswith("_impl.rs") or rel.endswith("_ext.rs")):
             continue
@@ -347,7 +347,7 @@ def fix_callers(src: str, check: bool) -> int:
     # trait 的 use 行已在改写主步加入，existing 集合去重幂等）
     # 伴生文件位置 → 类的包路径（crate::java::lang 一段）
     pkg_of: dict[str, str] = {}
-    hwre = re.compile(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)\s+for\s")
+    hwre = re.compile(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)(?:<[^>]*>)?\s+for\s")
     for rel in walk_sorted(src):
         if not (rel.endswith("_impl.rs") or rel.endswith("_ext.rs")):
             continue
@@ -362,11 +362,14 @@ def fix_callers(src: str, check: bool) -> int:
     # `MethodHandleImpl$BindCaller.makeInjectedInvoker(H)` 的文档注释同样命中）。新增条目
     # 前先核实接收者确为该 wrapper（文档注释不算）。
     receiver_allow = {
-        "isPrimitive": "Class",
-        "getBoolean": "Array",
-        "__declared_method_rows": "Class",
-        "__method_from_meta": "Class",
-        "__table_declared_methods": "Class",
+        "isPrimitive": ["Class"],
+        "getBoolean": ["Array"],
+        "__declared_method_rows": ["Class"],
+        "__method_from_meta": ["Class"],
+        "__table_declared_methods": ["Class"],
+        "__reflect_key": ["Method", "Constructor"],
+        "__vh_ref_update": ["Unsafe"],
+        "__vh_prim_update": ["Unsafe"],
     }
     cls_ord_of: dict[str, dict[int, set[str]]] = items
 
@@ -381,13 +384,14 @@ def fix_callers(src: str, check: bool) -> int:
             for ordn, names in ords.items():
                 if any(re.search(rf"\b{cls}::{re.escape(n)}\s*[(<]", text) for n in names):
                     need.setdefault(cls, set()).add(ordn)
-        for n, cls in receiver_allow.items():
-            if cls in need or cls not in cls_ord_of:
-                continue
-            if re.search(rf"\.{re.escape(n)}\s*\(", text):
-                for ordn, names in cls_ord_of[cls].items():
-                    if n in names:
-                        need.setdefault(cls, set()).add(ordn)
+        for n, clss in receiver_allow.items():
+            for cls in clss:
+                if cls in need or cls not in cls_ord_of:
+                    continue
+                if re.search(rf"\.{re.escape(n)}\s*\(", text):
+                    for ordn, names in cls_ord_of[cls].items():
+                        if n in names:
+                            need.setdefault(cls, set()).add(ordn)
         lines: list[str] = []
         for cls in sorted(need):
             segs = KEYWORD_PKGS.get(cls, cls)

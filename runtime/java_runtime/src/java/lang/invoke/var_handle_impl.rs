@@ -22,6 +22,7 @@ use super::var_handle_ext::*;
 use crate::jdk::internal::misc::Unsafe;
 use super::__VarHandleHw;
 use crate::java::lang::reflect::__ArrayHw as _;
+use crate::jdk::internal::misc::__UnsafeHw as _;
 
 /// 本 VarHandle 的字段偏移（不透明 id）。Field 家族 flavor 的 `fieldOffset` 是非擦除
 /// 平铺 long 字段，经 `__unsafe_long_cell` 按名协议直读；非 Field flavor → None。
