@@ -25,7 +25,7 @@ use super::__ContinuationHw;
 
 /// 一条协程（repr(C)：执行上下文块为首字段，`doYield` 由当前块地址还原记录）
 #[repr(C)]
-struct Coroutine {
+pub struct Coroutine {
     exec: ExecContext,
     /// 本记录在侧表中的键（Continuation 身份）
     key: usize,
@@ -44,7 +44,7 @@ struct Coroutine {
 }
 
 /// 侧表一项（记录只在持有它的执行流或切入它的载体上访问，互斥由 Continuation 的 mounted CAS 保证）
-struct Slot(Box<Coroutine>);
+pub struct Slot(Box<Coroutine>);
 // SAFETY: 同一时刻至多一个载体访问一条记录（见上）
 unsafe impl Send for Slot {}
 

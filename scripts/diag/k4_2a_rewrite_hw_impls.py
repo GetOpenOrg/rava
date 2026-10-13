@@ -338,6 +338,8 @@ def scan_hw_items(src: str) -> dict[str, dict[int, set[str]]]:
 
 KEYWORD_PKGS = {"ref": "r#ref"}
 
+hwre_head = re.compile(r"^impl\s*(?:<.*>\s*)?__\w+Hw\d*(?:<[^>]*>)?\s+for\s")
+
 
 def fix_callers(src: str, check: bool) -> int:
     """非伴生手写文件里的 hw 方法调用面（`Cls::m(` UFCS 与单主 `.m(` 接收者形态）补
@@ -463,6 +465,30 @@ def main() -> int:
             changed += 1
         staged.append((p, text, new))  # 无头改写的文件也要走 use 补齐遍
     for p, text, new in staged:
+        # hw 块签名引用本文件模块级定义的类型 → 定义补 pub（声明文件要 use 它；私有跨模块不可见）
+        lines = new.split("\n")
+        local_defs = set()
+        for i, l in enumerate(lines):
+            m = re.match(r"^(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?:struct|enum|trait|type|union)\s+(\w+)", l)
+            if m:
+                local_defs.add(m.group(1))
+        hw_words = set()
+        depth = 0
+        for l in lines:
+            if hwre_head.match(l) and depth == 0:
+                depth = 1
+                continue
+            if depth > 0:
+                depth += l.count("{") - l.count("}")
+                for w in re.findall(r"\b([A-Z]\w+)\b", l):
+                    hw_words.add(w)
+        need_pub = local_defs & hw_words - {"Self", "Result", "Option", "Vec", "Clone", "Default", "Into", "From"}
+        if need_pub:
+            for i, l in enumerate(lines):
+                m = re.match(r"^(?:unsafe\s+)?(?:struct|enum|trait|type|union)\s+(\w+)", l)
+                if m and m.group(1) in need_pub:
+                    lines[i] = "pub " + l
+            new = "\n".join(lines)
         # 补齐本文件涉及类的全部 ordinal（首文件后见的块）
         lines = new.split("\n")
         ins: list[str] = []

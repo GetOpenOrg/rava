@@ -23,7 +23,7 @@ use crate::java::lang::__ClassHw as _;
 
 /// 基本类型值（数组元素读出 / 写入实参），按 JVMS 基本类型种类区分。
 #[derive(Clone, Copy)]
-enum Prim {
+pub enum Prim {
     Z(bool),
     B(i8),
     C(u16),
@@ -135,7 +135,7 @@ fn null_for_primitive() -> JvmError {
 }
 
 /// 数组实参的元素形态：基本元素（读写闭包按种类分派）或引用元素（Object 级协变视图 + 运行时数组类名）。
-enum Elems {
+pub enum Elems {
     Prim(u8),
     Ref(JArray<Object>, std::string::String),
 }

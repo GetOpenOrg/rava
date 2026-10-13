@@ -31,7 +31,7 @@ fn copy_out(a: &JArray<i8>, off: i32, data: &[u8]) -> Result<()> {
 }
 
 /// 一次 inflate 调用的结果（原始指针形态，Bytes / Buffer 各变体共用）。
-struct InflateRun {
+pub struct InflateRun {
     ret: i32,
     in_used: i32,
     out_used: i32,

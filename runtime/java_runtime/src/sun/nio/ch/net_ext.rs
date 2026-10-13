@@ -14,7 +14,7 @@ use super::__NetHw2;
 const IPTOS_MASK: i32 = 0x1e | 0xe0;
 
 /// 选项值的 C 形态：组播 TTL / LOOP 为 u_char，SO_LINGER 为 struct linger，其余 int。
-enum OptVal {
+pub enum OptVal {
     Byte(u8),
     Linger(libc::linger),
     Int(i32),

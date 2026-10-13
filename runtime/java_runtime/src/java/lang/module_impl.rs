@@ -21,7 +21,7 @@ use super::__ModuleHw2;
 // 由 javac 与闭包完成，这些边无运行期消费方——本表只承载可观测部分（模块与包的归属及其冲突检查），
 // 与 HotSpot 的异常行为逐条对应。
 
-struct VmModule {
+pub struct VmModule {
     module: Module,
     loader: usize,
     name: std::string::String,

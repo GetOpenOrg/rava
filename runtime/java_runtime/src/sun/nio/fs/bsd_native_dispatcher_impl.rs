@@ -34,7 +34,7 @@ fn attr_times(commonattr: i32, modify: i64, access: i64, create: i64) -> Vec<lib
 }
 
 /// setattrlist 的作用对象。
-enum Target {
+pub enum Target {
     Path(i64),
     Fd(i32),
 }

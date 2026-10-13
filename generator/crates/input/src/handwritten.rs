@@ -645,7 +645,20 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
         BTreeMap::new()
     } else {
         let uses = file_uses(&content);
-        let mut out = BTreeMap::new();
+        // 本文件模块级定义的类型：声明文件按 `super::<伴生模块名>` 引用（改写脚本已 pub 化）
+        let local_defs: BTreeSet<&str> = content
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim_start();
+                let rest = l.strip_prefix("pub ").or_else(|| l.strip_prefix("pub(crate) ")).unwrap_or(l);
+                ["struct ", "enum ", "trait ", "type ", "union "]
+                    .iter()
+                    .find_map(|kw| rest.strip_prefix(kw))
+                    .and_then(|r| r.split(|c: char| !is_word(c)).next())
+                    .filter(|n| !n.is_empty())
+            })
+            .collect();
+        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for blk in &hw_blocks {
             let words = blk
                 .generics
@@ -653,7 +666,11 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
                 .chain(blk.where_c.chars())
                 .chain(blk.items.iter().flat_map(|i| i.sig.chars()));
             for w in type_words_scope(words) {
-                if let Some(segs) = uses.get(w.as_str()) {
+                let local = local_defs.contains(w.as_str());
+                if local {
+                    let path = vec!["super".to_string(), base.to_string(), w.clone()];
+                    out.entry(w).or_insert(path);
+                } else if let Some(segs) = uses.get(w.as_str()) {
                     out.entry(w).or_insert_with(|| segs.clone());
                 }
             }
