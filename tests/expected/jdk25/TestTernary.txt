@@ -1,0 +1,10 @@
+10
+zero
+2.5
+110
+65
+val=5;max=10
+15
+zero-obj
+1,1
+done

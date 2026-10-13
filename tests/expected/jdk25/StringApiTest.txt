@@ -1,0 +1,18 @@
+charAt(0): H
+indexOf World: 7
+contains World: true
+substring(7): World!
+substring(0,5): Hello
+replace: Hello, Java!
+split length: 4
+split[0]: a
+startsWith: true
+endsWith: true
+compareTo: -1
+parseInt: 42
+parseLong: 123456789
+parseDouble: 3.14
+isDigit: true
+isLetter: true
+toUpperCase: A
+reverse: dlroW olleH

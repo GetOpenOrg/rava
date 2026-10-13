@@ -1,0 +1,32 @@
+For primes less than 1,000,000:-
+
+  For differences of [2] ->
+    First group   = [3, 5]
+    Last group    = [999959, 999961]
+    Number found  = 8169
+
+  For differences of [1] ->
+    First group   = [2, 3]
+    Last group    = [2, 3]
+    Number found  = 1
+
+  For differences of [2, 2] ->
+    First group   = [3, 5, 7]
+    Last group    = [3, 5, 7]
+    Number found  = 1
+
+  For differences of [2, 4] ->
+    First group   = [5, 7, 11]
+    Last group    = [999431, 999433, 999437]
+    Number found  = 1393
+
+  For differences of [4, 2] ->
+    First group   = [7, 11, 13]
+    Last group    = [997807, 997811, 997813]
+    Number found  = 1444
+
+  For differences of [6, 4, 2] ->
+    First group   = [31, 37, 41, 43]
+    Last group    = [997141, 997147, 997151, 997153]
+    Number found  = 306
+

@@ -1,0 +1,5 @@
+prop=name read=true write=true type=String
+prop=readOnly read=true write=false type=int
+via-read=bean-value
+direct=bean-value
+cached=true

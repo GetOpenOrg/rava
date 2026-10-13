@@ -1,0 +1,13 @@
+sum() = 0
+sum(1, 2, 3) = 6
+sum(10, 20) = 30
+join() = 
+join(a, b, c) = a, b, c
+Numbers: 1, 2, 3
+Object varargs:
+  42
+  hello
+  3.14
+Name: Alice, Age: 30
+Pi = 3.14
+100%

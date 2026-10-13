@@ -1,0 +1,15 @@
+any interfaces: true
+loopback found: true
+loopback up: true
+loopback index positive: true
+loopback mac: null
+loopback mtu positive: true
+loopback displayName==name: true
+loopback has 127.0.0.1: true
+loopback /8 binding: true
+byName equals: true
+byIndex equals: true
+byName missing: null
+virtual: false parent: null
+subinterfaces: 0
+sha1prng seeded: ok

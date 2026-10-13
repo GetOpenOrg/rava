@@ -1,0 +1,6 @@
+pass-run=2 fail=0 ok=true
+fail-run=2 fail=2 ok=false
+failure mismatch :: expected:<[expected-x]> but was:<[actual-y]>
+failure boom :: runner-boom
+multi-run=4 fail=1
+multi-first-failure=fail

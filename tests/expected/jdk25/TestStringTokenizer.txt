@@ -1,0 +1,10 @@
+count=3
+tokens=a|b|c|
+empty-after=true
+exhaust-ex=NoSuchElementException
+merged=2
+first=x second=y
+default-delim=4
+with-delims=a/,/b/
+pair-k=k
+pair-rest=v

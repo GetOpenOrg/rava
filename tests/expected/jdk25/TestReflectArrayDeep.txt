@@ -1,0 +1,11 @@
+len=3
+get-boxed=Integer
+getInt=43
+bad-set-ex=IllegalArgumentException
+ref-elem=a typed=String[]
+row-type=int[]
+grid-deep=9
+comp=int
+grid-comp=int[]
+oob-ex=ArrayIndexOutOfBoundsException
+not-array-ex=IllegalArgumentException

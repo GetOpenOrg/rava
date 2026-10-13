@@ -1,0 +1,7 @@
+Negative inf: -Infinity
+Positive inf: Infinity
+NaN: NaN
+Negative 0: -0.0
+inf + -inf: NaN
+0 * NaN: NaN
+NaN == NaN: false

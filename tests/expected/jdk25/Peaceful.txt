@@ -1,0 +1,163 @@
+1 black and 1 white queens on a 2 x 2 board:
+No solution exists.
+
+1 black and 1 white queens on a 3 x 3 board:
+B ◦ • 
+◦ • ◦ 
+• W • 
+
+2 black and 2 white queens on a 3 x 3 board:
+No solution exists.
+
+1 black and 1 white queens on a 4 x 4 board:
+B ◦ • ◦ 
+◦ • ◦ • 
+• W • ◦ 
+◦ • ◦ • 
+
+2 black and 2 white queens on a 4 x 4 board:
+B ◦ B ◦ 
+◦ • ◦ • 
+• W • W 
+◦ • ◦ • 
+
+3 black and 3 white queens on a 4 x 4 board:
+No solution exists.
+
+1 black and 1 white queens on a 5 x 5 board:
+B ◦ • ◦ • 
+◦ • ◦ • ◦ 
+• W • ◦ • 
+◦ • ◦ • ◦ 
+• ◦ • ◦ • 
+
+2 black and 2 white queens on a 5 x 5 board:
+B ◦ • ◦ • 
+◦ • W • ◦ 
+• W • ◦ • 
+◦ • ◦ • ◦ 
+B ◦ • ◦ • 
+
+3 black and 3 white queens on a 5 x 5 board:
+B ◦ • ◦ • 
+◦ • W • W 
+• W • ◦ • 
+◦ • ◦ B ◦ 
+B ◦ • ◦ • 
+
+4 black and 4 white queens on a 5 x 5 board:
+• ◦ W ◦ W 
+B • ◦ • ◦ 
+• ◦ W ◦ W 
+B • ◦ • ◦ 
+• B • B • 
+
+5 black and 5 white queens on a 5 x 5 board:
+No solution exists.
+
+1 black and 1 white queens on a 6 x 6 board:
+B ◦ • ◦ • ◦ 
+◦ • ◦ • ◦ • 
+• W • ◦ • ◦ 
+◦ • ◦ • ◦ • 
+• ◦ • ◦ • ◦ 
+◦ • ◦ • ◦ • 
+
+2 black and 2 white queens on a 6 x 6 board:
+B ◦ • ◦ • ◦ 
+◦ • W • ◦ • 
+• W • ◦ • ◦ 
+◦ • ◦ • ◦ • 
+B ◦ • ◦ • ◦ 
+◦ • ◦ • ◦ • 
+
+3 black and 3 white queens on a 6 x 6 board:
+B ◦ • ◦ • ◦ 
+◦ • W • ◦ • 
+• W • ◦ W ◦ 
+◦ • ◦ • ◦ • 
+B ◦ • ◦ • ◦ 
+B • ◦ • ◦ • 
+
+4 black and 4 white queens on a 6 x 6 board:
+B ◦ • ◦ • ◦ 
+◦ • W • ◦ • 
+• W • ◦ W ◦ 
+◦ • ◦ • W • 
+B ◦ • ◦ • ◦ 
+B • ◦ B ◦ • 
+
+5 black and 5 white queens on a 6 x 6 board:
+• ◦ W W • W 
+B • ◦ • ◦ • 
+• ◦ • W • W 
+◦ B ◦ • ◦ • 
+B ◦ • ◦ • ◦ 
+◦ B ◦ • B • 
+
+6 black and 6 white queens on a 6 x 6 board:
+No solution exists.
+
+1 black and 1 white queens on a 7 x 7 board:
+B ◦ • ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• ◦ • ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• ◦ • ◦ • ◦ • 
+
+2 black and 2 white queens on a 7 x 7 board:
+B ◦ • ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+B ◦ • ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • ◦ • ◦ • 
+
+3 black and 3 white queens on a 7 x 7 board:
+B ◦ B ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • W • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+B ◦ • ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • ◦ • ◦ • 
+
+4 black and 4 white queens on a 7 x 7 board:
+B ◦ B ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • W • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+B ◦ B ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • W • ◦ • 
+
+5 black and 5 white queens on a 7 x 7 board:
+B ◦ B ◦ B ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • W • W • 
+◦ • ◦ • ◦ • ◦ 
+B ◦ B ◦ • ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • W • ◦ • 
+
+6 black and 6 white queens on a 7 x 7 board:
+B ◦ B ◦ B ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • W • W • 
+◦ • ◦ • ◦ • ◦ 
+B ◦ B ◦ B ◦ • 
+◦ • ◦ • ◦ • ◦ 
+• W • W • W • 
+
+7 black and 7 white queens on a 7 x 7 board:
+• ◦ • ◦ W ◦ W 
+B B B • ◦ • ◦ 
+• ◦ • ◦ W ◦ W 
+◦ • ◦ • ◦ W W 
+• B • B • ◦ • 
+B • B • ◦ • ◦ 
+• ◦ • ◦ W ◦ • 
+

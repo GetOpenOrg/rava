@@ -1,0 +1,8 @@
+selector=sun.net.spi.DefaultProxySelector
+http://example.invalid/ system-ok=true
+https://example.invalid/path system-ok=true
+ftp://example.invalid/ system-ok=true
+socket://example.invalid:25 system-ok=true
+https://example.invalid/ -> [HTTP @ proxy.example.invalid/<unresolved>:8443] size=1
+socket://example.invalid:25 -> [SOCKS @ socks.example.invalid/<unresolved>:1081] size=1
+no-scheme=protocol = null host = null

@@ -1,0 +1,29 @@
+int scale=4
+cas[2] 3->30: true
+cas[2] 3->31: false
+getAndAdd[0] +10: 1
+getAndSet[3] 99: 4
+get[1]=-7 ia=[11, -7, 30, 99]
+long scale=8
+cas[1] 6->60: true
+getAndAdd[0] +1<<33: 5
+getAndSet[1]: 60
+la=[8589934597, -1]
+word@4=8070605
+byte word cas: true
+byte word cas stale: false
+ba=[1, 2, 3, 4, 5, -7, 7, 8]
+short scale=2
+short word cas: true
+sa=[32767, 2, 3, -9]
+za=[false, true, false] get1=true
+ca=aQ get0=a
+fa=[1.0, -3.5] bits0=3f800000
+da=[0.125, 2.0] bits1=4000000000000000
+holder: f=2.5 d=3.0 n=3
+HF.cas(NaN,3.5)=true
+HF.getAndAdd(1)=3.5
+HD.cas(-0.0,2)=false
+HD.cae(0.0,2.5)=0.0
+HD.getAndSet(-1)=2.5
+holder: f=4.5 d=-1.0 n=3

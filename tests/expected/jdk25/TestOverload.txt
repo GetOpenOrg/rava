@@ -1,0 +1,23 @@
+f(1)=int
+f(1L)=long
+f(Integer.valueOf(1))=Integer
+f(1.5f)=double
+f(1.5)=double
+f("s")=Object
+f(1,2)=int...
+f()=int...
+g(Object)=Object
+g(Number via Double)=Number
+g(Integer)=Integer
+h(1,2)=2args
+h(1,2,3)=varargs
+nul(null)=String
+up(char)=int
+up(short)=int
+up(byte)=int
+sum(int,int)=3
+sum(long,long)=3
+sum(double,double)=4.0
+sum(int,long)=3
+f(2+3)=int
+done

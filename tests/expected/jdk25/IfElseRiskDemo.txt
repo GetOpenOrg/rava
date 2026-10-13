@@ -1,0 +1,31 @@
+[int 常量 switch]
+  status=0 -> 待支付
+  status=1 -> 已支付
+  status=9 -> 未知
+
+[风控分级 if/else]（金额单位:分）
+  amountFen=-1        -> IllegalArgumentException
+  amountFen=0         -> LOW
+  amountFen=9900      -> LOW
+  amountFen=9999      -> LOW
+  amountFen=10000     -> MEDIUM
+  amountFen=99999     -> MEDIUM
+  amountFen=100000    -> HIGH
+  amountFen=999999    -> HIGH
+  amountFen=1000000   -> VERY_HIGH
+
+[会员等级 if 链]
+  points=0        -> NORMAL
+  points=999      -> NORMAL
+  points=1000     -> SILVER
+  points=9999     -> SILVER
+  points=10000    -> GOLD
+  points=99999    -> GOLD
+  points=100000   -> VIP
+
+[上传策略 if/else]
+  fileSize=0           -> DIRECT
+  fileSize=10485760    -> DIRECT
+  fileSize=10485761    -> MULTIPART
+  fileSize=524288000   -> MULTIPART
+  fileSize=524288001   -> LARGE_FILE

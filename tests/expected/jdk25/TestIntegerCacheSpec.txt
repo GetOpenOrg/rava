@@ -1,0 +1,14 @@
+-129 same=false autobox=false eq=true str=-129 hash=-129
+-128 same=true autobox=true eq=true str=-128 hash=-128
+-1 same=true autobox=true eq=true str=-1 hash=-1
+0 same=true autobox=true eq=true str=0 hash=0
+1 same=true autobox=true eq=true str=1 hash=1
+127 same=true autobox=true eq=true str=127 hash=127
+128 same=false autobox=false eq=true str=128 hash=128
+1000 same=false autobox=false eq=true str=1000 hash=1000
+-2147483648 same=false autobox=false eq=true str=-2147483648 hash=-2147483648
+2147483647 same=false autobox=false eq=true str=2147483647 hash=2147483647
+parsed cached true radix -255
+parsed big false true
+-150,-100,-50,0,50,100,150,
+hex ff bin 1010 neg -2147483648

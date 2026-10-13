@@ -1,0 +1,9 @@
+main priority 9
+main name renamed-main
+worker priority 1 name worker-renamed
+all has main true has worker true
+enumerate contains true true
+activeCount>=2 true
+after join has worker false
+terminated trace 0
+IAE priority

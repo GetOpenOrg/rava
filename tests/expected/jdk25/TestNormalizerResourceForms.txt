@@ -1,0 +1,8 @@
+NFD: 0065 0301 | 0065 0301 | FB01 | normalized=true
+NFC: 00E9 | 00E9 | FB01 | normalized=false
+NFKD: 0065 0301 | 0065 0301 | 0066 0069 | normalized=true
+NFKC: 00E9 | 00E9 | 0066 0069 | normalized=false
+words=17
+lines=7
+sentences=3
+chars=2

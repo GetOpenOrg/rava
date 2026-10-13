@@ -1,0 +1,8 @@
+caught: / by zero
+mod caught: / by zero
+var caught: / by zero
+10/2 = 5
+10%3 = 1
+long caught: / by zero
+float div: Infinity
+Done.

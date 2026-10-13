@@ -1,0 +1,16 @@
+to-nanos=3000000
+to-millis=2000
+to-seconds=300
+to-hours=48
+convert=1500000
+dur-seconds=1 nanos=500000000
+zdt-hour=6
+utc-hour=22
+of-instant=2023-22
+millis-consistent=true
+set-millis-md=11-14 h=22
+tz-id=Asia/Shanghai raw-offset-hours=8
+tz-no-dst=true
+ny-dst=true dst-save=1
+ny-jan-dst=false
+ny-jul-dst=true

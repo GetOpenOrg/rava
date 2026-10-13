@@ -1,0 +1,3 @@
+static block ran
+50
+StaticInit

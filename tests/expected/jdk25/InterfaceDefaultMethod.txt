@@ -1,0 +1,4 @@
+Hello, Alice!
+5
+Bonjour, Bob!
+3

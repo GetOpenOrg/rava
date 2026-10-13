@@ -1,0 +1,9 @@
+self-stream=true
+magic-read=4 cafebabe=CAFEBABE
+self-url=true
+miss=true
+miss-stream=true
+fqcn-abs=true
+jdk-res=true
+jdk-res-miss=true
+loader-eq=true

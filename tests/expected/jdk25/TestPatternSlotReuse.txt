@@ -1,0 +1,17 @@
+diag 3
+point 1,2
+colored 4,5 GREEN
+mixed 7 2.5 abc
+boxed point 11
+boxed string 5
+boxed 42
+null
+other str
+12005
+3400
+-1002
+P/CP true RED
+CP/P true RED
+CP/CP true true
+none
+19

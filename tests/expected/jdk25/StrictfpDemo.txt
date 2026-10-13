@@ -1,0 +1,8 @@
+20.091445
+4.700000
+true
+true
+true
+true
+true
+1.0

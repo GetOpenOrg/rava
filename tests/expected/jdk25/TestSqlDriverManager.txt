@@ -1,0 +1,8 @@
+initial-drivers=0
+after-register=1
+driver-for=true
+accepts=true/false
+conn-ex=SQLException
+no-suitable=SQLException
+after-deregister=0
+parent-logger-ex=SQLFeatureNotSupportedException

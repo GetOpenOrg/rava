@@ -1,0 +1,9 @@
+Circle r=5.0
+Circle r=5.0
+Drawable
+red Circle
+Good day, Alice.
+Hello, Bob!
+Circle r=5.0
+Circle r=5.0
+Circle r=5.0

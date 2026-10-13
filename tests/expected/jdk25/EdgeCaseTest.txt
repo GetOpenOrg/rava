@@ -1,0 +1,28 @@
+int overflow: -2147483648
+int min: -2147483648
+long overflow: -9223372036854775808
+int min / -1: -2147483648
+int min % -1: 0
+posInf: true
+negInf: true
+isNaN: true
+(int)NaN: 0
+(int)+Inf: 2147483647
+(int)-Inf: -2147483648
+(int)3.99: 3
+(int)-3.99: -3
+str len: 8
+charAt: 65
+bitCount(255): 8
+leadingZeros(1): 31
+trailingZeros(8): 3
+NaN==NaN: false
+NaN!=NaN: true
+NaN<0: false
+NaN>0: false
+NaN>=0: false
+NaN<=0: false
+empty equals: true
+null str: null
+compareTo: -1
+Done.

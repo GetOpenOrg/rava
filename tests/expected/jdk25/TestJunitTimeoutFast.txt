@@ -1,0 +1,2 @@
+run=4 fail=1 ok=false
+failure quickFail :: expected:<[expected]-fast> but was:<[actual]-fast>

@@ -1,0 +1,9 @@
+entries=[alpha->1, bravo->2, charlie->3, delta->4]
+keys=[alpha, bravo, charlie, delta]
+values=[1, 2, 3, 4]
+alpha prev=1 now=100
+forEach=[alpha=100, bravo=2, charlie=3, delta=4]
+after iterator remove size=3 hasBravo=false
+removeIf changed=true size=1
+structural modify accepted
+done

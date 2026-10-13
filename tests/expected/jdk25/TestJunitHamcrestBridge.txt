@@ -1,0 +1,31 @@
+PASS is-eq
+FAIL is-eq-fail :: 
+Expected: is "xyz"
+     but: was "abc"
+FAIL equalTo-fail :: 
+Expected: <8>
+     but: was <7>
+PASS not
+FAIL not-fail :: 
+Expected: not "a"
+     but: was "a"
+PASS nullValue
+FAIL nullValue-fail :: 
+Expected: null
+     but: was "x"
+PASS notNullValue
+PASS allOf
+FAIL allOf-fail :: 
+Expected: (is "hello" and is "world")
+     but: is "world" was "hello"
+PASS anyOf
+FAIL anyOf-fail :: 
+Expected: (is "nope" or is "nah")
+     but: was "hello"
+PASS custom-even
+FAIL custom-even-fail :: 
+Expected: an even number
+     but: was <5>
+FAIL reason-three-arg :: 数值检查
+Expected: is <7>
+     but: was <6>

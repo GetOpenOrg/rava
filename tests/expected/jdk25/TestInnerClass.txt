@@ -1,0 +1,11 @@
+outer-field/static-outer
+inner-field
+counter=2
+outerCount=2
+after second inner counter=4
+i1 sees=4 i2 sees=4
+outer-field>middle>innermost
+outer-field/static-outer
+StaticHelper: from static nested
+StaticHelper
+done

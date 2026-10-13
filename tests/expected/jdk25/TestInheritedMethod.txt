@@ -1,0 +1,9 @@
+[a, b, c]
+true
+false
+false
+2
+-1
+0
+3
+a

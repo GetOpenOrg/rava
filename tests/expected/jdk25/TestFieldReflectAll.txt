@@ -1,0 +1,7 @@
+get i=1 l=2 z=true s=3 b=4 c=c f=1.5 d=2.25 str=s ref=null
+direct 10 20 false 30 40 x 3.5 4.75 t t
+static counter=7 name=n CONST=42 CONST_S=k
+static set 8 m
+IllegalAccessException on static final
+IllegalArgumentException on type mismatch
+inherited sub sub

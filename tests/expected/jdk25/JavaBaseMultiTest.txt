@@ -1,0 +1,10 @@
+Objects.equals a,a: true
+Objects.equals a,b: false
+Objects.isNull null: true
+Objects.nonNull hello: true
+opt.isPresent: true
+opt.get: hello
+empty.isPresent: false
+requireNonNull: test
+toString opt.get: hello
+toString null,def: default

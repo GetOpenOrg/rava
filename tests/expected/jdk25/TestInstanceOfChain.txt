@@ -1,0 +1,17 @@
+puppy:puppy
+dog:woof
+cat:meow
+animal:animal
+string:5
+int:42
+unknown
+null instanceof Animal=false
+null chain=unknown
+old-animal:dog
+old-unknown
+upcast is Dog=true
+upcast is Puppy=true
+bad cast -> ClassCastException
+dogs/cats=301
+scope ok woof
+done

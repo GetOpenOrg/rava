@@ -1,0 +1,11 @@
+lazy-count=1
+same-class=true
+init-count=1
+cached=true
+arr=[Ljava.lang.String; isArray=true
+prim-arr=[[I
+dollar=InitCounter
+dot-ex=ClassNotFoundException
+prim-ex=ClassNotFoundException
+prim-mirror=int
+miss-ex=ClassNotFoundException name=no.such.Clazz

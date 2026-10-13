@@ -1,0 +1,4 @@
+forEach capture: 5
+stream forEach capture: 3
+map collect: 5
+counter capture: 15

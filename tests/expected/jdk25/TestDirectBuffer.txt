@@ -1,0 +1,10 @@
+isDirect: true cap=64 zero=0
+int=1020304 long=-2 double=3.5 short=-7 char=Z
+le bytes: 13,12,11,10
+bulk: direct-memory
+slice: m remaining=6
+intview: 0 1 4 9
+crc32 direct==heap: true b0664ae6
+adler32: 47a5431c
+compressed smaller: true
+roundtrip equal: true

@@ -1,0 +1,8 @@
+plain+x+y
+plain
+plain
+fv:fancy#1
+fancy/fv
+size=5
+attrs.size=5,regular=true
+nlink=1

@@ -1,0 +1,6 @@
+named: level=2 tag=named
+listed: retries=99 mode=patched-mode budget=12345
+setter: label=after
+computed: alpha=70 beta=80
+readonly: width:private=640 height:private=480
+readonly direct: 640x480

@@ -1,0 +1,4 @@
+Something went horribly wrong: unixdict.txt (No such file or directory)
+Plausible count: 0
+Implausible count: 0
+Rule is not plausible.

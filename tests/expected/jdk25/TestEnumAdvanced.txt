@@ -1,0 +1,19 @@
+0:LOW:1
+1:MEDIUM:5
+2:HIGH:10
+valueOf HIGH=10
+bad valueOf -> IllegalArgumentException
+describe=medium(5)
+PLUS + 6+3=9
+MINUS - 6-3=3
+TIMES * 6*3=18
+medium branch
+compareTo=-2
+equals=true
+==true
+toString=ACTIVE
+hashCode stable size=3
+parse(active)=ACTIVE
+next chain=ACTIVE->CLOSED->NEW
+join=LOW,HIGH
+done

@@ -7,6 +7,10 @@ BASE_REF=${1:-96fc1cf4}
 ROOT=$(pwd)
 write_bench() { # $1=repo dir
   mkdir -p "$1/tests/e2e/99_bench" "$1/tests/expected"
+  # 期望按 JDK 版本分目录（run_tests 同口径）：检出已有版本目录（jdk*/）则写入之；基线 ref 的
+  # 旧检出仍是平铺口径，按其 run_tests 旧版读取位置落位（两布局都兼容，bench 才能跨基线对照）
+  local expdir="$1/tests/expected" sub
+  sub=$(ls -d "$expdir"/jdk*/ 2>/dev/null | head -1) && expdir="${sub%/}"
   cat > "$1/tests/e2e/99_bench/DirectMemBench.java" <<'JAVA'
 import java.lang.reflect.Field;
 import sun.misc.Unsafe;
@@ -52,7 +56,7 @@ public class DirectMemBench {
     }
 }
 JAVA
-  echo "sum=841834958266" > "$1/tests/expected/DirectMemBench.txt"
+  echo "sum=841834958266" > "$expdir/DirectMemBench.txt"
 }
 bench() { # $1=label $2=repo dir
   local d=$2

@@ -1,0 +1,7 @@
+Normal sum: 60
+Caught: negative: -5
+Exception result: -1
+Processed: HELLO;WORLD;TEST;
+Nested normal: 17
+ArithDiv: / by zero
+Nested div0: -1

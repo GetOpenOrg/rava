@@ -1,0 +1,10 @@
+toULong=4294967295
+divU=2147483647
+remU=5
+cmpU=1
+parseU=-1
+formatU=4294967295
+shiftRU=65535
+parseU2=128
+divU2=6
+cmpU2=1

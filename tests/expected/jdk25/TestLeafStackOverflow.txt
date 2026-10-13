@@ -1,0 +1,11 @@
+static-leaf: StackOverflowError deep=true
+private-leaf: StackOverflowError deep=true
+final-class-leaf: StackOverflowError deep=true
+virtual-override: StackOverflowError deep=true
+interface-default: StackOverflowError deep=true
+static-leaf: StackOverflowError deep=true
+private-leaf: StackOverflowError deep=true
+final-class-leaf: StackOverflowError deep=true
+virtual-override: StackOverflowError deep=true
+interface-default: StackOverflowError deep=true
+after: 42 0

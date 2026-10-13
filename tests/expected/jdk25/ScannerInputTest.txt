@@ -1,0 +1,22 @@
+=== Scanner from String ===
+Hello World
+Second Line
+Third Line
+=== nextInt ===
+42
+17
+99
+=== next token ===
+apple
+banana
+cherry
+=== hasNext ===
+true
+one
+true
+two
+false
+=== nextDouble ===
+3.14
+2.718
+Scanner input tests passed

@@ -1,0 +1,5 @@
+Tally suid=7
+field fRuns I
+field fFailures L
+Tally(runs=3, failures=[a, b])
+resolved:Derived

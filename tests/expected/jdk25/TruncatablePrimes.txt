@@ -1,0 +1,2 @@
+Left  Truncatable : 998443
+Right Truncatable : 739399

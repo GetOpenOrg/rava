@@ -1,0 +1,6 @@
+byteAdd=-56
+shortAdd=-25536
+charAdd=4464
+intAddDouble=12
+explicit=-51
+floatAdd=1.5

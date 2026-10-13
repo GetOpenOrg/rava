@@ -1,0 +1,9 @@
+sup-parameterized=true
+raw=TestGenericSuperclassReflect$Box
+arg=java.lang.String isClass=true
+int-arg=java.lang.Integer
+raw-super=TestGenericSuperclassReflect$Box parameterized=false
+itf=TestGenericSuperclassReflect$Sink<java.lang.String>
+listSink-raw=TestGenericSuperclassReflect$Sink arg=java.util.List<java.lang.String>
+array-arg=java.lang.String[] gat=false
+object-super-null=true

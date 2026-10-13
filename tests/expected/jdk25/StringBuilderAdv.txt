@@ -1,0 +1,15 @@
+Hello, World
+abfg
+bfg
+Hello Java
+edcba
+1
+4
+World
+Hello
+t
+4
+foo42true!
+true
+true
+done

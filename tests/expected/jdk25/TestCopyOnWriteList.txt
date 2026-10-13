@@ -1,0 +1,9 @@
+snapshot=ab
+live-size=3
+fresh=abc
+iter-remove-ex=UnsupportedOperationException
+absent-added=true
+absent-skipped=false
+size=4
+kept-snapshot=abcd
+final=b,c,d

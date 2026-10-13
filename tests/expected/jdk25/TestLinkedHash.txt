@@ -1,0 +1,15 @@
+insertion order keys=[delta, alpha, charlie, bravo]
+insertion order values=[4, 1, 3, 2]
+after update keys=[delta, alpha, charlie, bravo]
+alpha=100
+after remove+reinsert keys=[delta, charlie, bravo, alpha]
+linked set=[z, a, m] size=3
+linked first=delta
+hashmap size=4
+getOrDefault=-1
+containsKey delta=true
+entries=delta:4 charlie:3 bravo:2 alpha:7
+fromList keys=[0, 1, 2] values=[x, y, z]
+cleared isEmpty=true
+keys=[new]
+done

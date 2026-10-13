@@ -1,0 +1,24 @@
+1
+2
+1
+-1
+11
+111
+3
+222
+4
+6
+{apple=1, banana=2, cherry=3}
+apple
+cherry
+{c=3, a=1, b=2}
+true
+false
+2
+false
+3
+2
+1
+false
+true
+0

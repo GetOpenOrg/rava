@@ -1,0 +1,13 @@
+count: 3
+sum: 600
+min: 100
+max: 300
+avg: 200.0
+empty count: 0
+empty sum: 0
+empty min: 9223372036854775807
+empty max: -9223372036854775808
+combined count: 4
+combined sum: 100
+combined min: 10
+combined max: 40

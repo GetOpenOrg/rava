@@ -1,0 +1,11 @@
+nullConcat=xnull|nully
+internSame=true
+region=true
+contentEq=true
+sub=ell
+valueOfInt=123
+valueOfBool=true
+valueOfCharArr=ab
+getBytesLen=3
+repeat=ababab
+compareTo=-20

@@ -1,0 +1,9 @@
+manifest-version=rava-e2e
+entry=res/app.txt size=11 dir=false
+content=jar-content
+item=META-INF/MANIFEST.MF
+item=dir/nested.dat
+item=res/app.txt
+nested=3
+missing=true
+done=true

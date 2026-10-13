@@ -1,0 +1,27 @@
+init: a=false b=0 c=false d=7 s=0 ch=0 tail=-1
+A.cas(false,true)=true
+A.cas(false,true)=false
+C.cae(true,true)=false
+C.getAndSet(true)=false
+A.cas(true,false)=true
+bool: a=false b=0 c=true d=7 s=0 ch=0 tail=-1
+B.cas(0,-1)=true
+B.cas(0,5)=false
+B.cae(-1,127)=-1
+B.getAndAdd(1)=127
+D.cae(0,1)=7
+D.getAndSet(-128)=7
+byte: a=false b=-128 c=true d=-125 s=0 ch=0 tail=-1
+S.cas(0,-30000)=true
+S.cae(1,2)=-30000
+CH.cas(0,0xFFFF)=true
+CH.getAndSet('z')=65535
+short/char: a=false b=-128 c=true d=-125 s=-30000 ch=122 tail=-1
+A.cas(true,false)=true
+B.cas(9,10)=true
+mixed: a=false b=10 c=true d=-125 s=-30000 ch=122 tail=-1
+before invoke
+Lazy.<clinit>
+bump(2)=42
+bump(3)=43
+sum=56850

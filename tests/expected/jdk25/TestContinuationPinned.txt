@@ -1,0 +1,8 @@
+sync sleep: sameCarrier=true carrierNonEmpty=true
+sync park: state=WAITING
+sync park: resumed sameCarrier=true
+sync sleep: state=TIMED_WAITING
+sync sleep: interrupted=true stillInterrupted=false
+sync parkNanos: elapsed>=25ms true
+clinit sleep: values=42,42 sameCarrier=true carrierNonEmpty=true
+after: virtual=true

@@ -1,0 +1,1 @@
+Largest non-McNugget number in the search space is 43

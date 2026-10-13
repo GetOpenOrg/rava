@@ -1,0 +1,7 @@
+Shannon entropy of                             "1223334444": 1.846439344671
+Shannon entropy of                    "1223334444555555555": 1.969811065278
+Shannon entropy of                                 "122333": 1.459147917027
+Shannon entropy of                             "1227774444": 1.846439344671
+Shannon entropy of                            "aaBBcccDDDD": 1.936260027532
+Shannon entropy of   "1234567890abcdefghijklmnopqrstuvwxyz": 5.169925001442
+Shannon entropy of                           "Rosetta Code": 3.084962500721

@@ -1,0 +1,12 @@
+isEnum=true
+const=ALPHA ord=0
+const=BETA ord=1
+const=GAMMA ord=2
+beta-class= isEnum=false super-is-op=true
+alpha-same=true
+valueOf-hit=GAMMA
+valueOf-ex=IllegalArgumentException
+reflect-values=3
+reflect-valueOf=ALPHA
+valueOf-varargs=false
+no-method-ex=NoSuchMethodException

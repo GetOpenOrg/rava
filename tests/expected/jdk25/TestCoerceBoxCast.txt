@@ -1,0 +1,13 @@
+direct 7 7 7 0.5 0.5 99 99 true true Z Z
+widen -3 -3 1234 1234 90 90 true
+narrow-box -3 1234 Z -3 1234
+tern 7.0 99 true true 1
+inst true true true true true true true
+cls java.lang.Integer java.lang.Double java.lang.Character java.lang.Boolean
+generic 41 42 43
+array 7 99 Z -3 1234 true 1.25 0.5
+cmp 0 -1 25
+cce-int-to-long ClassCastException
+cce-long-to-double ClassCastException
+cce-char-to-int ClassCastException
+cce-int-to-bool ClassCastException

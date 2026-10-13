@@ -1,0 +1,4 @@
+open: A
+use: A
+close: A
+done

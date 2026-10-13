@@ -1,0 +1,6 @@
+All public fields (including inherited):
+public int ListFields.examplePublicField	42
+
+All declared fields (excluding inherited):
+public int ListFields.examplePublicField	42
+private boolean ListFields.examplePrivateField	true

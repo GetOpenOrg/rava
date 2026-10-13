@@ -1,0 +1,10 @@
+dangling exists = false / nofollow true
+dangling is link = true
+dangling set times nofollow = 946684800000
+dangling set mtime follow -> NoSuchFileException
+dangling read attrs follow -> NoSuchFileException
+loop exists = false / nofollow true
+loop is link = true
+loop set times nofollow = 946684800000
+loop set mtime follow -> FileSystemException
+loop read attrs follow -> FileSystemException

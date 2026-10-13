@@ -1,0 +1,15 @@
+char ret: z true Character
+char arg: 66
+short: 42
+byte: -7
+widen Byte->int: 30
+widen Short->int: 40
+widen Character->int: 970
+int[] arg: 10
+String[] ret: 3 c
+List ret: [t0, t1, t2]
+List arg: 2
+Map ret: {aa=2, b=1}
+static: 144
+void: null touched
+IAE for Integer->char

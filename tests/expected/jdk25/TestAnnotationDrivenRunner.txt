@@ -1,0 +1,18 @@
+once:boot
+prepare label=calc#adds
+adds counter=15
+MathSuite.adds -> ok [declared in MathSuite]
+prepare label=calc#divides
+MathSuite.divides -> ok(expected ArithmeticException) [declared in MathSuite]
+prepare label=calc#inherited
+base.inherited by MathSuite
+MathSuite.inherited -> ok [declared in BaseSuite]
+prepare label=calc#overridden
+math.overridden counter=10
+MathSuite.overridden -> ok [declared in MathSuite]
+prepare label=calc#wrongException
+MathSuite.wrongException -> fail UnsupportedOperationException: boom [declared in MathSuite]
+TextSuite.fails -> fail IllegalArgumentException: bad txt#fails [declared in TextSuite]
+upper TXT#UPPER
+TextSuite.upper -> ok [declared in TextSuite]
+score={MathSuite=7, TextSuite=1}

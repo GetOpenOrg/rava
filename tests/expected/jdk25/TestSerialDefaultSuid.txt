@@ -1,0 +1,13 @@
+TestSerialDefaultSuid$Point suid=-3934497139763546550
+TestSerialDefaultSuid$WithStatic suid=-7737715162675241730
+TestSerialDefaultSuid$Holder suid=-8157692652546613697
+TestSerialDefaultSuid$R suid=0
+TestSerialDefaultSuid$E suid=0
+java.lang.String suid=-6849794470754667710
+java.lang.Integer suid=1360826667806852920
+java.util.ArrayList suid=8683452581122892189
+Point(1,2)
+WithStatic(w,0,0)
+Holder[a, b]
+sealed=true false false
+permitted=Circle Square nonSealed=true

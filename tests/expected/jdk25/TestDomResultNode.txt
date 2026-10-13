@@ -1,0 +1,7 @@
+node-type-doc=true
+root=cfg
+attr-len=1 ver=2
+attr-item=ver
+text-attrs-null=true
+roundtrip=<cfg ver="2"><k>v</k><empty/></cfg>
+edited-contains=true

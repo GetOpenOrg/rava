@@ -1,0 +1,12 @@
+Circle r=5.0
+a drawable object
+Circle r=10.0
+Rectangle 3.0x4.0
+a drawable object
+Circle r=1.0
+true
+true
+false
+Circle r=10.0
+Rectangle 3.0x4.0
+Circle r=3.0

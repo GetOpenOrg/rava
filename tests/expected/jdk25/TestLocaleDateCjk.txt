@@ -1,0 +1,14 @@
+zh-CN full=2026年10月3日星期六
+zh-CN long=2026年10月3日
+zh-TW full=2026年10月3日 星期六
+zh-TW long=2026年10月3日
+ja-JP full=2026年10月3日土曜日
+ja-JP long=2026年10月3日
+ko-KR full=2026년 10월 3일 토요일
+ko-KR long=2026년 10월 3일
+de-DE full=Samstag, 3. Oktober 2026
+de-DE long=3. Oktober 2026
+dow-cn=星期一
+dow-kr=금
+month-jp=10月
+month-de=März

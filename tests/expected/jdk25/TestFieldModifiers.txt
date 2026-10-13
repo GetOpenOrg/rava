@@ -1,0 +1,4 @@
+counter=3
+secret=x
+mask=ffff
+ok

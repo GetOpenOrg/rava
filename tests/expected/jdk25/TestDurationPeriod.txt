@@ -1,0 +1,12 @@
+hours=25
+minutes=1500
+plus=1590
+minus=1470
+seconds=5400
+between=2
+py=2
+pm=3
+pd=10
+pwith=P5Y3M10D
+pbetween=P3Y3M7D
+ptotMonths=39

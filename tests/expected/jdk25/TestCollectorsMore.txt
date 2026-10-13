@@ -1,0 +1,10 @@
+byLen={1=[a], 2=[bb, cc], 3=[ddd]}
+part={false=[a], true=[bb, cc, ddd]}
+toMap={1=a, 2=bbcc, 3=ddd}
+toSet=[a, bb, cc, ddd]
+avg=2.0
+sum=8,max=3,avg=2.0
+join=a-bb-cc-ddd
+summing={1=1, 2=4, 3=3}
+mapping={1=A, 2=BB,CC, 3=DDD}
+teeing=8=3

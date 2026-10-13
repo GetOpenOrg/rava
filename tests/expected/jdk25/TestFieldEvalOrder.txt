@@ -1,0 +1,5 @@
+field: (3,8) now=8
+static: (10,20) now=20
+split: (100,150) now=150
+sum: 10 now=1
+static sum: 89 now=24

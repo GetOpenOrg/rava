@@ -1,0 +1,17 @@
+read int NPE
+read long NPE
+read double NPE
+read ref NPE
+write int NPE
+write ref NPE
+compute ran
+write order NPE calls=1
+compound NPE
+chain NPE
+chain write NPE
+generic NPE
+array elem NPE
+ok chain 42 NPE
+inner 2
+finally ran
+got -1

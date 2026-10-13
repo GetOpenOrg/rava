@@ -1,0 +1,31 @@
+[风控分级 switch 规则表]
+  amountFen=0         -> LOW
+  amountFen=9900      -> LOW
+  amountFen=9999      -> LOW
+  amountFen=10000     -> MEDIUM
+  amountFen=99999     -> MEDIUM
+  amountFen=100000    -> HIGH
+  amountFen=999999    -> HIGH
+  amountFen=1000000   -> VERY_HIGH
+
+[会员等级 switch 规则表]
+  points=0        -> NORMAL
+  points=999      -> NORMAL
+  points=1000     -> SILVER
+  points=9999     -> SILVER
+  points=10000    -> GOLD
+  points=99999    -> GOLD
+  points=100000   -> VIP
+
+[上传策略 switch 规则表]
+  fileSize=0           -> DIRECT
+  fileSize=10485760    -> DIRECT
+  fileSize=10485761    -> MULTIPART
+  fileSize=524288000   -> MULTIPART
+  fileSize=524288001   -> LARGE_FILE
+
+[异常分支]
+  input=-1 -> amount must not be negative
+  input=null -> amount must not be null
+
+等价校验: 20/20 个边界输入与 if/else 实现结果一致

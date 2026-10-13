@@ -1,0 +1,9 @@
+size=40
+sum=780
+missing=0
+get17=17
+absent=null
+contains=true,false
+old3=3 new3=300
+rm5=5 size=39
+done

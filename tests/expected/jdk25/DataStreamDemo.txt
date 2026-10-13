@@ -1,0 +1,11 @@
+true
+42
+1234567890123
+3.14159
+2.71
+true
+127
+32767
+Hello DataStream
+true
+done

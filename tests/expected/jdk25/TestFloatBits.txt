@@ -1,0 +1,10 @@
+doubleFromBits=1.0
+bits=4607182418800017408
+floatFromBits=1.0
+floatBits=1065353216
+isNaN=true
+isInf=true
+cmp=1
+minNormal=2.2250738585072014E-308
+maxValue=3.4028235E38
+compare=-1

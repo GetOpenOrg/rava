@@ -1,0 +1,13 @@
+4
+1
+8
+true
+false
+2
+5
+8
+2
+3
+false
+apple
+cherry

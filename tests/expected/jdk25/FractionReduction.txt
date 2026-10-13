@@ -1,0 +1,79 @@
+Fractions with digits of length 2 where cancellation is valid.  Examples:
+    When 6 is removed, 16/64 = 1/4
+    When 9 is removed, 19/95 = 1/5
+    When 6 is removed, 26/65 = 2/5
+    When 9 is removed, 49/98 = 4/8
+Number of fractions where cancellation is valid = 4.
+    The digit 6 was removed 2 times.
+    The digit 9 was removed 2 times.
+
+Fractions with digits of length 3 where cancellation is valid.  Examples:
+    When 3 is removed, 132/231 = 12/21
+    When 3 is removed, 134/536 = 14/56
+    When 3 is removed, 134/938 = 14/98
+    When 3 is removed, 136/238 = 16/28
+    When 3 is removed, 138/345 = 18/45
+    When 9 is removed, 139/695 = 13/65
+    When 4 is removed, 143/341 = 13/31
+    When 6 is removed, 146/365 = 14/35
+    When 9 is removed, 149/298 = 14/28
+    When 9 is removed, 149/596 = 14/56
+    When 9 is removed, 149/894 = 14/84
+    When 5 is removed, 154/253 = 14/23
+Number of fractions where cancellation is valid = 122.
+    The digit 3 was removed 9 times.
+    The digit 4 was removed 1 times.
+    The digit 5 was removed 6 times.
+    The digit 6 was removed 15 times.
+    The digit 7 was removed 16 times.
+    The digit 8 was removed 15 times.
+    The digit 9 was removed 60 times.
+
+Fractions with digits of length 4 where cancellation is valid.  Examples:
+    When 3 is removed, 1234/4936 = 124/496
+    When 9 is removed, 1239/6195 = 123/615
+    When 4 is removed, 1246/3649 = 126/369
+    When 9 is removed, 1249/2498 = 124/248
+    When 9 is removed, 1259/6295 = 125/625
+    When 9 is removed, 1279/6395 = 127/635
+    When 3 is removed, 1283/5132 = 128/512
+    When 9 is removed, 1297/2594 = 127/254
+    When 9 is removed, 1297/3891 = 127/381
+    When 9 is removed, 1298/2596 = 128/256
+    When 9 is removed, 1298/3894 = 128/384
+    When 9 is removed, 1298/5192 = 128/512
+Number of fractions where cancellation is valid = 660.
+    The digit 1 was removed 14 times.
+    The digit 2 was removed 25 times.
+    The digit 3 was removed 92 times.
+    The digit 4 was removed 14 times.
+    The digit 5 was removed 29 times.
+    The digit 6 was removed 63 times.
+    The digit 7 was removed 16 times.
+    The digit 8 was removed 17 times.
+    The digit 9 was removed 390 times.
+
+Fractions with digits of length 5 where cancellation is valid.  Examples:
+    When 9 is removed, 12349/24698 = 1234/2468
+    When 5 is removed, 12356/67958 = 1236/6798
+    When 3 is removed, 12358/14362 = 1258/1462
+    When 3 is removed, 12358/15364 = 1258/1564
+    When 3 is removed, 12358/17368 = 1258/1768
+    When 3 is removed, 12358/19372 = 1258/1972
+    When 3 is removed, 12358/21376 = 1258/2176
+    When 3 is removed, 12358/25384 = 1258/2584
+    When 9 is removed, 12359/61795 = 1235/6175
+    When 2 is removed, 12364/32596 = 1364/3596
+    When 9 is removed, 12379/61895 = 1237/6185
+    When 2 is removed, 12386/32654 = 1386/3654
+Number of fractions where cancellation is valid = 5087.
+    The digit 1 was removed 75 times.
+    The digit 2 was removed 40 times.
+    The digit 3 was removed 376 times.
+    The digit 4 was removed 78 times.
+    The digit 5 was removed 209 times.
+    The digit 6 was removed 379 times.
+    The digit 7 was removed 591 times.
+    The digit 8 was removed 351 times.
+    The digit 9 was removed 2988 times.
+

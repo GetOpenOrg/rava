@@ -1,0 +1,14 @@
+main: TestCallerSensitiveLookup
+nested: TestCallerSensitiveLookup$Nested
+default: TestCallerSensitiveLookup$Probe
+relay: TestCallerSensitiveLookup$Relay
+counter getAndAdd: 7 -> 10
+before Holder
+Holder.<clinit>
+bump: 42
+bump: 47
+before Lazy
+Lazy.<clinit>
+handle ready
+hidden 42
+main saw private: allowed (nestmate)

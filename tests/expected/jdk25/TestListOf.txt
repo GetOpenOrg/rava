@@ -1,0 +1,19 @@
+list=[a, b, c] size=3
+get(1)=b
+indexOf(b)=1
+contains(d)=false
+size=3 get(two)=2
+sorted keys=[one, three, two]
+set size=2 contains(x)=true
+entries size=2 k1=10
+List.of add -> UnsupportedOperationException
+List.of set -> UnsupportedOperationException
+Map.of put -> UnsupportedOperationException
+Map.of remove -> UnsupportedOperationException
+List.of(null) -> NullPointerException
+Map.of null value -> NullPointerException
+original=[p, q, r] copy=[p, q]
+Arrays.asList mutable set=[M, n]
+Arrays.asList add -> UnsupportedOperationException
+a-b-c-
+done

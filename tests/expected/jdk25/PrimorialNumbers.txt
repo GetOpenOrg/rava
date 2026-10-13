@@ -1,0 +1,15 @@
+primorial(0): 1
+primorial(1): 2
+primorial(2): 6
+primorial(3): 30
+primorial(4): 210
+primorial(5): 2310
+primorial(6): 30030
+primorial(7): 510510
+primorial(8): 9699690
+primorial(9): 223092870
+primorial(10^1) has length 10
+primorial(10^2) has length 220
+primorial(10^3) has length 3393
+primorial(10^4) has length 45337
+primorial(10^5) has length 563921

@@ -1,0 +1,11 @@
+ints -4294835711
+round 69708
+widen -299 101 66
+long 9223372036854775807
+double 7.5E299
+bool true
+char 98
+floats 5.0 true NaN -Infinity
+reject bool-int IAE
+reject str-int IAE
+reject int-char IAE

@@ -1,0 +1,6 @@
+add=7
+sub=8
+mul=30
+op=ADD:10
+op=SUB:6
+op=MUL:16

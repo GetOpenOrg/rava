@@ -2,7 +2,8 @@
 #
 # 语料（e2e 全集、抽查、作业、expected 生成）在所有机器上用同一个 JDK 构建：
 # javac / java / jmods / golden JVM 全部同源，CLDR 等随小版本漂移的数据两侧一致。
-# 21.0.11 = 现有 tests/expected 的生成版本（golden 无需重生成）。升级参考 JDK 是一次
+# 21.0.11 = tests/expected/jdk21/ 的生成版本（期望按 JDK 版本分目录，golden 无需重生成；
+# 其他版本目录 jdk<N>/ 只放版本差异用例，由对应 JDK 经 --java-home 生成）。升级参考 JDK 是一次
 # 显式的基线事件：改本文件 + 全量重生成 expected + 双跑闸门，单独立项。
 #
 # 消费方：scripts/fetch_reference_jdk.sh（取包 / 校验 / 定位，唯一解析实现）；

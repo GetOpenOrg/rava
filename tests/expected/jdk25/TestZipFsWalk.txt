@@ -1,0 +1,11 @@
+entry=/
+entry=/a
+entry=/a/x.txt
+entry=/b
+entry=/b/y
+entry=/b/y/z.txt
+entry=/top.txt
+attrs-size=3 file=true dir=false
+dir-attr=true
+list-count=1
+done=true

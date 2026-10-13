@@ -1,0 +1,6 @@
+hello, world, java
+[hello, world, java]
+5
+3
+2
+5

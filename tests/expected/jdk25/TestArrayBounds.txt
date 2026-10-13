@@ -1,0 +1,7 @@
+oob=ArrayIndexOutOfBoundsException
+negSize=NegativeArraySizeException
+copy=[1, 2, 3, 4, 5]
+overlap=[1, 1, 2, 3, 4]
+range=[2, 3, 4]
+clone=[1, 2, 3, 4, 5]
+asList=[a, b]

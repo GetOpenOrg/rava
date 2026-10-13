@@ -1,0 +1,16 @@
+mh lookup: TestCallerSensitiveHandle
+other mh lookup: TestCallerSensitiveHandle$Other
+mh invoke own private: secret()
+mh invoke outsider: IllegalAccessException: class TestCallerSensitiveHandle cannot access a member of class Outsider with modifiers "private static"
+mh forName: TestCallerSensitiveHandle$Nested
+mh get own private: secret
+mh get nested private: inner
+mh get outsider: IllegalAccessException: class TestCallerSensitiveHandle$$InjectedInvoker/0x? cannot access a member of class Outsider with modifiers "private static"
+other mh get host private: secret
+other mh get outsider: IllegalAccessException: class TestCallerSensitiveHandle$Other$$InjectedInvoker/0x? cannot access a member of class Outsider with modifiers "private static"
+mh get outsider again: IllegalAccessException: class TestCallerSensitiveHandle$$InjectedInvoker/0x? cannot access a member of class Outsider with modifiers "private static"
+reflect get own private: secret
+reflect get outsider: IllegalAccessException: class TestCallerSensitiveHandle$$InjectedInvoker/0x? cannot access a member of class Outsider with modifiers "private static"
+public lookup Field.get: IllegalAccessException: Attempt to lookup caller-sensitive method using restricted lookup object
+public lookup lookup(): IllegalAccessException: Attempt to lookup caller-sensitive method using restricted lookup object
+public lookup length: 3

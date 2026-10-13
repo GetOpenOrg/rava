@@ -1,0 +1,10 @@
+isPresent: true
+get: hello
+empty isPresent: false
+nullable isPresent: false
+nonNull isPresent: true
+nonNull get: world
+empty orElse: default
+opt orElse: hello
+opt toString: Optional[hello]
+empty toString: Optional.empty

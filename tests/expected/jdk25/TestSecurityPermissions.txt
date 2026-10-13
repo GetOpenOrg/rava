@@ -1,0 +1,15 @@
+elements=[PropertyPermission:user.*:read, RuntimePermission:exitVM.0:, SecurityPermission:getProperty.*:]
+implies user.home read=true
+implies user.home write=false
+implies getProperty.x=true
+implies setProperty.x=false
+implies exitVM.1=false
+all name=<all permissions> actions=<all actions> implies=true eq=true hash=1
+withAll implies exitVM.9=true
+cs eq=true hashEq=true ne=false loc=file:/opt/app/lib/app.jar certs=null
+cs toString=(file:/opt/app/lib/app.jar <no signer certificates>)
+pae exception=java.io.IOException: disk gone
+pae cause same=true
+pae toString=java.security.PrivilegedActionException: java.io.IOException: disk gone
+ok=fine
+unchecked passes through: unchecked

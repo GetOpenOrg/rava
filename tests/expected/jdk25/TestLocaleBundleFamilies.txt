@@ -1,0 +1,12 @@
+pattern = Saturday, March 9, 2024
+localized = Saturday, March 9, 2024
+month = Mar / M
+dow = Saturday
+symbols = January Sun [BC, AD] [AM, PM]
+decimal = . , %
+currency = $ Euro
+timezone = UTC
+language = French / France
+calendar = first 1 minimal 1
+break segments = 5
+collated = [apple, Apple, banana, cherry]

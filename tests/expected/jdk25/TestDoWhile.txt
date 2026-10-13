@@ -1,0 +1,24 @@
+body executed once
+i=0
+i=1
+i=2
+after loop i=3
+top n=0
+top n=1
+even n=2
+top n=2
+top n=3
+even n=4
+top n=4
+top n=5
+even n=6
+iterations=6 n=6
+k=0
+k=1
+break at k=2
+00 01 
+10 11 
+20 21 
+found=5
+v=10
+done

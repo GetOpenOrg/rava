@@ -1,0 +1,11 @@
+after findStatic: 
+after invoke static=42: StaticTarget.<clinit>;
+second invoke static=10: 
+after findStaticGetter: 
+after get value=41: GetterTarget.<clinit>;
+after findStaticSetter: 
+after set label=set: SetterTarget.<clinit>;
+after findConstructor: 
+after new n=7: CtorTarget.<clinit>;
+warm direct=1: Warm.<clinit>;
+warm handles hits=112 obj=true: 

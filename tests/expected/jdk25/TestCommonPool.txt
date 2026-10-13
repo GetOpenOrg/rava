@@ -1,0 +1,7 @@
+cpus>0 true parallelism>0 true consistent true
+fib(24)=46368
+parallel sum=5000050000
+parallel collect=[0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225, 256, 289, 324, 361]
+combine=42
+worker true
+merge {0=100, 1=100, 2=100, 3=100, 4=100, 5=100, 6=100, 7=100, 8=100, 9=100}

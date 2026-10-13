@@ -1,0 +1,14 @@
+size=6
+peek=1
+drained=[1, 1, 3, 5, 7, 9]
+poll on empty=null
+peek on empty=null
+element on empty -> NoSuchElementException
+descending=[9, 7, 5, 3, 1, 1]
+removed charlie=true
+words size=2
+ordered=[alpha, delta]
+jobs=[high(9), mid(5), low(1)]
+sorted snapshot=[2, 4, 6, 8]
+head=2
+done

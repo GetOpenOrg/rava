@@ -1,0 +1,4 @@
+varLambda=36
+varLambdaLen=4
+sum=9
+lambda-ok

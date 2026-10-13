@@ -1,0 +1,8 @@
+
+Was I lucky? false
+
+Should I go? true
+
+Should I go? true
+
+Go home

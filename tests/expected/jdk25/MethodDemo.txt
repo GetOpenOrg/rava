@@ -1,0 +1,5 @@
+n1=valueOf,mods=9,ret=Integer
+p1params=1,ret=int
+p2params=2,ret=int
+caught=java.lang.Integer.noSuchMethodHere()
+hasParseInt=true

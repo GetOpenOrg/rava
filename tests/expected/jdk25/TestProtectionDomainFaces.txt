@@ -1,0 +1,9 @@
+pd-nonnull=true
+codesource-nonnull=true
+principals-empty=true
+permissions-nonnull=true
+pd-class=true
+lang-spec=null
+lang-name=java.lang
+own-impl-null=true own-title-null=true
+same-pd=true

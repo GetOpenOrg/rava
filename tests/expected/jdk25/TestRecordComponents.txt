@@ -1,0 +1,28 @@
+Point isRecord=true
+  components=2
+  int x | name=x type=int accessor=x:int declaring=Point value=3
+  int y | name=y type=int accessor=y:int declaring=Point value=4
+Mixed isRecord=true
+  components=8
+  long id | name=id type=long accessor=id:long declaring=Mixed value=9
+  double w | name=w type=double accessor=w:double declaring=Mixed value=1.5
+  boolean flag | name=flag type=boolean accessor=flag:boolean declaring=Mixed value=true
+  char c | name=c type=char accessor=c:char declaring=Mixed value=z
+  java.lang.String name | name=name type=java.lang.String accessor=name:java.lang.String declaring=Mixed value=anon
+  int[] data | name=data type=[I accessor=data:[I declaring=Mixed value=int[2]
+  java.util.List tags | name=tags type=java.util.List accessor=tags:java.util.List declaring=Mixed value=[a, b]
+  TestRecordComponents$Point origin | name=origin type=TestRecordComponents$Point accessor=origin:TestRecordComponents$Point declaring=Mixed value=Point[x=0, y=1]
+Empty isRecord=true
+  components=0
+Circle isRecord=true
+  components=1
+  double r | name=r type=double accessor=r:double declaring=Circle value=2.0
+Plain isRecord=false
+  components=null
+String isRecord=false
+  components=null
+int[] isRecord=false
+  components=null
+Shape isRecord=false
+  components=null
+7

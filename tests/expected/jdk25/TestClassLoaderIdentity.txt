@@ -1,0 +1,12 @@
+string-null=true
+int-null=true
+void-null=true
+self-app=true
+arr-null=true
+self-arr-app=true
+platform-not-null=true
+app-parent-platform=true
+platform-parent-null=true
+same-identity=true
+child-parent=true
+child-delegate=true

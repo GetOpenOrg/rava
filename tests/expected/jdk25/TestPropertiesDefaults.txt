@@ -1,0 +1,9 @@
+color top=blue mid=blue dflt=blue containsKey=false
+size top=L mid=L dflt=L containsKey=false
+name top=top mid=null dflt=top containsKey=true
+count top=null mid=null dflt=none containsKey=true
+missing top=null mid=null dflt=none containsKey=false
+after remove size=M
+count via defaults=7 raw=3
+names=[color, count, name, size]
+sys file.separator=/ absent=null dflt=d

@@ -1,0 +1,14 @@
+array total=10
+array join=a-b-c-
+name=x
+name=y
+name=z
+1x 1y 1z 2x 2y 2z 3x 3y 3z 4x 4y 4z 
+array unchanged=[1, 2, 3, 4]
+object mutated=v!
+structure modify -> ConcurrentModificationException
+after iterator remove=[p, r]
+flatten=1,2,3,4,
+selected=2
+chars=ABC
+done

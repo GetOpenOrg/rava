@@ -1,0 +1,11 @@
+[d800 3d 37] len=3
+[37 dfff] len=2
+[1 dc01 37] len=3
+[61 de00 62] len=3
+[d83d 7c 37] len=3
+[3c d83d 3e] len=3
+[de00 37 d83d] len=3
+[d83d de00] len=2 cp=1f600
+true 1
+-1
+[74 dbff 7a] len=3

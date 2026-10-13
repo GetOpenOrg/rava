@@ -1,0 +1,14 @@
+iface named a=b: false
+iface named a=c: false
+iface object a=d: true
+iface object a=str: false
+iface object b=a: true
+iface hash a: 92903040
+iface hash b: 5
+iface str: SimpleName(alice) UpperName(ALICE)
+class named d=a: true
+class object d=b: false
+class object d=null: false
+class hash d: 92903040
+class str d: SimpleName(alice)
+object equals: true 92903040 SimpleName(alice)

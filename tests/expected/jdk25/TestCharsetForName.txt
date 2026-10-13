@@ -1,0 +1,21 @@
+UTF-8 -> UTF-8
+utf8 -> UTF-8
+Unicode-1-1-UTF-8 -> UTF-8
+ISO-8859-1 -> ISO-8859-1
+latin1 -> ISO-8859-1
+iso8859_1 -> ISO-8859-1
+US-ASCII -> US-ASCII
+ascii -> US-ASCII
+UTF-16 -> UTF-16
+UTF-16BE -> UTF-16BE
+utf-16le -> UTF-16LE
+UTF-32 -> UTF-32
+UTF-32BE -> UTF-32BE
+UTF-32LE -> UTF-32LE
+true
+true
+true
+true true
+UCE: x-no-such-charset
+ICNE: bad name!
+0 72 0 105

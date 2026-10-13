@@ -1,0 +1,4 @@
+removed C: true
+duplicate: Hook previously registered
+main returns
+hook B ran on thread

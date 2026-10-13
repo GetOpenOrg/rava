@@ -1,0 +1,13 @@
+RED
+0
+RED
+GREEN
+1
+BLUE
+2
+It is RED
+Color: RED
+Color: GREEN
+Color: BLUE
+Planet: EARTH
+Gravity*100: 980

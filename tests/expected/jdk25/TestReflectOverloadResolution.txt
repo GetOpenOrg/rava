@@ -1,0 +1,12 @@
+int=int:1
+box=Integer:1
+obj=Object:s
+autobox=int:7
+varargs-array=var:b/1
+varargs-empty=var:c/0
+varargs-spread-ex=IllegalArgumentException
+isVarArgs=true
+private=secret:5
+generic-param=T
+generic-varargs=1
+type-mismatch-ex=IllegalArgumentException

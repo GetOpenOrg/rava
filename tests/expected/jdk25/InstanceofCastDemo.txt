@@ -1,0 +1,7 @@
+true
+false
+false
+5
+String: Hello
+Integer: 42
+null

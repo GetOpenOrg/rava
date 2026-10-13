@@ -1,0 +1,11 @@
+caught negative value code=400
+valid input accepted
+sub caught special code=999
+message=calc failed
+cause=ArithmeticException
+cause msg=/ by zero
+chain=outer:fail <- middle <- root cause
+msg=wrapped checked causeIsThrowable=true
+as runtime=direct
+has stack frames=true
+done

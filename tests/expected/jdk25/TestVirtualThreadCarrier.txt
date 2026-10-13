@@ -1,0 +1,7 @@
+identity/locals preserved: 16/16 errors=[]
+main TL after: null ITL: inherited-from-main
+interrupt after yield=true after park=true sleep threw=true after sleep=false
+join(50ms) on parked: false alive=true
+join after unpark: true alive=false state=TERMINATED
+child ITL: from-virtual-parent
+many: 10000

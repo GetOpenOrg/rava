@@ -1,0 +1,32 @@
+Christian holidays, related to Easter, for each centennial from 400 to 2100 CE:
+ 400 Easter:  2 Apr  Ascension: 11 May  Pentecost: 21 May  Trinity: 28 May  Corpus:  1 Jun  
+ 500 Easter:  4 Apr  Ascension: 13 May  Pentecost: 23 May  Trinity: 30 May  Corpus:  3 Jun  
+ 600 Easter: 13 Apr  Ascension: 22 May  Pentecost:  1 Jun  Trinity:  8 Jun  Corpus: 12 Jun  
+ 700 Easter: 15 Apr  Ascension: 24 May  Pentecost:  3 Jun  Trinity: 10 Jun  Corpus: 14 Jun  
+ 800 Easter: 23 Apr  Ascension:  1 Jun  Pentecost: 11 Jun  Trinity: 18 Jun  Corpus: 22 Jun  
+ 900 Easter: 28 Mar  Ascension:  6 May  Pentecost: 16 May  Trinity: 23 May  Corpus: 27 May  
+1000 Easter: 30 Mar  Ascension:  8 May  Pentecost: 18 May  Trinity: 25 May  Corpus: 29 May  
+1100 Easter:  8 Apr  Ascension: 17 May  Pentecost: 27 May  Trinity:  3 Jun  Corpus:  7 Jun  
+1200 Easter:  9 Apr  Ascension: 18 May  Pentecost: 28 May  Trinity:  4 Jun  Corpus:  8 Jun  
+1300 Easter: 18 Apr  Ascension: 27 May  Pentecost:  6 Jun  Trinity: 13 Jun  Corpus: 17 Jun  
+1400 Easter: 20 Apr  Ascension: 29 May  Pentecost:  8 Jun  Trinity: 15 Jun  Corpus: 19 Jun  
+1500 Easter:  1 Apr  Ascension: 10 May  Pentecost: 20 May  Trinity: 27 May  Corpus: 31 May  
+1600 Easter:  2 Apr  Ascension: 11 May  Pentecost: 21 May  Trinity: 28 May  Corpus:  1 Jun  
+1700 Easter: 11 Apr  Ascension: 20 May  Pentecost: 30 May  Trinity:  6 Jun  Corpus: 10 Jun  
+1800 Easter: 13 Apr  Ascension: 22 May  Pentecost:  1 Jun  Trinity:  8 Jun  Corpus: 12 Jun  
+1900 Easter: 15 Apr  Ascension: 24 May  Pentecost:  3 Jun  Trinity: 10 Jun  Corpus: 14 Jun  
+2000 Easter: 23 Apr  Ascension:  1 Jun  Pentecost: 11 Jun  Trinity: 18 Jun  Corpus: 22 Jun  
+2100 Easter: 28 Mar  Ascension:  6 May  Pentecost: 16 May  Trinity: 23 May  Corpus: 27 May  
+
+Christian holidays, related to Easter, for years from 2010 to 2020 CE:
+2010 Easter:  4 Apr  Ascension: 13 May  Pentecost: 23 May  Trinity: 30 May  Corpus:  3 Jun  
+2011 Easter: 24 Apr  Ascension:  2 Jun  Pentecost: 12 Jun  Trinity: 19 Jun  Corpus: 23 Jun  
+2012 Easter:  8 Apr  Ascension: 17 May  Pentecost: 27 May  Trinity:  3 Jun  Corpus:  7 Jun  
+2013 Easter: 31 Mar  Ascension:  9 May  Pentecost: 19 May  Trinity: 26 May  Corpus: 30 May  
+2014 Easter: 20 Apr  Ascension: 29 May  Pentecost:  8 Jun  Trinity: 15 Jun  Corpus: 19 Jun  
+2015 Easter:  5 Apr  Ascension: 14 May  Pentecost: 24 May  Trinity: 31 May  Corpus:  4 Jun  
+2016 Easter: 27 Mar  Ascension:  5 May  Pentecost: 15 May  Trinity: 22 May  Corpus: 26 May  
+2017 Easter: 16 Apr  Ascension: 25 May  Pentecost:  4 Jun  Trinity: 11 Jun  Corpus: 15 Jun  
+2018 Easter:  1 Apr  Ascension: 10 May  Pentecost: 20 May  Trinity: 27 May  Corpus: 31 May  
+2019 Easter: 21 Apr  Ascension: 30 May  Pentecost:  9 Jun  Trinity: 16 Jun  Corpus: 20 Jun  
+2020 Easter: 12 Apr  Ascension: 21 May  Pentecost: 31 May  Trinity:  7 Jun  Corpus: 11 Jun  

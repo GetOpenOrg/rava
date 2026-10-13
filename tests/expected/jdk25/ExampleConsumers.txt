@@ -1,0 +1,19 @@
+Using anonymous class
+Bruce
+Logan
+Peter
+
+Using lambda expression
+Bruce
+Logan
+Peter
+
+Using method reference (will create a class on the fly)
+Bruce
+Logan
+Peter
+
+Using stream to map to another class
+Mr. Bruce
+Mr. Logan
+Mr. Peter

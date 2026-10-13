@@ -1,0 +1,27 @@
+neg-len: java.lang.ArrayIndexOutOfBoundsException: arraycopy: length -1 is negative
+neg-srcpos: java.lang.ArrayIndexOutOfBoundsException: arraycopy: source index -1 out of bounds for int[3]
+neg-dstpos: java.lang.ArrayIndexOutOfBoundsException: arraycopy: destination index -1 out of bounds for int[3]
+src-last: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last source index 4 out of bounds for int[3]
+dst-last: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last destination index 4 out of bounds for int[3]
+both-over: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last source index 5 out of bounds for int[3]
+overflow: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last source index 2147483648 out of bounds for int[3]
+negpos-len0: java.lang.ArrayIndexOutOfBoundsException: arraycopy: source index -1 out of bounds for int[3]
+len0-at-end: ok
+d untouched: [10, 20, 30]
+null-src: java.lang.NullPointerException: null
+null-dst: java.lang.NullPointerException: null
+null-src-len0: java.lang.NullPointerException: null
+src-not-array: java.lang.ArrayStoreException: arraycopy: source type java.lang.String is not an array
+dst-not-array: java.lang.ArrayStoreException: arraycopy: destination type java.lang.Integer is not an array
+prim-mismatch: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy int[] into long[]
+prim-to-obj: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy int[] into object array[]
+obj-to-prim: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy object array[] into byte[]
+obj-array-neg: java.lang.ArrayIndexOutOfBoundsException: arraycopy: length -2 is negative
+elem-store: java.lang.ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String
+strs prefix: [a, b, null, null]
+elem-store-sub: ok
+nums: [1, 2]
+type-mismatch-obj: java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy java.lang.Integer[] into java.lang.String[]
+overlap fwd: [1, 1, 2, 3, 4]
+overlap back: [2, 3, 4, 5, 5]
+chars: ello

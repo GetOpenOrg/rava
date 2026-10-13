@@ -1,0 +1,10 @@
+findConstructor StringBuilder = handle-ctor
+findConstructor ArrayList = [a, b] size 2
+getDeclaredConstructor ArrayList = [a, b]
+getConstructor LinkedList -> LinkedList []
+getConstructor ArrayDeque -> ArrayDeque []
+static field class = held
+map READ_ONLY = mapped bytes / READ_ONLY
+array ctor -> NoSuchMethodException
+interface ctor -> NoSuchMethodException
+abstract ctor -> InstantiationException

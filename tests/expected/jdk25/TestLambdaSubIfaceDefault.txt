@@ -1,0 +1,9 @@
+BmpPred
+BmpPred.union
+true true false
+BmpPred
+BmpPred.union
+true
+Diamond Diamond Diamond
+Pred true
+Reabstract

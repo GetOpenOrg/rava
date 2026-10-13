@@ -1,0 +1,10 @@
+zh-CN int=1,234,567 dec=1,234.5
+  group=U+002C decimal=U+002E minus=[-]
+zh-TW int=1,234,567 dec=1,234.5
+  group=U+002C decimal=U+002E minus=[-]
+ja-JP int=1,234,567 dec=1,234.5
+  group=U+002C decimal=U+002E minus=[-]
+ko-KR int=1,234,567 dec=1,234.5
+  group=U+002C decimal=U+002E minus=[-]
+de-DE int=1.234.567 dec=1.234,5
+  group=U+002E decimal=U+002C minus=[-]

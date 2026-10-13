@@ -1,0 +1,2 @@
+encodedUrl = aHR0cDovL2dpdGh1Yi5jb20vd2VzbGV5ZWdiZXJ0bw==
+decodedUrl = http://github.com/wesleyegberto

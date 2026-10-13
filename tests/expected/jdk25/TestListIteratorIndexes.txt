@@ -1,0 +1,11 @@
+start-next-idx=0 prev-idx=-1
+has-prev=false
+after-next-idx=1 prev-idx=0
+end-idx=2 has-next=true
+prev-val=b idx-after-prev=1
+after-set=[a, B, c]
+after-add=[a, X, B, c] idx=2
+add-prev-skip=false
+after-remove=[X, B, c] idx=0
+mid-idx=2 prev-idx=1
+mid-val=c

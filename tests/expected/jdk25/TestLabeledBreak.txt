@@ -1,0 +1,40 @@
+pair 0,0
+pair 0,1
+pair 0,2
+pair 0,3
+pair 0,4
+pair 1,0
+pair 1,1
+pair 1,2
+pair 1,3
+pair 1,4
+pair 2,0
+pair 2,1
+pair 2,2
+pair 2,3
+row-start 0
+  col 0
+  col 1
+row-start 1
+  col 0
+  col 1
+row-start 2
+  col 0
+  col 1
+row-start 3
+  col 0
+  col 1
+after scan k=8
+d 000
+d 001
+d 002
+d 010
+d 011
+d 012
+d 020
+d 021
+deep done
+case0
+case1 hit
+search done
+end

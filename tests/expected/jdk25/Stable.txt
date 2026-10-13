@@ -1,0 +1,14 @@
+abi is engaged to jon
+bea is engaged to fred
+cath is engaged to bob
+dee is engaged to col
+eve is engaged to hal
+fay is engaged to dan
+gay is engaged to gav
+hope is engaged to ian
+ivy is engaged to abe
+jan is engaged to ed
+Marriages are stable
+abi and bea have switched partners
+fred likes bea better than abi and bea likes fred better than their current partner
+Marriages are unstable

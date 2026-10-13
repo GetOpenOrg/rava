@@ -1,0 +1,16 @@
+raw-path=/p%20ath
+path=/p ath
+raw-query=q=a%20b
+query=q=a b
+raw-frag=f%20g
+frag=f g
+opaque=true hier=true
+mailto-scheme=mailto ssp=someone@example.com
+ascii-str=https://example.com/%E4%B8%AD
+resolve=https://h/base/y
+relativize=https://h/base/y
+normalize=https://h/b/c
+built=https://example.com/path?k=v#ref query=k=v
+idn-ascii=xn--bcher-kva.example
+idn-back=bücher.example
+idn-ex=IllegalArgumentException

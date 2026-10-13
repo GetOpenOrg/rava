@@ -1,0 +1,4 @@
+int: 42
+str: hello
+double: 3.14
+other: true

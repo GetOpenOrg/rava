@@ -1,0 +1,24 @@
+distinct: 4
+limit 3: 3
+skip 3: 4
+peek count: 7
+filter>2: 4
+findFirst>2: 3
+findFirst>100: -1
+anyMatch>3: true
+allMatch>0: true
+noneMatch>10: true
+count even: 3
+reduce sum: 18
+mapToInt sum: 12
+sorted desc: [4, 3, 2, 1]
+joining: hello, world, hi
+toSet size: 4
+IntStream sum 1-5: 15
+IntStream even 1-10: 5
+Optional map: HELLO
+orElse empty: default
+isEmpty: true
+flatMap: [1, 2, 3, 4, 5]
+Stream.of filter: [20, 30]
+Done.

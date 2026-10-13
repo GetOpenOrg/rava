@@ -1,0 +1,5 @@
+annotated-run=6
+deprecated-ok
+op=42
+annoName=MyAnno
+holderName=RepeatHolder

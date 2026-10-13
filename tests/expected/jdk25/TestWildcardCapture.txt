@@ -1,0 +1,12 @@
+sum ints=6.0
+sum doubles=4.0
+first int=1
+numbers=[0, 1, 2]
+objects=[0, 1]
+swapped ints=[3, 2, 1]
+reversed ints=[1, 2, 3]
+reversed doubles=[2.5, 1.5]
+max word=zebra
+max int=3
+nested size=2 first sum=6.0
+done

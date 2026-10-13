@@ -1,0 +1,8 @@
+initial-index=0 initial-error=-1
+after-set=2
+partial=123 stopped-at=3 no-error=true
+from-offset=2 index=5
+fail-null=true error-at=0
+date-partial=true stopped=10
+date-fail=true err=4
+pp-tostring=true

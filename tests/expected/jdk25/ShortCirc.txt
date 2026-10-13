@@ -1,0 +1,28 @@
+a
+F and F = false
+
+a
+b
+F or F = false
+
+a
+F and T = false
+
+a
+b
+F or T = true
+
+a
+b
+T and F = false
+
+a
+T or F = true
+
+a
+b
+T and T = true
+
+a
+T or T = true
+

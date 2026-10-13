@@ -1,0 +1,10 @@
+initial=0
+sum=42
+intValue=42 longValue=42
+after-dec=41
+then-reset=41
+after-reset=0
+reset=0
+neg-acc=0
+double-sum=0.30000000000000004
+double-cancel=false

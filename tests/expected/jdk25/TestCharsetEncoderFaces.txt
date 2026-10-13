@@ -1,0 +1,9 @@
+gbk-can-encode=true utf8-can=true
+enc-hex=D6D0CEC4
+dec=中
+has-remaining=true remaining=4
+read-only=false has-array=true array-offset=0
+after-compact-pos=2
+dup-shares=true
+slice-shares=true
+overflow-ex=BufferOverflowException

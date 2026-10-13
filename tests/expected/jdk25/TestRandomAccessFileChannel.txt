@@ -1,0 +1,11 @@
+len=9
+head=hello
+int-back=41424344
+ch-size=9 pos=9
+ch-read=hello
+after-ch-write=hello!
+read-byte=104
+bool=true dbl=0.5
+ro-read=104
+ro-write-ex=IOException
+done=true

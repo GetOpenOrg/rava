@@ -1,0 +1,7 @@
+initial=null
+direct-subject=rava
+getter-subject=rava
+count=42 via-get=42 void-null=true,true
+a=one/1
+b=two/0
+static=label:ok

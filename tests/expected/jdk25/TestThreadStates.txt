@@ -1,0 +1,9 @@
+new: NEW
+sleep: TIMED_WAITING
+after: TERMINATED
+wait(): WAITING
+wait(ms): TIMED_WAITING
+park: WAITING
+monitor enter: BLOCKED
+join: WAITING
+done: TERMINATED

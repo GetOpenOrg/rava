@@ -25,7 +25,7 @@ pub const JAVA_RUNTIME_HOME: &str = "/java-runtime";
 
 /// JDK21 `$JAVA_HOME/lib/tzdb.dat`（102,820 字节，sha256
 /// 36cf71e6…c7a1e3）——`TzdbZoneRulesProvider` 的时区规则数据源，
-/// 与 `tests/expected/TestZonedDateTime.txt` 的金本位同源。
+/// 与 `tests/expected/jdk21/TestZonedDateTime.txt` 的金本位同源。
 static TZDB_DAT: &[u8] = include_bytes!("tzdb.dat");
 
 /// 嵌入资源句柄的光标状态。

@@ -1,0 +1,20 @@
+wordCount: [apple=3, banana=2, cherry=1]
+optional chain: HELLO JAVA
+empty chain: default
+joiner: [one, two, three]
+empty joiner: {}
+Alice: 95
+Dave: 0
+has Bob: true
+has Eve: false
+doubled prices: [apple=200, banana=400]
+original: [1, 2, 3]
+copy: [1, 2, 3, 4]
+reversed: [1, 2, 3, 2, 1]
+freq of 2: 2
+a: 1
+b: 2
+long words: avocado, banana, blueberry, cherry
+lengths: [5, 6, 7, 9, 6]
+entries: [Alice=95, Bob=87]
+Done.

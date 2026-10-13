@@ -1,0 +1,10 @@
+initial=init-value
+after-set=ctx-a
+after-remove=init-value
+plain-null=true
+plain-set=x
+iso=10,2
+child-plain=null
+child-inherit=from-parent
+child-after-set=child-local
+parent-untouched=from-parent

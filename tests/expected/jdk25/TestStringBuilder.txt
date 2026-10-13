@@ -1,0 +1,22 @@
+Hello, World!
+13
+H
+HELLO
+hello
+hello
+true
+hello Java
+true
+true
+world
+3
+42
+true
+true
+false
+2
+foobar42
+8
+abc
+age=25
+pi=3.14

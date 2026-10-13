@@ -1,0 +1,15 @@
+Woof
+Meow
+Rex fetches!
+Woof
+Buddy fetches!
+Meow
+Luna purrs!
+Woof
+Max fetches!
+3
+100000
+A
+42.0
+false
+false
