@@ -225,7 +225,10 @@ def bench(test: str, profiles: list, reps: int, out: str, run_timeout: float) ->
             r["text_bytes"] = text_bytes(exe)
         shutil.rmtree(tdir, ignore_errors=True)
         rec["profiles"][p] = r
-    expected = ROOT / "tests" / "expected" / f"{name}.txt"
+    # 期望按 JDK 版本分目录（run_tests.py 同口径）；版本取仓库 .jdk-version（语料基线唯一真源）。
+    # 缺失时 want=None（本脚本既有口径：不校验输出一致性，只计时）。
+    jdk_major = (ROOT / ".jdk-version").read_text().strip()
+    expected = ROOT / "tests" / "expected" / f"jdk{jdk_major}" / f"{name}.txt"
     want = expected.read_text() if expected.exists() else None
     live = [p for p in profiles if "bin_bytes" in rec["profiles"][p]]
     for i in range(reps):

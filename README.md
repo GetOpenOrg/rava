@@ -107,7 +107,7 @@ rava/
 ├── scripts/                       # run_tests.py 跑批编排与对照工具（经 rava_env.sh / 直接执行 rava 二进制）
 ├── tests/
 │   ├── e2e/                       # e2e 语料（61 个类别，1066 例）
-│   ├── expected/                  # JVM 生成的期望输出
+│   ├── expected/                  # JVM 生成的期望输出（按 JDK 版本分目录 jdk21/、jdk25/…；顶层仅运行期 fixture 数据文件）
 │   ├── unit/                      # 脚本单元测试（python3 -m unittest tests.unit.<模块>）；生成器单测在 generator/ 下 cargo test
 │   └── lib_pilot/                 # jar 输入模式（JUnit / hamcrest crate）试点
 ├── docs/                          # 任务、兼容性、方案与报告

@@ -13,7 +13,7 @@
     python3 scripts/run_tests.py --skip-failed               # 跳过清单内已知失败（干净面快速迭代）
     python3 scripts/run_tests.py --record-passed             # PASS 即时落盘；中断续跑自动跳过已通过（删清单即从头）
     python3 scripts/run_tests.py --batch 3/10                # 全量按发现序均分 10 批，跑第 3 批（可与 --record-passed 叠加）
-    python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt（并行，-j 控制并发）
+    python3 scripts/run_tests.py --update-expected       # 重新生成 expected/jdk<N>/*.txt（N=本次语料 JDK 主版本）
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比（动态对照照常，不触发 cargo）
     python3 scripts/run_tests.py --no-dyn                # 关闭动态对照（JVM 类加载轨迹 vs 静态闭包，缺省开）
     python3 scripts/run_tests.py --jdk 25                # 实验：改用本机 JDK 25（非参考构建，结果标记）
@@ -43,7 +43,11 @@
   1. `rava build --stop-after emit` 转译 → overlay 手写 + 生成 build/<test>/{java_runtime,user}
   2. `rava compile <scratch>`（共享 target 缓存；重型判定 / 超时 / 产物清单在 rava 内，结果读
      build_status.json / build_artifacts.json），直接执行产物捕获 stdout
-  3. 与 tests/expected/<Class>.txt diff
+  3. 与 tests/expected/jdk<N>/<Class>.txt diff（N = 本次语料 JDK 主版本；期望按 JDK 版本分目录，
+     用户 2026-10-13 裁决口径：jdk21/ 为参考基线全集，其他版本目录只放版本差异用例——实验 JDK
+     （--jdk / --java-home）运行遇缺失时按缺省生成逻辑（golden JVM）写入本版本目录后照常对比；
+     参考构建运行不自动生成，缺失仍按原缺省 SKIP。运行期 fixture 数据文件（sqrt.dat 等，
+     Java 源字面引用 tests/expected/<file>）不分版本，保持平铺）
   rava 二进制（build/analyzer-target/release/rava）在批次开头构建一次，逐例直接执行。
   转译成功后（cargo 之前）另做动态对照（scripts/dyn_compare.py，闭包计划 C5）：真实 JVM 跑原始
   Java 程序的类加载轨迹 vs closure.json，结果行附 `dyn miss N / extra M prov P%`，明细落盘
@@ -89,6 +93,10 @@ OUT    = ROOT / "build"     # scratch 根（可被 --out-dir 覆盖）
 # 混用会互相覆盖生成物且 target fingerprint 反复失效全量重编。None=版本未解析
 # （不加层，向后兼容旧 build/<test>/ 布局）。
 JDK_LAYER: "str | None" = None
+# 期望目录的 JDK 版本层（用户 2026-10-13 裁决）：期望按版本分目录 tests/expected/jdk<N>/<Class>.txt，
+# 目录名由本次语料 JDK 主版本推导（不写死 21/25）。main() 在 apply_jdk_choice 解析后设置；
+# 参考 JVM 生成期望（--update-expected）与实验 JDK 运行时缺失补生成均写入本版本目录。
+EXPECTED_LAYER: "str | None" = None
 
 
 def _versioned(path: Path) -> Path:
@@ -1081,7 +1089,15 @@ def _precheck_summary(bin_name: str) -> str:
 
 
 def _expected_path(class_name: str) -> Path:
-    return EXPECT / f"{class_name}.txt"
+    if not EXPECTED_LAYER:
+        sys.exit("[expected] JDK 版本层未确定（apply_jdk_choice 未解析主版本），"
+                 "期望路径不可推导——经 main() 运行即可")
+    return EXPECT / EXPECTED_LAYER / f"{class_name}.txt"
+
+
+def _expected_rel(class_name: str) -> str:
+    """SKIP / diff 标头展示用的相对路径（expected/jdk<N>/<Class>.txt）。"""
+    return f"expected/{EXPECTED_LAYER}/{class_name}.txt"
 
 
 def _read_expected(class_name: str) -> str | None:
@@ -1089,11 +1105,25 @@ def _read_expected(class_name: str) -> str | None:
     return p.read_text() if p.exists() else None
 
 
+def _ensure_expected(java_file: Path, class_name: str) -> 'str | None':
+    """实验 JDK（--jdk / --java-home，JDK_REFERENCE 为 None）运行时期望缺失：按缺省生成逻辑
+    （golden JVM javac+java，与 --update-expected 同一实现）生成并写入本版本目录 jdk<N>/，
+    返回生成内容；参考构建运行不自动生成（缺失维持原缺省 SKIP），生成失败返回 None。"""
+    if JDK_REFERENCE is not None:
+        return None
+    status, detail = _update_expected(java_file)
+    if status != "updated":
+        print(f"[expected-gen] {class_name}: 生成失败（{status}）{detail}")
+        return None
+    print(f"[expected-gen] {class_name}: 本版本期望缺失，已按 golden JVM 生成写入 {EXPECTED_LAYER}/")
+    return _read_expected(class_name)
+
+
 def _diff(expected: str, actual: str, class_name: str) -> list[str]:
     return list(difflib.unified_diff(
         expected.splitlines(keepends=True),
         actual.splitlines(keepends=True),
-        fromfile=f"expected/{class_name}.txt",
+        fromfile=f"expected/{EXPECTED_LAYER}/{class_name}.txt",
         tofile=f"cargo run --bin {_to_bin_name(class_name)}",
     ))
 
@@ -1145,7 +1175,9 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
         return "timeout", f"exceeded {fmt_dur(EXPECTED_GEN_TIMEOUT)}"
     if r.returncode != 0:
         return "java-fail", (r.stderr.strip().splitlines() or ["java error"])[-1][:120]
-    _expected_path(class_name).write_text(r.stdout)
+    out = _expected_path(class_name)
+    out.parent.mkdir(parents=True, exist_ok=True)   # 版本目录（jdk25/ 等非参考目录可能尚不存在）
+    out.write_text(r.stdout)
     return "updated", f"{r.stdout.count(chr(10))} lines"
 
 
@@ -1226,7 +1258,10 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         expected   = _read_expected(class_name)
 
         if expected is None:
-            print(f"{prog} [ SKIP ] {rel}  (no expected/{class_name}.txt)")
+            # 实验 JDK 缺期望 → golden JVM 补生成进本版本目录；参考构建维持缺省 SKIP
+            expected = _ensure_expected(java_file, class_name)
+        if expected is None:
+            print(f"{prog} [ SKIP ] {rel}  (no {_expected_rel(class_name)})")
             skipped += 1
             continue
 
@@ -1387,13 +1422,14 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     name_w = _name_width(files)
     aux_by_file: dict = {}
 
-    # 过滤无 expected 文件的测试
+    # 过滤无 expected 文件的测试（实验 JDK 下缺失先按 golden JVM 补生成，仍缺才跳过）
     pending: list[Path] = []
     skipped = 0
     for f in files:
-        if _read_expected(_class_name(f)) is None:
+        cn = _class_name(f)
+        if _read_expected(cn) is None and _ensure_expected(f, cn) is None:
             _pline(name_w, "SKIP", f.relative_to(E2E),
-                   f"(no expected/{_class_name(f)}.txt)", prog=f"[{files.index(f)+1:>3}/{len(files)}]")
+                   f"(no {_expected_rel(cn)})", prog=f"[{files.index(f)+1:>3}/{len(files)}]")
             skipped += 1
         else:
             pending.append(f)
@@ -1658,7 +1694,8 @@ def main():
     ap = argparse.ArgumentParser(description="rava 端到端测试框架")
     ap.add_argument("--filter",          metavar="STR", nargs="+", help="只测试路径中包含任意指定字符串的文件（可传多个）")
     ap.add_argument("--no-run",          action="store_true", help="只生成 Rust，不执行对比（仅顺序模式）")
-    ap.add_argument("--update-expected", action="store_true", help="重新生成 expected/*.txt（用 java 运行）")
+    ap.add_argument("--update-expected", action="store_true",
+                    help="重新生成期望到 tests/expected/jdk<N>/<Class>.txt（N=本次语料 JDK 主版本，golden java 运行）")
     ap.add_argument("--out-dir",         metavar="DIR", default=None,
                     help="scratch 根目录（默认 build/；每测试在其下建独立子目录）")
     ap.add_argument("--jobs", "-j",      type=int, default=1, metavar="N",
@@ -1737,7 +1774,7 @@ def main():
     if args.failed and args.skip_failed:
         sys.exit("--failed 与 --skip-failed 互斥：前者只跑清单、后者跳过清单。")
 
-    global OUT, SHARED_TARGET, LOGS_DIR, JDK_LAYER, KEEP_ARTIFACTS, RELEASE_LTO
+    global OUT, SHARED_TARGET, LOGS_DIR, JDK_LAYER, KEEP_ARTIFACTS, RELEASE_LTO, EXPECTED_LAYER
     KEEP_ARTIFACTS = args.keep_artifacts
     RELEASE_LTO = args.release_lto
     if args.out_dir is not None:
@@ -1769,6 +1806,12 @@ def main():
     JDK_LAYER = str(_current_jdk_major()) if _current_jdk_major() is not None else None
     SHARED_TARGET = _versioned(OUT) / "target"
     LOGS_DIR = _versioned(OUT) / "logs"
+    # 期望目录版本层同源推导（tests/expected/jdk<N>/，目录名不写死版本值）；主版本缺失即报错
+    # ——期望路径无平铺兜底（全部期望已按版本分目录），静默回退会把所有测试判成 SKIP。
+    if _current_jdk_major() is None:
+        sys.exit("[expected] 语料 JDK 主版本未解析（rava jdk --json 未返回 major），"
+                 "期望版本目录 jdk<N>/ 不可推导")
+    EXPECTED_LAYER = f"jdk{_current_jdk_major()}"
 
     if args.prune_passed:
         sys.exit(_prune_passed(_current_jdk_major()))

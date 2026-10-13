@@ -7,7 +7,8 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 T=${1:?TestName}; SEQ=${2:-100}; PAR=${3:-20}
 SRC=$(find tests/e2e -name "$T.java" | head -1)
-EXP=tests/expected/$T.txt
+# 期望按 JDK 版本分目录（参考 JDK = 语料基线版本，取 .jdk-version 唯一真源）
+EXP=tests/expected/jdk$(cat .jdk-version)/$T.txt
 OUT=build/vtrep/$T; rm -rf $OUT; mkdir -p $OUT/runs
 JH=$(scripts/fetch_reference_jdk.sh) || exit 1
 echo "== host: $(uname -m) cpus=$(nproc) ref=$(git rev-parse --short HEAD)"
