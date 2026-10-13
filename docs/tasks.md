@@ -141,6 +141,8 @@
 - **C1d a5-4 反射构造器按描述符收窄（c1d-a54-reflect，10-11，c1d 计划 §38.4）**：非用户类构造器只暴露被请求的描述符。请求来自三处：查找点由 Class 数组抽象值推出（null / 空数组 / 类字面量定长数组）；record 规范构造器查找按分量类型（`record_constructor_lookups`）；公开枚举在调用者处判定，包装方法与只读元数据的调用者（`computeDefaultSUID` / `superHasAccessibleConstructor`）不请求。DeepCopy 3001 → 2659（−342，`sun/nio/cs` −291），StockTrans 2999 → 2657，TestSerialDefaultSuid 3006 → 2664，HelloWorld 580 不变；三集合都是基线子集，DeepCopy 种子 0 / 1 / 2 一致；抽查 12 / 12，closure lib 244、closure_cli 12 / 12 通过。遗留：按 Constructor 对象来源请求（取代调用者清单）、基本类型类入描述符。
 - **c1d-fmt2（10-10 完工待合批，分支 c1d-fmt2）**：C1d 能力③，详见 c1d 计划 §33.7。
 - **s7k6 回收（10-13 完工待合批，分支 s7k6-recover，基 31e4762d，与 batch-1014 无文件重叠）**：s7k6-uta 本地重跑收口（13/0/1 rc=0）+ s7k6_peak.sh sccache 防护（强制 `RUSTC_WRAPPER=""`）与 `PEAK_OUT` 覆盖 + marker_crate_probe 用法防坑提示 + §9.9/tasks.md 回填；纯文档与诊断脚本，无生成器/运行时行为变更，合批免抽查。
+- **lib-tests JVM golden 全量（10-13 完工待合批，分支 libtests-jvm-goldens，基 batch-1014@22409c66）**：28 项目 / 55 入口 JVM 侧 golden 收齐（45 干净 = 26 OK + 19 CP_FIX；redis×3 无服务优雅退出、aspectj 未织入、polyglot 按口径记缺引擎）+ 13 项目 form.toml cp 收敛（含 netty-codec→netty-codec-base 净替换）；四个上游遗留落台账（esper×2 antlr4 4.7 版本失配、Thymeleaf ognl 3.3.x 失配、frameworks micronaut-http/spring-web 未钉、asm 项目悬空引用 ChildClassLoader）；纯 golden 存档 + form.toml，无生成器变更，合批免抽查。
+- **lib-tests 语料/脚本收尾（10-13 完工待合批，分支 libtests-corpusfix，基 batch-1014@22409c66）**：AsmCommonsMain 语料自足化（内联 ClassWriter，JVM golden 7 行全 PASS，rs 侧意外 GOLDEN OK——第 22 个点亮）+ lib_pilot_golden.sh 项目模式简单名 FQCN 推导（guava 验证 golden 与存档 diff 空）；语料 1 文件 + 诊断脚本，无生成器变更，合批免抽查。
   - 机制 B（`[concrete] object_results` = `Formatter.parse`）已恢复。内存受控靠结果对象按内容合并，用户 printf 不再污染 Formatter.format 靠枢纽形参槽污染。
   - 修复具体上下文的映像静态活性缺口（LahNumbers NPE，failure_patterns `concrete-ctx-image-static-dead`）。
   - 对 main b1dae15c 实测：
