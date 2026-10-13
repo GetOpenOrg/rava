@@ -369,10 +369,13 @@ pub struct Engine<'a> {
     hub_upgraded: usize,
     /// 调用点 → 所连枢纽（输出分派结果用）
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
-    /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)
+    /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)。
+    /// 对象集经内容驻留池共享分配（§4.19：站点累计集与汇集节点键同内容共用一份）
     gathers: Vec<(gather::Slot, u32, bool)>,
-    gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
+    gather_ids: HashMap<(gather::Slot, bool, gather::SetKey), u32>,
     gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<[u32]>)>>,
+    /// 对象集内容驻留池（`gather.rs`）
+    gather_pool: gather::SetPool,
     /// 手写方法调用点 (序号, 实参, 元素槽) → (当前汇集节点, 累计数组)：该实参数组元素流向写入来源（`gather.rs::gather_hw_elems`）
     hw_gather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
     /// 手写读内存调用点 (序号, 元素槽) → (当前汇集节点, 累计数组)：源实参数组元素流向结果（`gather.rs::gather_hw_read`）
