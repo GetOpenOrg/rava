@@ -90,6 +90,7 @@ HelloWorld 只做一次 `println`，却有 `java/util/stream` 169 个翻译类�
 
 - 不再用正则：解析 `#[jvm_native(upcalls = …)]` / `#[jvm_boundary(…)]` 属性、`T::default()` + `_init_not_null()` 分配点、fn 签名与函数体里的**类型路径**（按 Rust 名称解析规则解析 `use` 和同模块名）。
 - 每个手写 fn 都作为图上的节点（「手写体」），它的回调、分配、类型引用是这个节点的出边；**只有它被触达时**这些出边才生效。
+- 被并入的被调 fn 体内调用点的接收者归属（on_self）沿全程 `self.f(…)` 的调用链保持、经非 `self` 接收者到达即取消，两种链都可达时两个变体并存（2026-10-12 修复 `hw-upcall-self-lost-in-helper`，`close_transitive` / `objects::absorb_body` 复用 `value_self` 的 keep 链按（fn, keep）吸收；此前一律取消，`&self` 辅助 fn 内的 `self.X()` 上调与 native 的 this 断开，手写侧曾以「上调留在 native 体内」规避，现已解除）。
 - **回调由算法推断，声明只兜底**（`engine/hw_infer.rs`）：手写层与生成层命名空间同构，调用点按「接收者静态类型（方法调用）/ 路径类型（`T::m(…)` 关联函数）+ Rust 名 + 实参个数」反解为 Java 方法引用，与 `upcalls` 声明同等处理。
   - 接收者静态类型的来源：形参 / `let` 标注、构造调用、字段访问器 `__get_f()`，以及链式调用的返回类型（`SType::Call`：`options.iterator()` 的返回类型取 Java 描述符 → `it.next()` 的接收者为 `Iterator`）。
   - 名字匹配规则与 `hw_member` 一致：先匹配无重载时的裸名或描述符 mangle 名，全层次都不中时再按 Java 名前缀回退。手写层对重载成员也可能用裸名或缩写后缀调用。

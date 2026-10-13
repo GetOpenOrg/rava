@@ -62,6 +62,8 @@ d279b821 之后 B 仍在，说明与 cfg 无关。708cf86a 让两版本 callStac
 
 手写规则：对 this 的 Java 上调必须写在 native 体内，辅助 fn 只做无 self 的准备工作。已登记为 `hw-upcall-self-lost-in-helper`。扫描器对 `&self` 辅助内 `self.X()` 的 on_self 传递属于闭包分析器（engine / handwritten）改进项，留给后续，本分支不动。
 
+（10-12 补记：分析器侧已修——df026eed 调用点沿全程 `self.f(…)` 的调用链保持 on_self（复用 value_self 的 keep 链），上述手写规则不再需要；规避已解除（5f1908c6，`__walk_batches` 恢复），见 failure_patterns 同条目。）
+
 ### C. JDK 21 DeepCopy 闭包翻倍（回归，已修 d279b821）
 
 本机 `--stop-after emit` 二分（同一 rava 二进制，只换 runtime 文件）：

@@ -100,7 +100,9 @@ pub struct TypedCall {
     pub srecv: Option<SType>,
     /// 各实参的字符串字面量值（见 `syntax::str_lit`；非字面量为 None）
     pub lits: Vec<Option<String>>,
-    /// 接收者是本 fn 的 `self` / `self.0`，即被调 Java 方法自身的接收者（经同文件被调 fn 传递来的调用不算）
+    /// 接收者是本 fn 的 `self` / `self.0`，即被调 Java 方法自身的接收者。经同文件被调 fn 传递来的调用
+    /// 只在调用链全程以 `self` 为接收者（`self.f(…)`）时保持（同 [`FieldAccess::value_self`]，
+    /// `hw-upcall-self-lost-in-helper`）
     pub on_self: bool,
 }
 
