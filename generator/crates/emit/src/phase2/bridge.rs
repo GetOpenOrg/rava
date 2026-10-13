@@ -281,6 +281,16 @@ pub fn resolve_bridge_member<'c>(
             return None;
         }
     }
+    // 接收者自己的真实方法已按同一槽位（vt_bin + 槽成员名）入 impl：桥成员再入同名槽即
+    // E0201 重复定义（assertj AbstractListAssert.as：真实 as_str_arr_obj 与桥成员同落
+    // AbstractIterableAssert__VTable::as_str_arr_obj）
+    if let Some(m) = recv.and_then(|r| r.find(name, &real_param)) {
+        let m_slot = if m.vtable_name.is_empty() { m.rust_name.as_str() } else { m.vtable_name.as_str() };
+        let slot_here = if vtable_name.is_empty() { member_name.as_str() } else { vtable_name.as_str() };
+        if m.virtual_in == vt_bin && m_slot == slot_here {
+            return None;
+        }
+    }
     Some(BridgeMember { member_name, vt_bin, real_sig, real_rust, real_classes, real_want, bridge, vtable_name, inherited_real })
 }
 
