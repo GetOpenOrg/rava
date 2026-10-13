@@ -278,41 +278,10 @@ fn superclass_chain(class_slash: &str) -> impl Iterator<Item = &str> {
 }
 
 /// static 判定：经方法元数据表（L3 分派协议的 static/虚分派判别面）。
-///
-/// 行内查找的有序索引（2026-10-12，ikopt2）：类方法表的行序 = slot（Method / Constructor
-/// 对象携带的 slot 即行号），**冻结只读、不可重排**——构建侧排序会改写全部 slot 语义，
-/// 故不动表、不动发射，在首次判定时从冻结表按 (name, descriptor) 派生进程级有序索引
-///（见 [`STATIC_INDEX`]），热路径 = 类行二分（同 [`crate::meta::row`] 口径）+ 类内
-/// (name, descriptor) 二分。紧凑三元组（3 指针宽）也使小类的顺序扫比整行
-/// `MethodMeta`（约 130 字节/行，跨缓存行）便宜。
 fn is_static_descriptor(class_slash: &str, name: &str, descriptor: &str) -> bool {
-    let table = crate::meta::class_methods();
-    let i = table.partition_point(|(k, _)| *k < class_slash);
-    let idx: &[(&'static str, &'static str, bool)] = match table.get(i) {
-        Some(&(k, _)) if k == class_slash => STATIC_INDEX.get_or_init(build_static_index)[i].1.as_ref(),
-        _ => return false, // 表外类 → 非 static（与原 meta::row + find 同应答）
-    };
-    // 个位数行时二分不敌顺序扫（基准与真实反射的声明类多为 2–5 行）
-    if idx.len() <= 8 {
-        return idx.iter().find(|e| e.0 == name && e.1 == descriptor).is_some_and(|e| e.2);
-    }
-    matches!(idx.binary_search_by(|e| (e.0, e.1).cmp(&(name, descriptor))), Ok(i) if idx[i].2)
-}
-
-/// [`is_static_descriptor`] 的进程级有序索引：类 → 该类方法行按 (name, descriptor)
-/// 有序的 (name, descriptor, is_static) 三元组（分量是表内 `&'static` 引用 + bool 位，
-/// 不复制字符串）。从 [`crate::meta::class_methods`] 的冻结切片派生（类名有序保持，
-/// 行序不动），一次构建进程内常驻；构建 O(总方法数 × log)，量级毫秒。
-static STATIC_INDEX: std::sync::OnceLock<
-    Box<[(&'static str, Box<[(&'static str, &'static str, bool)]>)]>> = std::sync::OnceLock::new();
-
-fn build_static_index() -> Box<[(&'static str, Box<[(&'static str, &'static str, bool)]>)]> {
-    crate::meta::class_methods().iter().map(|(cls, rows)| {
-        let mut idx: Vec<(&'static str, &'static str, bool)> =
-            rows.iter().map(|m| (m.name, m.descriptor, m.is_static)).collect();
-        idx.sort_unstable_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-        (*cls, idx.into_boxed_slice())
-    }).collect()
+    crate::meta::row(crate::meta::class_methods(), class_slash)
+        .and_then(|ms| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
+        .is_some_and(|m| m.is_static)
 }
 
 // ── 实参/返回值的边界 marshalling（分派闭包发射侧共用）─────────────────────

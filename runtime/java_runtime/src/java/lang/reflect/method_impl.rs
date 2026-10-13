@@ -26,13 +26,6 @@
 //!   恒走重建路径并缓存该判定）。重建路径（parameterTypes / returnType 还原描述符）
 //!   语义与原实现逐字相同，结果驻留为 &'static——条目数 ≤ 不同的非表声明键数，
 //!   现实语料全部构造点都是表构造，本池为空。
-//! - 键缓存哈希器（2026-10-12，ikopt2）：invoke 段剖析显示缺省 RandomState+Sip13
-//!   （`hash_one` + `Sip13::write`）占 ≈2.4%——METHOD_KEYS 换 FxHash 风格轻量乘法
-//!   散列（[`FxKeyHasher`]）。碰撞安全性：键是 (类镜像指针身份, slot) 的内部值、非
-//!   攻击者可控；HashMap 查找命中哈希后必做键相等核对，碰撞的代价只是一次 12 字节
-//!   核对、绝无错答；条目数 ≤ 被 invoke 的不同声明数（编译期有界，量级数百），64 位
-//!   乘法散列下碰撞概率可忽略（n²/2⁶⁵）。指针低位对齐零熵由 slot 分量的旋转异或
-//!   补足。冷路径 REBUILT_KEYS（驻留池，现实为空）维持 RandomState 不动。
 
 use crate::java::lang::Class__Methods as _;
 use crate::java::lang::reflect::Method__Methods as _;
@@ -41,62 +34,12 @@ use super::Method;
 use crate::java::lang::Class;
 use crate::java::lang::Object;
 
-// ── 键缓存的轻量哈希器（FxHash 风格，文件头注记）─────────────────────────────────
-
-/// (usize, i32) 小键的乘法散列：每分量「旋转 5 位异或后乘固定奇常数」——无 SipHash 的
-/// 多轮压缩函数，热路径一次查键只做两次乘法 + 异或。逐字节 `write` 兜底仅为正确性
-/// （本键型不触达：usize 走 `write_usize`、i32 走 `write_i32`）。
-#[derive(Default)]
-struct FxKeyHasher { hash: u64 }
-
-/// FxHash 的固定乘数（rustc FxHasher 同款黄金比例常数）
-const FX_KEY_SEED: u64 = 0x517c_c1b7_2722_0a95;
-
-impl FxKeyHasher {
-    #[inline]
-    fn add(&mut self, w: u64) {
-        self.hash = (self.hash.rotate_left(5) ^ w).wrapping_mul(FX_KEY_SEED);
-    }
-}
-
-impl std::hash::Hasher for FxKeyHasher {
-    #[inline]
-    fn finish(&self) -> u64 { self.hash }
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.add(b as u64);
-        }
-    }
-    #[inline] fn write_u8(&mut self, i: u8)    { self.add(i as u64) }
-    #[inline] fn write_u16(&mut self, i: u16)  { self.add(i as u64) }
-    #[inline] fn write_u32(&mut self, i: u32)  { self.add(i as u64) }
-    #[inline] fn write_u64(&mut self, i: u64)  { self.add(i) }
-    #[inline] fn write_usize(&mut self, i: usize) { self.add(i as u64) }
-    #[inline] fn write_i8(&mut self, i: i8)    { self.write_u8(i as u8) }
-    #[inline] fn write_i16(&mut self, i: i16)  { self.write_u16(i as u16) }
-    #[inline] fn write_i32(&mut self, i: i32)  { self.write_u32(i as u32) }
-    #[inline] fn write_i64(&mut self, i: i64)  { self.write_u64(i as u64) }
-    #[inline] fn write_isize(&mut self, i: isize) { self.write_usize(i as usize) }
-}
-
-/// [`FxKeyHasher`] 的 BuildHasher（空类型，无 RandomState 的每实例密钥初始化）
-#[derive(Clone, Copy, Default)]
-struct FxKeyBuild;
-
-impl std::hash::BuildHasher for FxKeyBuild {
-    type Hasher = FxKeyHasher;
-    #[inline]
-    fn build_hasher(&self) -> FxKeyHasher { FxKeyHasher::default() }
-}
-
 crate::__process_static! {
     /// (声明类镜像身份, slot) → 分派键 (类名斜线形态, 方法名, 完整描述符)。
-    /// None = 已判定非表形态（恒走重建路径）。见文件头免重建注记（哈希器见其 ikopt2 段）。
+    /// None = 已判定非表形态（恒走重建路径）。见文件头免重建注记。
     static METHOD_KEYS: crate::sync_model::__RefSlot<
-        std::collections::HashMap<(usize, i32), Option<(&'static str, &'static str, &'static str)>, FxKeyBuild>>
-        = crate::sync_model::__RefSlot::new(
-            std::collections::HashMap::with_hasher(FxKeyBuild));
+        std::collections::HashMap<(usize, i32), Option<(&'static str, &'static str, &'static str)>>>
+        = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
     /// 非表形态重建键的驻留池（同一键只驻留一份；见文件头回收论证）。
     static REBUILT_KEYS: crate::sync_model::__RefSlot<
         std::collections::HashMap<(std::string::String, std::string::String, std::string::String),
