@@ -1,0 +1,4 @@
+[Spring Boot] SpringHelloController  @GetMapping("/hello") -> GET /hello
+[Quarkus]     QuarkusHelloResource  @Path("/hello") + @GET -> GET /hello
+[Micronaut]   MicronautHelloController  @Controller("/hello") + @Get -> GET /hello
+结论: 三种框架写法殊途同归，都声明了 GET /hello

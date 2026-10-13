@@ -1,0 +1,4 @@
+【ASM代理前置】sayHello 开始
+Hello World
+【ASM代理后置】sayHello 结束
+Result: 55

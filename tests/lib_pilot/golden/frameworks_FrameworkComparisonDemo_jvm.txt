@@ -1,0 +1,27 @@
+===== 版本现状 =====
+Spring Boot 4.0: 2025-11 发布，基于 Spring Framework 7，Jakarta EE 11，JSpecify 空安全
+Spring Boot 4.1: 2026-06，gRPC 一等支持、JDBC 懒初始化、内置 SSRF 防护 bean
+注意: 3.x 分支 2026-06 底已停止开源支持；4.0 的开源支持到 2026-12 结束
+Quarkus 3.3x: DI/配置/反射元数据全部构建期处理，GraalVM 原生镜像走得最顺
+Micronaut 5: 2026-05 GA，编译期注解处理生成代码，容器运行时不靠反射
+
+===== 启动与内存参考值（文章给出，非压测结论） =====
+JVM 启动:   Spring Boot 2-4s | Quarkus 0.5-1s | Micronaut 0.3-0.7s
+原生启动:   Spring Boot ~104ms | Quarkus/Micronaut ~50ms
+空闲内存:   Spring Boot ~300MB | Quarkus/Micronaut ~80MB
+
+===== 对比表 =====
+维度         | Spring Boot 4.1          | Quarkus 3.3x          | Micronaut 4/5
+-------------+--------------------------+-----------------------+------------------
+核心哲学     | 约定优于配置，运行时装配 | 构建期处理，启动前装配 | 编译期处理，无反射容器
+原生支持     | 可用，需额外适配         | GraalVM 一等公民      | 原生友好
+生态规模     | 最大                     | 中等，云原生配套齐全  | 偏小，基础件够用
+最佳场景     | 通用业务系统             | K8s 资源受限、按量计费| serverless、IoT
+
+===== 选型建议（文章结论） =====
+1. 普通业务应用默认 Spring Boot 4.1: 生态最大、招人容易、中间件零成本
+2. K8s 资源受限 / 按调用计费选 Quarkus: 300MB→80MB，同节点可多跑约三倍实例
+3. serverless / IoT / 内存卡死的小容器用 Micronaut: 更轻，编译期生成更彻底
+4. 3.x 存量项目直接上 4.1: javax→jakarta、Hibernate/Jackson 大版本、Tomcat 变化都要过一遍
+   （OpenRewrite 可自动处理大部分包名迁移）
+5. 选型不是选最好的框架，是选最不折腾的路径
