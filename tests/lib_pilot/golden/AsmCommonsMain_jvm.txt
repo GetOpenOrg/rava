@@ -1,0 +1,7 @@
+PASS no-svuid-before
+PASS svuid-added
+PASS svuid-value-fixed
+  svuid = 9205753484446140393
+PASS idempotent
+PASS deterministic
+DONE AsmCommonsMain

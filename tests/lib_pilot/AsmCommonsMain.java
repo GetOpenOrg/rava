@@ -12,6 +12,58 @@ import org.objectweb.asm.commons.SerialVersionUIDAdder;
  */
 public class AsmCommonsMain {
 
+    /** 待改写的目标源：测试内生成的最小 User POJO（等价于上游 javac 产物；单文件自足，不读外部 class）。 */
+    static final String TARGET = "com.example.cglib.User";
+
+    /** 生成 com/example/cglib/User 字节码：默认构造器 + name(String)/age(int) 字段与
+     * getter/setter 的普通 POJO，无 serialVersionUID（对齐上游 cglib 工程的 User 形态）。 */
+    static byte[] generateUser() {
+        String internal = TARGET.replace('.', '/');
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, internal, null, "java/lang/Object", null);
+        var init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        init.visitCode();
+        init.visitVarInsn(Opcodes.ALOAD, 0);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        init.visitInsn(Opcodes.RETURN);
+        init.visitMaxs(1, 1);
+        init.visitEnd();
+        cw.visitField(Opcodes.ACC_PRIVATE, "name", "Ljava/lang/String;", null, null).visitEnd();
+        var getName = cw.visitMethod(Opcodes.ACC_PUBLIC, "getName", "()Ljava/lang/String;", null, null);
+        getName.visitCode();
+        getName.visitVarInsn(Opcodes.ALOAD, 0);
+        getName.visitFieldInsn(Opcodes.GETFIELD, internal, "name", "Ljava/lang/String;");
+        getName.visitInsn(Opcodes.ARETURN);
+        getName.visitMaxs(1, 1);
+        getName.visitEnd();
+        var setName = cw.visitMethod(Opcodes.ACC_PUBLIC, "setName", "(Ljava/lang/String;)V", null, null);
+        setName.visitCode();
+        setName.visitVarInsn(Opcodes.ALOAD, 0);
+        setName.visitVarInsn(Opcodes.ALOAD, 1);
+        setName.visitFieldInsn(Opcodes.PUTFIELD, internal, "name", "Ljava/lang/String;");
+        setName.visitInsn(Opcodes.RETURN);
+        setName.visitMaxs(2, 2);
+        setName.visitEnd();
+        cw.visitField(Opcodes.ACC_PRIVATE, "age", "I", null, null).visitEnd();
+        var getAge = cw.visitMethod(Opcodes.ACC_PUBLIC, "getAge", "()I", null, null);
+        getAge.visitCode();
+        getAge.visitVarInsn(Opcodes.ALOAD, 0);
+        getAge.visitFieldInsn(Opcodes.GETFIELD, internal, "age", "I");
+        getAge.visitInsn(Opcodes.IRETURN);
+        getAge.visitMaxs(1, 1);
+        getAge.visitEnd();
+        var setAge = cw.visitMethod(Opcodes.ACC_PUBLIC, "setAge", "(I)V", null, null);
+        setAge.visitCode();
+        setAge.visitVarInsn(Opcodes.ALOAD, 0);
+        setAge.visitVarInsn(Opcodes.ILOAD, 1);
+        setAge.visitFieldInsn(Opcodes.PUTFIELD, internal, "age", "I");
+        setAge.visitInsn(Opcodes.RETURN);
+        setAge.visitMaxs(2, 2);
+        setAge.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
     static void check(String name, Object expected, Object actual) {
         boolean ok = String.valueOf(expected).equals(String.valueOf(actual));
         System.out.println((ok ? "PASS " : "FAIL ") + name
@@ -19,9 +71,8 @@ public class AsmCommonsMain {
     }
 
     public static void main(String[] args) throws Exception {
-        // 目标：CglibUser.class（本项目无 SVUID 的普通 POJO）
-        byte[] original = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(
-                "target/classes/com/example/cglib/User.class"));
+        // 目标：测试内生成的 User POJO 字节码（无 SVUID 的普通 POJO）
+        byte[] original = generateUser();
 
         // 改写前：无 serialVersionUID 字段
         check("no-svuid-before", false, hasSvuid(original));
