@@ -448,3 +448,7 @@ TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
   分发器占满（dev 批闸门 + JDK25 扫尾 + 多子代理），作业按 30 s 退让循环轮候、租约多次
   被打断重启（远端脱钩 + journal 断点续跑不丢已完成段）；结果落
   `cluster_results/job/ik2-*/`，同 tag 原命令重跑即续接。
+
+### §二.4 后记（2026-10-13，回退）
+
+ik2 本地同机 A/B（TestReflectLdcHotLoop 整例 release）：base 1.07 s vs after 1.06 s——合计收益 <1%（判据 ~3%），按任务约束回退 f2232b29 两项改动。归因：键缓存哈希簇 ≈2.4% 为 invoke 段口径，折算整例 ~1.4% 落入噪声；is_static_descriptor 的 self 4.72% 大头是类级 meta::row 对数千类名的字符串二分（每 invoke 两次），行内线性 find 二分化未触及该大头。若再攻此面，方向应是 meta::row 类名查找的结构化（如类名→行号侧索引），非行内扫描。九例回归两态均全过（回退无风险）。
