@@ -164,6 +164,7 @@ BenchReflectArg，ns/调用，中位）：
   数字；剩余需求方为 varargs 数组、返回装箱（valueOf 缓存外）与缓存哈希表节点。
 - **键缓存的自身代价** ≈ 2.4%（usize 键 SipHash + 读锁）；如需再压，可用乘法散列的
   轻哈希器替换 RandomState（未做）。
+  → **10-13 ikopt2 已实施**（f2232b29，§二.4）。
 - **口径更正（§二.2 遗留的 10 倍差）**：`perf_hotpath.sh` 不带 `--release`（debug 档），
   `perf_rt_bench.sh` 带 `--release`——43f37f63（us1）的 43 µs/迭代与本报告 kr1 的
   4.3 µs/迭代是 **debug vs release 口径差**（sg1 上 debug 整例 42.9 s / release 分段
@@ -174,6 +175,44 @@ BenchReflectArg，ns/调用，中位）：
   E0583 既有形态），另以 batch-1012 系 spot 检出的发射 crate 替换两文件后整 workspace
   cargo check 通过。作业索引：ikopt-base / ikopt-after（sg1，计时与剖析）、
   ikopt-verify（kr2，回归），结果在 `cluster_results/job/ikopt-*/`。
+
+### 4. 遗留两小项实施（2026-10-13，分支 ikopt2，f2232b29）
+
+§七.1 所记两个后续小项已实施（单 commit，`runtime/java_runtime` 两文件，发射侧零改动）：
+
+1. **键缓存轻量哈希器**（`method_impl.rs`）：`METHOD_KEYS`（(类镜像身份, slot) → 分派键
+   的进程级缓存）由缺省 `RandomState`+Sip13 换 **FxHash 风格乘法散列**（`FxKeyHasher`：
+   每分量 rotate_left(5) ^ w 后乘固定奇常数 0x517cc1b727220a95，一次查键 = 两次乘法 +
+   异或，无 SipHash 多轮压缩、无 RandomState 每实例密钥初始化）。**碰撞安全性**：键为
+   (指针身份, slot) 内部值、非攻击者可控；HashMap 命中哈希后必做键相等核对，碰撞代价
+   只是一次 12 字节核对、绝无错答；条目数 ≤ 被 invoke 的不同声明数（编译期有界，量级
+   数百），64 位乘法散列下碰撞概率 n²/2⁶⁵ 可忽略——指针低位对齐零熵由 slot 分量的旋转
+   异或补足（独立验证：2000 个 16 对齐指针形键零错答、零碰撞）。冷路径 `REBUILT_KEYS`
+   （驻留池，现实为空）与 `CTOR_KEYS`（newInstance 路径，非热）维持 RandomState。
+2. **`is_static_descriptor` 行内查找二分化**（`reflect_dispatch.rs`）：原 = 类行二分
+   （`meta::row`）+ 类方法表行**线性 find**（逐方法两个 String 比较）。**行序不可重排**
+   ——行序 = slot（Method / Constructor 对象构造点写入的 slot 即行号，`__slot_row` 同一
+   真源），构建侧排序会改写全部 slot 语义，故**不动表、不动发射**：首次判定时从冻结表
+   派生进程级有序索引（`STATIC_INDEX`，OnceLock），每类一组按 (name, descriptor) 有序的
+   紧凑三元组 (name, descriptor, is_static)——分量是表内 `&'static` 引用 + bool 位，
+   不复制字符串，一次构建常驻（O(总方法数 × log)，约 24 B/方法）。热路径 = 类行二分 +
+   类内 (name, descriptor) 二分；**≤ 8 行的小类仍顺序扫**（个位数元素二分不敌顺序扫，
+   且 24 B 三元组比约 130 B 的整行 `MethodMeta`——跨缓存行——便宜）。同答性经独立
+   逻辑验证（命中 / 未命中 / 表外类 / 边界类名 / 重载面，小类线性与 40 行大类二分两路，
+   新旧全同答）。
+
+**验证与数字**：java_runtime 编译验证 = 作业 ik2-compile（jp1，`rava compile`
+TestReflectLdcHotLoop 端到端，`build_status.ok=True`、1558 个 .rs，409 s）PASS；本机
+generator `cargo check --release --tests` 通过（裸检出 java_runtime 不可 check 为既有
+形态，§八）。同机 A/B（作业 ik2-base（基线 31e4762d）/ ik2-after（f2232b29），
+RldcSegments + BenchReflectArg 口径各 5 次取中位）与回归（ik2-verify：rtpp-verify4
+七例 + TestWidenFacesInvoke / TestWrapperValueFaces 共 9 例）见 §八作业索引。
+量级预期（ikopt-after 剖析口径，sg1）：键缓存哈希簇 ≈ 2.4–2.8%（`hash_one` 1.29+0.33 +
+`Sip13::write` 1.14）为可期主项；`is_static_descriptor` self 4.72% 中行内 find 对基准
+类（2–5 方法行）只占少数——大头是类级 `meta::row` 对全表数千类名的字符串二分（每
+invoke 两次），行内二分的受益面主要是方法数十行以上的声明类（经反射调用的 JDK 类），
+对基准口径贡献有限。
+
 
 ## 三、对象 2：rd::unbox_* 解析 __obj_str 文本
 
@@ -374,6 +413,8 @@ TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
    §二.3。当时的两条候选路线（身份侧表 / 发射层预计算）均不再需要。
    - 后续可再压的小项（未做）：缓存哈希器换轻量乘法散列；`is_static_descriptor` 的
      类方法表内线性 find（描述符配对）换 (name, descriptor) 二分索引。
+     → **10-13 已实施**（ikopt2，f2232b29，§二.4）：键缓存换 FxHash 风格乘法散列 +
+     行内查找改进程级有序索引（行序 = slot 冻结不可重排，索引自冻结表派生、不动发射）。
 2. **unbox 结构化承载终态（P-A）**：随 S7 K 系 vtable / 方法 trait 形态演进一并设计
    （`ObjectVTable` 原生值视图臂），Long/Double 也能直取值；P-B 已收割无协议改动的部分。
 3. **PartitionInteger / stream 管线**：72 倍的主干是「每叶子管线构建（25–30%）+ 每元素
@@ -400,3 +441,10 @@ TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
   fc68236d）、rtpp-dbg2（失败例差分 + A/B 基准，4b4ce416）、rtpp-verify4（收窄后 7 例
   复跑，57eda4ee）、rtpp-prof2（修复后剖析，视排队情况）。结果均在
   `cluster_results/job/rtpp-*/`。
+- **ikopt2 线（§二.4）**：ik2-compile（f2232b29 编译验证，jp1，PASS 409 s）、
+  ik2-base（A/B 基线 31e4762d）/ ik2-after（f2232b29）（RldcSegments +
+  BenchReflectArg ×5 + perf_line_profile）、ik2-verify（9 例回归：rtpp-verify4 七例 +
+  TestWidenFacesInvoke / TestWrapperValueFaces）。10-13 派发时段七台云服务器全被并行
+  分发器占满（dev 批闸门 + JDK25 扫尾 + 多子代理），作业按 30 s 退让循环轮候、租约多次
+  被打断重启（远端脱钩 + journal 断点续跑不丢已完成段）；结果落
+  `cluster_results/job/ik2-*/`，同 tag 原命令重跑即续接。
