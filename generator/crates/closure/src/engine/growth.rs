@@ -223,7 +223,21 @@ impl Engine<'_> {
             let top_sites = |m: &HashMap<String, u64>, what: &str| {
                 let mut v: Vec<(&String, &u64)> = m.iter().collect();
                 v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-                let s: Vec<String> = v.into_iter().take(8).map(|(k, n)| format!("×{n} {k}")).collect();
+                // 名字里的 `@<方法节点序号>:<偏移>` 是 mbase 下标，读日志的人不认得——解析成成员标签
+                let label = |s: &str| {
+                    let at = s.rfind('@').map_or(0, |a| a + 1);
+                    let rest = &s[at..];
+                    match rest.split_once(':') {
+                        Some((ix, off)) if !ix.is_empty() && ix.chars().all(|c| c.is_ascii_digit()) => {
+                            match ix.parse::<usize>() {
+                                Ok(i) if i < self.methods.len() => format!("{}@{}:{off}", &s[..at], self.method_label(i)),
+                                _ => s.to_string(),
+                            }
+                        }
+                        _ => s.to_string(),
+                    }
+                };
+                let s: Vec<String> = v.into_iter().take(8).map(|(k, n)| format!("×{n} {}", label(k))).collect();
                 if !s.is_empty() {
                     eprintln!("{tag} growth site {what} {}", s.join(" | "));
                 }
