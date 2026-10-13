@@ -51,7 +51,7 @@ public class AsmProxyDemo {
         cw.visitEnd();
         byte[] code = cw.toByteArray();
 
-        Class<?> proxyClass = new AsmTransformDemo.ChildClassLoader(targetClass.getClassLoader())
+        Class<?> proxyClass = new ChildClassLoader(targetClass.getClassLoader())
                 .defineClass(proxyName.replace('/', '.'), code);
         return proxyClass.getDeclaredConstructor().newInstance();
     }

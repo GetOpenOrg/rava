@@ -533,6 +533,22 @@
       <version>2.3.18.Final</version>
     </dependency>
 
+    <!-- ═══ frameworks 项目补钉（2026-10-12 迁移批上游遗漏；libtests-upstream-fix 补）═══
+         HelloEndpoints / RouteAnnotationDemo 的注解面（@Controller/@Get/@GetMapping/@RestController）。
+         micronaut-http 走 4.x 线末版（4 系配 jakarta，5 系起基线抬 Java 21+ 不入；注解面仅
+         @Controller/@Get，全 4.x 稳定；传递带出 micronaut-context / core-reactive / context-propagation）。
+         spring-web 与 pom 内 spring 家族（core/beans/context/aop/expression/jcl 6.2.19）对齐。 -->
+    <dependency>
+      <groupId>io.micronaut</groupId>
+      <artifactId>micronaut-http</artifactId>
+      <version>4.10.31</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-web</artifactId>
+      <version>6.2.19</version>
+    </dependency>
+
     <!-- 反推荐（仍勿加，静态模型边界件且当前无对应示例）：mockito（Instrumentation agent）、
          maven/gradle（类加载容器）、byte-buddy（运行期字节码生成本体——静态替代见矩阵 K11
          翻译期子类合成）。netty 已随 2026-10-12 迁移批并入（C-NET 闸门）；
