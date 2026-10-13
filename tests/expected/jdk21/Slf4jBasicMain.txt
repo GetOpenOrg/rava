@@ -1,0 +1,12 @@
+FAIL logger-name :: java.lang.IllegalStateException: NOP
+FAIL logger-by-name :: java.lang.IllegalStateException: NOP
+PASS same-logger-cached
+  levels: debug=false info=false warn=false error=false
+PASS is-level-enabled
+PASS call-silent-ok
+FAIL mdc-get :: java.lang.IllegalStateException
+FAIL mdc-keyset-sorted :: java.lang.NullPointerException: Cannot invoke "java.util.Map.keySet()" because the return value of "org.slf4j.MDC.getCopyOfContextMap()" is null
+PASS mdc-remove
+PASS marker-contains
+PASS marker-name
+DONE Slf4jBasicMain
