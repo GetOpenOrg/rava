@@ -145,11 +145,12 @@ impl RowSet {
             return false;
         }
         let shared = if Rc::strong_count(&rc) == 1 {
-            // 唯一持有：原地改（改前按指针摘旧索引，改后按新内容并池）
+            // 唯一持有：原地改。改前按指针摘旧索引——本表对每行至多持一个弱引用，摘除后
+            // `Rc::get_mut` 才可用（weak 计数非零时 `get_mut` 返回 None）；改后按新内容并池
             let old = content_hash(&rc);
+            self.unlist(old, Rc::as_ptr(&rc));
             Rc::get_mut(&mut rc).unwrap().insert(x);
             let new = content_hash(&rc);
-            self.unlist(old, Rc::as_ptr(&rc));
             match self.find_shared(new, &rc) {
                 Some(other) => other,
                 None => {
