@@ -1941,3 +1941,108 @@ owner = "主会话裁决（expected 口径）；非转译缺陷"
 diagnose = "输出差异行先在本机真机 JDK21/25 双跑对照：两侧各与哪个版本一致即定归因"
 doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
 since = "2026-10-13"
+
+[[pattern]]
+id = "covariant-bridge-slot-root-mismatch"
+stage = "compile"
+symptom = "lib pilot rs 编译 E0407：method `remove_i` is not a member of trait `Nodes__VTable`（jsoup Elements，2 例同签名）；assertj 族 `usingDefaultComparator` / `describedAs_description` / `isEqualTo` 等非 `AbstractComparableAssert__VTable` / `AbstractIterableAssert__VTable` 成员（76 处）"
+match = [["is not a member of trait `Nodes__VTable`"], ["is not a member of trait `AbstractComparableAssert__VTable`"], ["is not a member of trait `AbstractIterableAssert__VTable`"]]
+tests = ["JsoupParseMain", "JsoupSelectorMain", "AssertJChainMain"]
+cause = "协变桥成员的槽位归属与 K-6a 槽族模型失配：covariant_bridge_pending 的 slot_root 取「精确描述符最远声明者」（jsoup Nodes 协变再声明 remove(I)LNode; → Nodes），与槽族根（resolve_virtual_slot → AbstractList）口径不一，误判 pending 后向中间类 __VTable 发不存在的成员；resolve_bridge_member 的 climb_slot 在槽主发射不在本项目 ems（JDK 档案侧类按 T1 复用、不逐项目发射）时中断，槽位进一步错落最近已发射祖先。修法：slot_root 按各声明层 resolve_virtual_slot 的槽族根取值；climb 中断时采信声明侧已解析的 virtual_in"
+introduced = "lib-tests 验证轮首触（jsoup/assertj 的 jar 闭包形态：中间类协变再声明 + 档案侧槽主）"
+fixed = ["a2848077（libpilot-gaps）"]
+status = "fixed"
+owner = "libpilot-gaps（lib pilot rs 侧台账复验）"
+diagnose = "E0407 指向 lib crate 的 impl 槽位成员且该 trait 属中间祖先：查桥成员 virtual_in 是否等于其真实槽族根"
+doc = "docs/reports/2026-10-12-lib-tests-merge-verification.md §八"
+since = "2026-10-13"
+
+[[pattern]]
+id = "synth-local-object-boxing-gap"
+stage = "compile"
+symptom = "lib pilot rs 编译 E0308：`local_9_1 = Clone::clone(&local_11)` expected `&Object`, found `&String`（joda DateTimeFormatterBuilder$TimeZoneId.parseInto，3 例同根因）；同根 E0599 阴影绑定族 array_load_object / is_jvm_null / close on Object 与 E0381 未初始化"
+match = [["expected `&Object`, found `&String`"], ["no method named `array_load_object` found for struct", "JArray"], ["used binding `local_", "possibly-uninitialized"]]
+tests = ["JodaBasicMain", "JodaChronologyMain", "JodaPeriodMain"]
+cause = "类文件只带行号表（无 LocalVariableTable，joda 全 jar 如此）时合成局部无 LVT 声明记录：首次 aconst_null; astore 以 Object 定型（let mut local_N: Object = Object::default()），后续存入具体类值时 needs_object_boxing 只认 LVT 声明分支 → 不装箱直发 Clone::clone(&v)，赋值目标期望类型驱动 rustc 把 Clone::clone 解析到 <Object as Clone>::clone 的 &Object 形参位。修法：补无声明分支——槽上既有局部为 Object 且存入非 Object 引用值即 box_object 装箱赋回（阴影 let 不再产生，E0599/E0381 级联消解）"
+introduced = "lib-tests 验证轮首触（joda 全 jar 无 LVT）"
+fixed = ["43466d06（libpilot-gaps，store 族与阴影绑定族消解）"]
+status = "partial"
+owner = "libpilot-gaps（lib pilot rs 侧台账复验）；余项待认领（变量提升侧）"
+diagnose = "E0308 的实参是 Clone::clone(&具体类型局部) 而赋值/参数位是 Object：查该类有无 LocalVariableTable（javap -l）。余项形态（lpg-r3 实测）：变量提升的延迟声明注解为具体类（let mut local_N: UnsupportedDateTimeField;）而 sim 槽追踪类型为 Object（null 首存定型）——装箱赋值 Object::from(..) 撞具体注解（UnsupportedDateTimeField.getInstance；该位点旧形为 E0381 阴影 let，转换后仍为败例非回归）。根治：提升处以合并类型回写槽追踪类型（method crate blocks/merge 的 join_ref_type 与 sim 槽一致化）"
+doc = "docs/reports/2026-10-12-lib-tests-merge-verification.md §八"
+since = "2026-10-13"
+
+[[pattern]]
+id = "handwritten-ctor-request-seam"
+stage = "compile"
+symptom = "java_base_decl 手写 overlay 文件 E0599：no associated function or constant named `new_str` found for struct `io_exception::IOException`（random_access_file_impl.rs:29）；同族 FileNotFoundException::new_str / IndexOutOfBoundsException::new 等 10 处（hocon pilot 首错）"
+match = [["no associated function or constant named `new_str` found for struct"], ["no associated function or constant named `new` found for struct", "Exception"]]
+tests = ["HoconParseMain", "CheckOutputDeviceIsATerminal（j25r2 交接项 3，IllegalArgumentException::new_str 同族）"]
+cause = "手写层（runtime/java_runtime 的 *_impl.rs）按闭包裁剪编译进项目（856297e7 起显性化），其对生成壳的构造器请求（IOException::new_str 等）不进字节码调用链 → 闭包不索要该构造器 → 壳（按调用链裁剪的构造器面）缺位。与方法 trait 化缝（method-trait-handwritten-seam，abdd523b 已修）同构：手写层请求 × 生成面裁剪互为盲区。候选修法：① input/closure 侧扫描手写文件的 X::new_*( 请求并作种子索要构造器；② 手写边界类（#[impl_methods] 76 类）构造器面免裁剪（与 e05dcd0a/979b759a 的 Keep 豁免同口径）"
+introduced = "lib-tests 验证轮记录；856297e7（手写文件按闭包裁剪编译）后随闭包形状逐例显性"
+fixed = []
+status = "open"
+owner = "待认领（手写层缝；与 j25-r2 交接项 3 的 E0599 归属探针同线）"
+diagnose = "E0599 指到 java_base_decl 的 *_impl.rs 手写文件且成员名为 new/new_str：查该构造器是否在闭包索要集内"
+doc = "docs/reports/2026-10-12-lib-tests-merge-verification.md §八"
+since = "2026-10-13"
+
+[[pattern]]
+id = "dynamic-classload-buildtime-generated"
+stage = "run"
+symptom = "运行失败 ClassNotFoundException：com.github.benmanes.caffeine.cache.SSLMW（LocalCacheFactory.newFactory:112 经 Class.forName 装载按规格计算名的构建期生成类；MethodHandles$Lookup.findClass 链）"
+match = [["ClassNotFoundException: com.github.benmanes.caffeine.cache."], ["LocalCacheFactory.newFactory"]]
+tests = ["CaffeineWeigherMain"]
+cause = "caffeine 的 LocalCacheFactory 按规格缩写（SSLMW 等）经 Class.forName 装载注解处理器在构建期生成的类（jar 内 510 个 cache/[A-Z]{3,8}.class）；名字出自 StringBuilder 拼接，分析器推不出按名事实 → 全部不入闭包（emit 侧 0 个）→ 运行期 Class.forName 落空。属 C-SYN（闭包合成）邻域：计算名动态类加载无通用解。候选：① C-SYN 门立项——对「常量前缀 + 计算后缀」的 Class.forName 按前缀合成闭包种子（510 类 × 传递闭包，代价大）；② 按库白名单 seed（--seed-class 显式点名所需子集）；③ 该 pilot 记 known_failure 待 C-SYN"
+introduced = "lib-tests 验证轮（首轮即记录，C-SYN 邻域）"
+fixed = []
+status = "open"
+owner = "C-SYN 门（主会话裁决投放时机）；pilot 侧暂记 known_failure"
+diagnose = "ClassNotFoundException 且类名是构建期生成类（jar 内存在同模式类族）：查 Class.forName 的名字是否计算值"
+doc = "docs/reports/2026-10-12-lib-tests-merge-verification.md §八"
+since = "2026-10-13"
+
+[[pattern]]
+id = "helpful-npe-message-text"
+stage = "output"
+symptom = "GOLDEN_DIFF 仅一行：JVM 侧 `java.lang.NullPointerException: Cannot invoke \"java.util.Map.keySet()\" because the return value of \"org.slf4j.MDC.getCopyOfContextMap()\" is null`，rs 侧同异常无消息文本（Slf4jBasicMain 唯一差异）"
+match = [["NullPointerException: Cannot invoke", "because the return value of"]]
+tests = ["Slf4jBasicMain"]
+cause = "JDK 21 helpful NPE（JEP 358）消息由 VM 在抛出点按字节码位形合成，转译运行时未实现该文本合成；行为两侧一致（同 NPE 类型、同抛出点、其余 11 行逐字同）。口径判定：非编译缺口、非行为缺陷，属 JVM 语义完备度（消息文本层）。候选：① 实现 invoke-on-null 形态的最小消息合成（需全调用点空检查插桩，代价大）；② golden 判定按「行为一致、异常消息文本除外」白名单。本轮采 ② 登记"
+introduced = "lib-tests 验证轮（低优先记录项）"
+fixed = []
+status = "open"
+owner = "主会话裁决（golden 口径白名单 vs 语义完备度立项）"
+diagnose = "GOLDEN_DIFF 仅异常消息文本差异且两侧异常类型相同：本机真机双跑确认 JDK 行为后按口径归档"
+doc = "docs/reports/2026-10-12-lib-tests-merge-verification.md §八"
+since = "2026-10-13"
+
+[[pattern]]
+id = "erased-receiver-arg-marshal-mismatch"
+stage = "compile"
+symptom = "lib pilot rs 编译 E0308：`put(Clone::clone(&key), Clone::clone(&value))` expected `&Object`, found `&K`（caffeine BoundedLocalLoadingCache/BoundedLocalManualCache，实参为类型参量 K/V）"
+match = [["expected `&Object`, found `&K`"], ["expected `&Object`, found `&V`"]]
+tests = ["CaffeineManualMain"]
+cause = "接收者视图被擦除为 Owner<Object,Object>（调用文本 Into::<LocalCache<Object,Object>>::into(..).put(..)）而实参 coerce 按解析签名（K/V，与调用方类形参一致）先行弹栈编组——两侧信息序脱节：接收者擦除发生在实参 coerce 之后，实参未按擦除后的 Object 参数面装箱。候选修法：接收者擦除路径回写 site.sig_params（或调用点编组延后到接收者定型）；属类型收敛路线（docs/plans/2026-09-21-codegen-type-convergence.md）的跨阶段信息序问题，本轮未修"
+introduced = "lib-tests 验证轮（caffeine 泛型缓存族）"
+fixed = []
+status = "open"
+owner = "待认领（类型收敛路线；跨阶段信息序）"
+diagnose = "E0308 实参 Clone::clone(&类型参量) 而接收者文本是 Into::<Owner<Object,..>>：即本条"
+doc = "docs/reports/2026-10-12-lib-tests-merge-verification.md §八"
+since = "2026-10-13"
+
+[[pattern]]
+id = "generic-field-bound-view-mismatch"
+stage = "compile"
+symptom = "lib pilot rs 编译 E0308：NodeIterator<T extends Node> 内 `this.__set_next(..try_cast::<Node>(..)?)` expected `T` found `Node` / `Clone::clone(&this.__get_next())` expected `&Node` found `&T`（jsoup node_iterator.rs，2 例）"
+match = [["expected type parameter `T`, found"], ["expected `&Node`, found `&T`"], ["`?` operator has incompatible types", "__set_myself"]]
+tests = ["JsoupParseMain", "JsoupSelectorMain", "AssertJChainMain（lpg-r4 终态唯一余错：__set_myself 收 AbstractAssert<SELF,ACTUAL> 存 SELF 字段）"]
+cause = "泛型类字段按类型参量 T 发射（__set_next(T)），方法体把值 checkcast 到上界 Node（字节码 javac 对 T extends Node 的收窄）——类型参量与其类上界之间的视图转换（From<T> for Bound / 反向）在字段访问器边界缺失。属泛型擦除-恢复路线（上界视图）缺口，本轮未修"
+introduced = "lib-tests 验证轮（jsoup NodeIterator）"
+fixed = []
+status = "open"
+owner = "待认领（泛型上界视图；类型收敛路线）"
+diagnose = "E0308 两端分别是类型参量与其实参上界类：即本条"
+doc = "docs/reports/2026-10-12-lib-tests-merge-verification.md §八"
+since = "2026-10-13"
