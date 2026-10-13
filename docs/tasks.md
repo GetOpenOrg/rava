@@ -141,6 +141,7 @@
 - **C1d a5-4 反射构造器按描述符收窄（c1d-a54-reflect，10-11，c1d 计划 §38.4）**：非用户类构造器只暴露被请求的描述符。请求来自三处：查找点由 Class 数组抽象值推出（null / 空数组 / 类字面量定长数组）；record 规范构造器查找按分量类型（`record_constructor_lookups`）；公开枚举在调用者处判定，包装方法与只读元数据的调用者（`computeDefaultSUID` / `superHasAccessibleConstructor`）不请求。DeepCopy 3001 → 2659（−342，`sun/nio/cs` −291），StockTrans 2999 → 2657，TestSerialDefaultSuid 3006 → 2664，HelloWorld 580 不变；三集合都是基线子集，DeepCopy 种子 0 / 1 / 2 一致；抽查 12 / 12，closure lib 244、closure_cli 12 / 12 通过。遗留：按 Constructor 对象来源请求（取代调用者清单）、基本类型类入描述符。
 - **c1d-fmt2（10-10 完工待合批，分支 c1d-fmt2）**：C1d 能力③，详见 c1d 计划 §33.7。
 - **s7k6 回收（10-13 完工待合批，分支 s7k6-recover，基 31e4762d，与 batch-1014 无文件重叠）**：s7k6-uta 本地重跑收口（13/0/1 rc=0）+ s7k6_peak.sh sccache 防护（强制 `RUSTC_WRAPPER=""`）与 `PEAK_OUT` 覆盖 + marker_crate_probe 用法防坑提示 + §9.9/tasks.md 回填；纯文档与诊断脚本，无生成器/运行时行为变更，合批免抽查。
+- **lib-tests 上游清障 + 双版本议题（10-13 完工待合批，分支 libtests-upstream-fix，基 batch-1014@22409c66）**：pom 补钉 micronaut-http 4.10.31 + spring-web 6.2.19（锁 188→197，零 CP_FIX 即通过）；asm 项目补 ChildClassLoader 同包实现（悬空引用修复，输出语义未动）——3 入口 JVM golden 收绿（frameworks×2 + asm，HelloEndpoints 上游即无 main 留开发机定夺）；验证报告补 §八后续处置；双版本并存机制议题（esper/antlr4 4.7 vs thymeleaf/ognl 3.3.4，推荐案 A 拆多模块——e2e_form.py 已支持 per-form 锁路径，标注待用户裁决）。语料/pom/文档，无生成器变更，合批免抽查。
   - 机制 B（`[concrete] object_results` = `Formatter.parse`）已恢复。内存受控靠结果对象按内容合并，用户 printf 不再污染 Formatter.format 靠枢纽形参槽污染。
   - 修复具体上下文的映像静态活性缺口（LahNumbers NPE，failure_patterns `concrete-ctx-image-static-dead`）。
   - 对 main b1dae15c 实测：
