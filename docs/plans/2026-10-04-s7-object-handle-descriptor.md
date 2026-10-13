@@ -1231,8 +1231,11 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
       块深 / 泛型实参两处、无槽继承 / 伴生跨类 / boot_image / 签名多态 `__site` /
       SAM 装箱 valueOf 五路登记面、伴生私有类型 pub 化 + 签名词导入行（hw_sig_uses）；
       其中 SAM 装箱 valueOf 一项是**阶段 2 的潜在缺口**（基线 a07fbb6f valueOf 仍固有
-      故未暴露，swbase/swbase2 实证）。峰值 s7k4d-peak（kr1）与确定性 s7k4d-det3
-      （sg2）在跑（回收：summary.json 看 rc；s7k6_peak.sh 判据 ±10% 对 a07fbb6f）。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
+      故未暴露，swbase/swbase2 实证）。**峰值 ✅**（s7k4d-peak rc=0，kr1，逐 crate 固定
+      切段重建对 a07fbb6f）：三例全部 crate 在 ±10% 内，最大涨幅 +3.7%（DeepCopy
+      java_base_body_6），声明底段 +2.5%（4 855 → 4 979 MB）——hw 匿名导入行 + trait
+      声明文本的代价量级如预期。确定性 s7k4d-det3（sg2）在跑（closure_independent
+      两项；被挤占重派同 tag 幂等）。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
       移动（trait 声明行口径），无类增删）与逐 crate 峰值（s7k6_peak.sh 对 a07fbb6f，
       ±10%）未派发。
   - **K4-2a 验收与交接（10-13）**：
