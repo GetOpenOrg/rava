@@ -160,7 +160,13 @@ fn climb_slot<'e>(
         }
         let Some(nxt) = nxt else { break };
         let up_found = ems.get(&nxt).filter(|e| !e.handwritten).and_then(|e| find_slot(e, name, param_desc, cov));
-        let Some(uf) = up_found else { break };
+        let Some(uf) = up_found else {
+            // 槽主发射不在本项目 ems（JDK 档案侧类，java_base 按档案复用不逐项目发射）：
+            // 记录的 virtual_in 即该声明侧已解析好的槽族根——直接采信，不能停在中间已发射祖先
+            // （其 __VTable 无该槽位成员，E0407：jsoup Elements 的 remove_i 落 Nodes__VTable）
+            slot_cur = slot_m.virtual_in.clone();
+            break;
+        };
         slot_cur = nxt;
         slot_m = uf;
     }
@@ -309,14 +315,21 @@ pub fn covariant_bridge_pending(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo, recv_bin
             return false;
         }
     }
+    // 槽位根取 vtable 槽族根（resolve_virtual_slot），不是精确描述符的最远声明者：
+    // 祖先协变再声明（jsoup `Nodes extends ArrayList` 再声明 `remove(I)LNode;`）在 K-6a 模型下
+    // 与被覆盖方法同槽（族根 AbstractList）——按精确声明者（Nodes）判 pending 会向 `Nodes__VTable`
+    // 发不存在的槽位成员（E0407，jsoup Elements / assertj 自类型族同形态）
     let slot_root = |desc: &str| -> String {
         let mut root = String::new();
         let mut cur = recv_ci.super_class().to_string();
         let mut seen = BTreeSet::new();
         while !cur.is_empty() && seen.insert(cur.clone()) {
             let Some(sci) = reg.get(&cur) else { break };
-            if sci.methods().iter().any(|m| m.name == name && m.desc == desc && !m.is_static()) {
-                root = cur.clone();
+            if let Some(m) = sci.methods().iter().find(|m| m.name == name && m.desc == desc && !m.is_static()) {
+                let r = ctx.resolve_virtual_slot(m, sci);
+                if !r.is_empty() {
+                    root = r;
+                }
             }
             cur = sci.super_class().to_string();
         }
