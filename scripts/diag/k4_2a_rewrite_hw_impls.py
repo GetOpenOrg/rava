@@ -372,6 +372,8 @@ def fix_callers(src: str, check: bool) -> int:
         "__reflect_key": ["Method", "Constructor"],
         "__vh_ref_update": ["Unsafe"],
         "__vh_prim_update": ["Unsafe"],
+        "isArray": ["Class"],
+        "objectFieldOffset1": ["Unsafe"],
     }
     cls_ord_of: dict[str, dict[int, set[str]]] = items
 

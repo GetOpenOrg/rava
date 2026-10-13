@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use super::object::Object;
 use super::object_body::{Object__finalize_body, Object__wait_body, Object__wait_l_body, Object__wait_l_i_body};
+use crate::java::lang::__ClassHw as _;
 
 /// `new Object()` 的实例体：无 Java 字段；占 1 字节使每个实例拥有独立堆地址（对象身份）。
 pub struct Instance(#[allow(dead_code)] u8);
