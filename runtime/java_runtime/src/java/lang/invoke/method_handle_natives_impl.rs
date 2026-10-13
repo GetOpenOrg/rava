@@ -19,6 +19,7 @@ use crate::java::lang::Class;
 use crate::java::lang::NoSuchFieldError;
 use crate::java::lang::NoSuchMethodError;
 use super::__MethodHandleNativesHw;
+use crate::java::lang::__ClassHw as _;
 
 fn _internal_error(msg: &str) -> JvmError {
     match crate::java::lang::InternalError::new_str(String::from(msg)) {

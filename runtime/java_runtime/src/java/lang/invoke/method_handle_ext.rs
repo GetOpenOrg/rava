@@ -38,6 +38,7 @@ use super::method_handle::MethodHandle;
 use super::{LambdaForm_Name, LambdaForm_NamedFunction, MemberName, MethodType};
 use crate::java::lang::Class;
 use super::__MethodHandleHw;
+use crate::jdk::internal::misc::__UnsafeHw as _;
 
 // MethodHandleNatives.Constants 的 reference kind（JVMS §5.4.3.5）
 const REF_GET_FIELD: i32 = 1;

@@ -38,6 +38,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 use super::__ThreadHw;
 use super::__ThreadHw2;
+use crate::java::lang::__ThreadHw as _;
 
 // JVMTI 线程状态位（jdk.internal.misc.VM.toThreadState 的编码，getState 消费）：
 // ALIVE = 0x1，TERMINATED = 0x2，RUNNABLE = 0x4。

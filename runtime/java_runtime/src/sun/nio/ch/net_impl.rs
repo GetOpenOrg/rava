@@ -15,6 +15,7 @@ use crate::java::net::{Inet4Address, Inet6Address, InetAddress, InetSocketAddres
 use crate::net_posix::{self, errno, SockAddr};
 use super::__NetHw;
 use super::__NetHw2;
+use crate::java::lang::__StringHw as _;
 
 pub(super) const IOS_UNAVAILABLE: i32 = -2;
 pub(super) const IOS_INTERRUPTED: i32 = -3;

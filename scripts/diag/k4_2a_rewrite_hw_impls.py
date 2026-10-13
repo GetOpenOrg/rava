@@ -343,6 +343,8 @@ def fix_callers(src: str, check: bool) -> int:
     """非伴生手写文件里的 hw 方法调用面（`Cls::m(` UFCS 与单主 `.m(` 接收者形态）补
     `use crate::<包>::__ClsHw{N} as _;`。插入在文件头最后一个 `use` 行后，幂等。"""
     items = scan_hw_items(src)
+    # 伴生也扫（跨类 hw 调用——如 method_handle_ext 的 Unsafe::__field_of_offset；本类
+    # trait 的 use 行已在改写主步加入，existing 集合去重幂等）
     # 伴生文件位置 → 类的包路径（crate::java::lang 一段）
     pkg_of: dict[str, str] = {}
     hwre = re.compile(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)\s+for\s")
@@ -370,7 +372,7 @@ def fix_callers(src: str, check: bool) -> int:
 
     changed = 0
     for rel in walk_sorted(src):
-        if not rel.endswith(".rs") or rel.endswith("_impl.rs") or rel.endswith("_ext.rs"):
+        if not rel.endswith(".rs"):
             continue
         p = os.path.join(src, rel)
         text = open(p, encoding="utf-8").read()

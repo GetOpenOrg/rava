@@ -19,6 +19,7 @@ use crate::java::lang::{
 };
 use crate::reflect_dispatch as rd;
 use super::__ArrayHw;
+use crate::java::lang::__ClassHw as _;
 
 /// 基本类型值（数组元素读出 / 写入实参），按 JVMS 基本类型种类区分。
 #[derive(Clone, Copy)]

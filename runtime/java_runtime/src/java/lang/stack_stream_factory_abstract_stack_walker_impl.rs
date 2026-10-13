@@ -47,6 +47,7 @@ const ABSTRACT_STACK_WALKER: &str = "java/lang/StackStreamFactory$AbstractStackW
 /// 锚定的帧流随执行流存放（执行上下文块，a3-T3）：遍历回调期间虚拟线程可能换载体。
 use crate::vm_stack::AnchoredWalk as Anchored;
 use super::__StackStreamFactory_AbstractStackWalkerHw;
+use crate::java::lang::__ClassHw as _;
 
 fn _internal_error(msg: &str) -> JvmError {
     match crate::java::lang::InternalError::new_str(String::from(msg)) {

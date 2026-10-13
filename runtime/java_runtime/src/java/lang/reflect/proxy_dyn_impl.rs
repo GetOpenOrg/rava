@@ -28,6 +28,7 @@ use crate::java::lang::{Boolean, Byte, Character, Class, Double, Float, Integer,
 use crate::reflect_dispatch as rd;
 use crate::java::lang::reflect::Method;
 use super::__Proxy_DynHw;
+use crate::java::lang::__ClassHw as _;
 
 crate::__process_static! {
     /// (接口, 方法名, 描述符) → Method 对象。

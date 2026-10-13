@@ -12,6 +12,7 @@ use super::constant_pool::ConstantPool;
 use crate::java::lang::Class;
 use crate::anno_pool::CpVal;
 use super::__ConstantPoolHw;
+use crate::java::lang::__StringHw as _;
 
 fn entry(cp_oop: &Object, index: i32) -> Result<&'static CpVal> {
     let cls = <Class as From<Object>>::from(Clone::clone(cp_oop));

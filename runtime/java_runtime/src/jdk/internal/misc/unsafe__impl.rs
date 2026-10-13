@@ -18,6 +18,7 @@ mod primitive;
 use primitive::*;
 use super::__UnsafeHw;
 use super::__UnsafeHw2;
+use crate::java::lang::__ClassHw as _;
 
 // 内部边界类 jdk.internal.misc.Unsafe：按调用链按需实现，其余保持 panic 存根。
 

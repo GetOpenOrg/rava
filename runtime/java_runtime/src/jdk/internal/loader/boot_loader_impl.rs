@@ -2,6 +2,7 @@ use crate::jdk::internal::loader::BootLoader__Methods as _;
 use crate::prelude::*;
 use super::boot_loader::BootLoader;
 use super::__BootLoaderHw;
+use crate::java::lang::__ModuleHw as _;
 
 // jdk.internal.loader.BootLoader 伴生：只含 ACC_NATIVE 方法（手写边界 ①）。服务目录（getServicesCatalog）
 // 与资源定位（findResource / findResourceAsStream）走字节码：引导层由 Module.defineModules 按 jimage

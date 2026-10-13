@@ -2,6 +2,7 @@ use crate::java::lang::String__Methods as _;
 use crate::prelude::*;
 use super::string::String;
 use super::__StringHw;
+use crate::java::lang::__StringHw as _;
 
 impl __StringHw for String {
     /// Rust `String`（UTF-8）→ Java `String`（新对象，不入驻留表）。

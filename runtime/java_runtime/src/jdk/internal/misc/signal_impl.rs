@@ -10,6 +10,8 @@ use crate::prelude::*;
 use super::signal::Signal;
 use std::sync::OnceLock;
 use super::__SignalHw;
+use crate::java::lang::__ThreadHw as _;
+use crate::java::lang::__ThreadHw2 as _;
 
 /// 信号名（不带 `SIG` 前缀，与 `Signal(String)` 的入参一致）→ 信号号
 const SIGNALS: &[(&str, libc::c_int)] = &[

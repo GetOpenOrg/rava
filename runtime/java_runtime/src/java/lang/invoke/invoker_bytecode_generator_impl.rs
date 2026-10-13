@@ -19,6 +19,7 @@ use crate::prelude::*;
 use super::invoker_bytecode_generator::InvokerBytecodeGenerator;
 use super::{LambdaForm, MemberName, MethodType};
 use super::__InvokerBytecodeGeneratorHw;
+use crate::java::lang::__ClassHw as _;
 
 impl __InvokerBytecodeGeneratorHw for InvokerBytecodeGenerator {
     /// `generateCustomizedCode(LambdaForm, MethodType)`：不生成字节码 → 解释入口 vmentry。

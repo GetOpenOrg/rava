@@ -10,6 +10,7 @@ use crate::java::util::Set;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 use super::__ReflectionHw;
+use crate::java::lang::__ClassHw as _;
 
 
 impl __ReflectionHw for Reflection {

@@ -11,6 +11,7 @@ use crate::jdk::internal::misc::VM__Methods as _;
 use crate::prelude::*;
 use super::vm::VM;
 use super::__VMHw;
+use crate::java::lang::__ClassHw as _;
 
 impl __VMHw for VM {
     /// native `initialize()`：HotSpot 由 CDS 归档恢复 VM 类的静态字段（`JVM_InitializeFromArchive`）；

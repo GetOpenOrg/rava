@@ -9,6 +9,7 @@
 use crate::prelude::*;
 use super::*;
 use super::__SecurityManagerHw;
+use crate::java::lang::__ClassHw as _;
 
 fn _internal_error(msg: &str) -> JvmError {
     match crate::java::lang::InternalError::new_str(String::from(msg)) {

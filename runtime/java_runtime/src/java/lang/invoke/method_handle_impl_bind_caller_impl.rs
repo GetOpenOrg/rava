@@ -13,6 +13,7 @@ use crate::prelude::*;
 use super::method_handle_impl_bind_caller::MethodHandleImpl_BindCaller;
 use crate::java::lang::Class;
 use super::__MethodHandleImpl_BindCallerHw;
+use crate::java::lang::__ClassHw as _;
 
 impl __MethodHandleImpl_BindCallerHw for MethodHandleImpl_BindCaller {
     /// `makeInjectedInvoker(Class targetClass)`：定义（登记）调用者类的注入调用器隐藏类并返回。

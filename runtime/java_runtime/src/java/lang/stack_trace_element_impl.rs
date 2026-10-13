@@ -14,6 +14,7 @@ use crate::prelude::*;
 use super::*;
 use super::throwable_impl::StackTraceFrames;
 use super::__StackTraceElementHw;
+use crate::java::lang::__ClassHw as _;
 
 fn _ref(obj: &Object, class: &str, field: &str) -> Object {
     obj.0.__unsafe_ref_get(field).unwrap_or_else(|| panic!("stub: {}.{} 无按名协议", class, field))

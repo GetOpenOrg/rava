@@ -11,6 +11,7 @@ use crate::prelude::*;
 use super::class_loader::ClassLoader;
 use super::__ClassLoaderHw;
 use super::__ClassLoaderHw2;
+use crate::java::lang::__ClassHw as _;
 
 // java.lang.ClassLoader 伴生。
 //

@@ -10,6 +10,8 @@ use super::*;
 use crate::java::io::{BufferedInputStream, BufferedOutputStream, FileDescriptor, FileInputStream, FileOutputStream, InputStream, PrintStream};
 use crate::sun::nio::cs::UTF_8;
 use super::__SystemHw;
+use crate::java::lang::__ClassHw as _;
+use crate::java::lang::__StringHw as _;
 
 impl __SystemHw for System {
     /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制的 native 方法即本文件的 Rust 函数，无事可做。

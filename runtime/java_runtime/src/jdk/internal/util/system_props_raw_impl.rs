@@ -10,6 +10,7 @@ use crate::jdk::internal::util::SystemProps_Raw__Methods as _;
 use crate::prelude::*;
 use super::system_props_raw::SystemProps_Raw;
 use super::__SystemProps_RawHw;
+use crate::java::lang::__StringHw as _;
 
 fn s(v: &str) -> String {
     String::from(v)

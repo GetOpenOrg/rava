@@ -15,6 +15,9 @@ use nest::*;
 use super::__ClassHw;
 use super::__ClassHw2;
 use super::__ClassHw3;
+use crate::java::lang::__ClassHw as _;
+use crate::java::lang::__ClassHw3 as _;
+use crate::java::lang::__ModuleHw as _;
 
 impl __ClassHw for Class {
     /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制无此需要。
