@@ -1216,14 +1216,23 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
       trait impl（native_status 实现集不漂移）；D8 体量权重不计 hw 匿名导入行（同接口
       方法 trait 口径——纯名字解析行，`decl_side::hw_trait_import_bytes`）；trait 声明文本
       本体（约 110 文件 × 0.3–2 KB）照常计权（段边界允许的「trait 声明行」漂移口径）。
-    - **验证（tag 前缀 s7k4d-，10-13 交接时在跑——回收法见下「K4-2a 验收与交接」）**：
-      宏单测 36/42 ✅（jp2）；input 25 / ty 67 / closure 252 / emit 101 / driver build_cli 17
-      全绿（本机；emit 测试夹具补 java_marker crate——阶段 1 起 9 个 project 测试未运行到
-      的既有破损，本步修复）。首轮 `s7k4d-hw1`（jp1）rc=1——日志被 `tail -8` 截断未见失败点（dyn-compare 阶段已
-      跑完＝编译 / 运行 / 对比全过，疑输出尾部汇总被吞），重派 `s7k4d-hw2`（jp1，全量
-      日志）；`s7k4d-seed`（kr1）11/12 同、CollectorsDemo 三种子各多一方法（根因与修法
-      见上——rava_hw_pub 批 19802647），重派 `s7k4d-seed2`（kr1）；确定性两项
-      `s7k4d-det`（us1）交回时在跑。分发器本机 setsid nohup 存活，不随会话终止；切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
+    - **验证（tag 前缀 s7k4d-）**：宏单测 **36（缺省）/ 42（plan）✅**（jp2 首轮 + sg2
+      终态 s7k4d-macro2）；input 25 / ty 67 / closure 252 / emit 101（含 hw 真文件回归
+      scans_real_class_loader_impl / phantom_reference） / instr / driver build_cli 17
+      全绿（本机；emit 测试夹具补 java_marker crate——阶段 1 起 9 个 project 测试未运行
+      到的既有破损，本步修复）。**链接级五例全 PASS（逐字对 JVM）**：HelloWorld +
+      CollectorsDemo（s7k4d-hw13，jp1）、DeepCopy + TestAnnoReflect +
+      TestStackWalkerFrames（s7k4d-5case7，jp1；bin 322.0M / 245.3M / 222.4M）。
+      **种子四例 × 0/1/2 集合全同**（s7k4d-seed2 rc=0，`seed-sets: ALL-IDENTICAL`，
+      对 a07fbb6f）。**切段三例逐类一致**（s7k4d-seg rc=0，HelloWorld 787 /
+      CollectorsDemo 808 / DeepCopy 2680 类文件——hw 导入行不计权 + trait 文本未触
+      段边界）。迭代中发现并修复的十六个缺口（各批提交信息详录）：rava_hw_pub 原可见
+      性标记（种子漂移）、fix-callers 误报两批（接收者形态 UFCS+白名单化）、hw 扫描
+      块深 / 泛型实参两处、无槽继承 / 伴生跨类 / boot_image / 签名多态 `__site` /
+      SAM 装箱 valueOf 五路登记面、伴生私有类型 pub 化 + 签名词导入行（hw_sig_uses）；
+      其中 SAM 装箱 valueOf 一项是**阶段 2 的潜在缺口**（基线 a07fbb6f valueOf 仍固有
+      故未暴露，swbase/swbase2 实证）。峰值 s7k4d-peak（kr1）与确定性 s7k4d-det3
+      （sg2）在跑（回收：summary.json 看 rc；s7k6_peak.sh 判据 ±10% 对 a07fbb6f）。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
       移动（trait 声明行口径），无类增删）与逐 crate 峰值（s7k6_peak.sh 对 a07fbb6f，
       ±10%）未派发。
   - **K4-2a 验收与交接（10-13）**：

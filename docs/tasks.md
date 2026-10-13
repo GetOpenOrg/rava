@@ -107,10 +107,12 @@
 幂等），生成器镜像发射 trait 声明（声明文件 `java_class!` 块后，`pub trait __XHw{N}<G>:
 X__Methods<A> [where]`）并按成员名登记调用点匿名导入（record_member / 静态字段 / phase2
 继承转发 / 字面量锚点四路；D8 权重不计 hw 导入行）；闭包 is_pub / 行表 / native_status /
-impl_methods 四口径保持。宏单测 36/42、input 25 / ty 67 / closure 252 / emit 101 /
-build_cli 17 绿；种子首轮 s7k4d-seed 11/12（CollectorsDemo 多 TypeNotPresentException.<init>
-——pub(crate) 助手被计成 vm 钩子，rava_hw_pub 原可见性标记修复，19802647），seed2 / hw2 /
-det 在跑；切段 / 峰值未派发（回收状态见 S7 计划 §9.9「K4-2a」节）。阶段 3（c66f7814 重放）
+impl_methods 四口径保持。**验收（10-13 终态）**：宏单测 36/42 ✅；input 25 / ty 67 / closure 252 / emit 101 /
+build_cli 17 绿；链接级五例全 PASS（HelloWorld / CollectorsDemo / DeepCopy /
+TestAnnoReflect / TestStackWalkerFrames，逐字对 JVM）；种子四例 ×0/1/2 全同（seed2 ✅）；
+切段三例逐类一致（seg ✅，787/808/2680）；迭代十六批修复（含阶段 2 潜在缺口：SAM 装箱
+valueOf 发射处未登记方法 trait 导入——基线 valueOf 仍固有故未暴露）。峰值（s7k4d-peak）
+与确定性（s7k4d-det3）在跑（回收状态见 S7 计划 §9.9「K4-2a」节）。阶段 3（c66f7814 重放）
 的前置即此步（重放将再撞 prune_marker_header E0432 与伴生 std trait impl E0210 两处，见该节）。
 4. **运行时性能（三测点对照 JVM）**：**10-11 已深剖**（分支 rt-perf-prof，报告 [`2026-10-11-rt-perf-profiling.md`](reports/2026-10-11-rt-perf-profiling.md)，作业 rtpp-prof1（基线）/ rtpp-verify3 / rtpp-dbg2（回归与 A/B），基线 kr1 7b0bf81a）：
    - `Method.invoke`：invoke 段 **1.76 µs/调用**（JVM 31 ns，56 倍）；热点前三 = `__member_key` 每次重建分派键的 String 簇 ~17%（`method_impl.rs:36`）、分配器簇 ~16%、分派协议簇 ~10%（`is_static_descriptor` 2.27% 等）。微修复已入（9157a73e → 57eda4ee）：`__name_assignable` 二分化 + `rd::unbox_i32` 的 Integer/Short/Byte 结构化取值（P-B 收窄定稿：Float 的翻译 hashCode 对 3.0f 应答 0 被实测否决、Character/Boolean 无实参级见证，维持文本；A/B invoke 段 −11.6%（跨机约 −20%）、整例 4.3 → 3.66 s）。**10-12 分派键免重建已实施（invoke-key-opt，c0713ed8，报告 §二.3）**：表构造成员对象 slot 即方法表行号，(clazz 身份, slot) 首用经表行直取 `&'static` 键 + 进程级缓存（类镜像永生为回收论证），非表形态回落原重建（驻留）；同机 A/B（sg1，ikopt-base/after）invoke 段 1.515 → 0.646 µs/调用（−57.4%）、idRef 1636 → 587 ns、分配器簇占比 ~15.3% → ~7.3%、debug 档整例 42.9 → 25.2 s，键缓存哈希自身代价 ≈ 2.4%；回归 9 例（rtpp-verify4 清单 + TestWidenFacesInvoke / TestWrapperValueFaces）PASS（ikopt-verify）；§二 43 µs vs 4.3 µs 的 10 倍差 = debug（perf_hotpath）vs release（perf_rt_bench）口径差，已闭合。下一步小项：键缓存轻量哈希器、`is_static_descriptor` 行内线性 find 二分化；再下一层 = 分派协议簇（双重 static 判定）。
