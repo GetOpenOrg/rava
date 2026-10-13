@@ -1,37 +1,45 @@
 #!/usr/bin/env bash
 # lib pilot 语料取包 + 透视：mvn 解析依赖闭包 → jar 导出 → 逐 jar 跑 dep_scan。
 #
-# 依赖清单（版本钉死）：tests/lib_pilot/deps/pom.xml
-# jar 导出位：tests/lib_pilot/deps/target/pilot-libs/（gitignore；scripts/lib_pilot_golden.sh 默认从此取）
+# 依赖清单（版本钉死）：tests/lib_pilot/deps/pom.xml（主模块）
+# 双版本并列模块：tests/lib_pilot/deps-extra/<模块>/pom.xml（同 GA 双版本并存，方案 A；
+#   docs/plans/2026-10-13-lib-pilot-dual-version-mechanism.md）——主模块先跑（行为不变），
+#   之后循环处理各 deps-extra 模块，同一取包与锁生成口径，独立 target 与独立锁。
+# jar 导出位：<模块>/target/pilot-libs/（gitignore；golden / e2e 按锁内 path 相对位取）
 #
-# 用法：scripts/fetch_pilot_deps.sh            # 取包 + 逐 jar 透视
+# 用法：scripts/fetch_pilot_deps.sh            # 取包 + 逐 jar 透视（主模块与 deps-extra 各模块）
 #       scripts/fetch_pilot_deps.sh --no-scan  # 只取包（golden 对账前置）
 # 依赖树全貌：mvn -B -f tests/lib_pilot/deps/pom.xml dependency:tree
 # 前置：mvn 在 PATH；JDK 经 rava jdk 选择（与 rava build / run_tests.py 同一实现）。
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="$REPO/tests/lib_pilot/deps"
+EXTRAS="$REPO/tests/lib_pilot/deps-extra"
 SCAN=1; [[ "${1:-}" == "--no-scan" ]] && SCAN=0
 
 . "$REPO/scripts/rava_env.sh" "$REPO"
 JAVA_HOME="$("$RAVA" jdk --home-only)" || { echo "未找到可用 JDK" >&2; exit 2; }
 export JAVA_HOME
 
-# 清残留：copy-dependencies 不清目录，升版后旧 jar 会并存污染语料口径
-rm -rf "$DEPS/target/pilot-libs"
-mvn -B -q -f "$DEPS/pom.xml" package
-echo "─── jar 已导出：$DEPS/target/pilot-libs/ ───"
-ls -lh "$DEPS/target/pilot-libs/"
+# 单模块取包 + 锁生成（主模块与 deps-extra 各模块同一口径；锁生成逻辑可复用）
+fetch_module() {
+    local dir="$1"
+    # 清残留：copy-dependencies 不清目录，升版后旧 jar 会并存污染语料口径
+    rm -rf "$dir/target/pilot-libs"
+    mvn -B -q -f "$dir/pom.xml" package
+    echo "─── jar 已导出：$dir/target/pilot-libs/ ───"
+    ls -lh "$dir/target/pilot-libs/"
 
-# mvn 解析坐标清单（g:a:type[:classifier]:version:scope:绝对路径）——锁条目名的真源；
-# jar 内 pom.properties 只作回退（junit / hamcrest 等 5 个 jar 不带）
-mvn -B -q -f "$DEPS/pom.xml" dependency:list -DoutputFile="$DEPS/target/deps-list.txt" \
-    -DoutputAbsoluteArtifactFilename=true >/dev/null
+    # mvn 解析坐标清单（g:a:type[:classifier]:version:scope:绝对路径）——锁条目名的真源；
+    # jar 内 pom.properties 只作回退（junit / hamcrest 等 5 个 jar 不带）
+    mvn -B -q -f "$dir/pom.xml" dependency:list -DoutputFile="$dir/target/deps-list.txt" \
+        -DoutputAbsoluteArtifactFilename=true >/dev/null
 
-# 依赖锁 deps.lock.toml（V12 §3.2：release + [[jar]] 类路径序，coordinate/path/sha256；
-# 生成物不入库）。坐标优先取 mvn 解析（按文件名配对）；release 取参考 JDK tag 主版本；
-# sha256 = jar 身份（坐标只作索引与诊断）；条目名 = 坐标 artifactId（无坐标时文件名 stem）
-python3 - "$DEPS/target" "$REPO/tools/refjdk.toml" <<'PY'
+    # 依赖锁 deps.lock.toml（V12 §3.2：release + [[jar]] 类路径序，coordinate/path/sha256；
+    # 生成物不入库）。坐标优先取 mvn 解析（按文件名配对）；release 取参考 JDK tag 主版本；
+    # sha256 = jar 身份（坐标只作索引与诊断）；条目名 = 坐标 artifactId（无坐标时文件名 stem）；
+    # path 相对 <模块>/target（锁所在目录），e2e_form / golden 按此解析 jar 绝对位
+    python3 - "$dir/target" "$REPO/tools/refjdk.toml" <<'PY'
 import hashlib, re, sys, zipfile
 from pathlib import Path
 
@@ -70,10 +78,30 @@ for jar in sorted((target / "pilot-libs").glob("*.jar")):
 (target / "deps.lock.toml").write_text("\n".join(lines) + "\n")
 print(f"deps.lock.toml：{lines.count('[[jar]]')} 条（坐标 {sum(1 for l in lines if l.startswith('coordinate'))}）")
 PY
+}
+
+fetch_module "$DEPS"
+
+# deps-extra 并列模块（双版本并存）：每模块独立 target 目录与锁，循环同口径处理
+for pom in "$EXTRAS"/*/pom.xml; do
+    [[ -f "$pom" ]] || continue
+    echo
+    echo "═══ deps-extra 模块：$(basename "$(dirname "$pom")") ═══"
+    fetch_module "$(dirname "$pom")"
+done
 
 [[ "$SCAN" == 1 ]] || exit 0
-for jar in "$DEPS"/target/pilot-libs/*.jar; do
+scan_module() {
+    for jar in "$1"/target/pilot-libs/*.jar; do
+        echo
+        echo "════ $(basename "$jar") ════"
+        python3 "$REPO/scripts/dep_scan.py" "$jar"
+    done
+}
+scan_module "$DEPS"
+for pom in "$EXTRAS"/*/pom.xml; do
+    [[ -f "$pom" ]] || continue
     echo
-    echo "════ $(basename "$jar") ════"
-    python3 "$REPO/scripts/dep_scan.py" "$jar"
+    echo "═══ deps-extra 透视：$(basename "$(dirname "$pom")") ═══"
+    scan_module "$(dirname "$pom")"
 done

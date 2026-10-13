@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>local.rava</groupId>
+  <artifactId>pilot-deps-extra-esper</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+
+  <name>pilot-deps-extra-esper</name>
+  <description>deps-extra 并列模块（方案 A 双版本并存，docs/plans/2026-10-13-lib-pilot-dual-version-mechanism.md）：
+    独立 pom，不继承主模块 tests/lib_pilot/deps/pom.xml。成因——esper 7.1.0 声明 antlr4-runtime 4.7
+    （esper-parent 7.1.0 属性 antlr4-runtime.version 实测值），主模块锁里同一 GA 坐标经 hibernate-core
+    7.4.6 传递调解为 4.13.2（antlr 4.10 起生成代码与运行时二进制不兼容，4.7 生成的 esper parser 跑
+    4.13.2 运行时 ATN 版本失配）；Maven 单 pom 对同 GA 只能产出一个版本，双版本经并列模块并存。
+    esper 项目 form.toml 的 deps 键指到本模块锁 deps-extra/esper/target/deps.lock.toml。
+    用法：scripts/fetch_pilot_deps.sh（主模块后循环处理 deps-extra 各模块，同一取包与锁生成口径）。</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.espertech</groupId>
+      <artifactId>esper</artifactId>
+      <version>7.1.0</version>
+    </dependency>
+    <!-- 显式钉 4.7（与 esper-parent 7.1.0 属性一致）：本模块内无调解冲突，钉值即文档——
+         防未来加入的依赖把 antlr4-runtime 传递升版 -->
+    <dependency>
+      <groupId>org.antlr</groupId>
+      <artifactId>antlr4-runtime</artifactId>
+      <version>4.7</version>
+    </dependency>
+    <!-- slf4j-api / janino / commons-compiler 随 esper 7.1.0 传递（1.7.25 / 3.0.7 / 3.0.7），
+         esper 项目的 form.toml cp 需要它们在锁内 -->
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- mvn package = 把依赖闭包（含传递）导出到 target/pilot-libs/（与主模块同一插件配置） -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.7.1</version>
+        <executions>
+          <execution>
+            <id>copy-pilot-libs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/pilot-libs</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

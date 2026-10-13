@@ -1,0 +1,4 @@
+[EPL] select accountId, count(*) as fails from LoginEvent.win:length(3) where success = false group by accountId having count(*) = 3
+[输入] 6 条事件: A败, B败, A败, B败, A败, B成功
+[告警] []
+[结论] 只有 A 触发（窗口内 3 连败），B 被成功事件重置

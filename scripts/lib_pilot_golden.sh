@@ -116,6 +116,16 @@ import sys, tomllib
 print(",".join(tomllib.loads(open(sys.argv[1], encoding="utf-8").read()).get("cp", [])))' "$1"
 }
 
+# 项目 form.toml 的可选 deps 键 → 该项目依赖锁的仓库相对路径（空 = 主模块锁）。
+# 双版本并存（docs/plans/2026-10-13-lib-pilot-dual-version-mechanism.md）：冲突项目把 deps 指到
+# deps-extra/<模块>/target/deps.lock.toml；锁内 jar 路径（pilot-libs/…）相对锁所在目录解析，
+# 与 e2e_form.lock_entries 同口径
+form_deps() {
+    python3 -c '
+import sys, tomllib
+print(tomllib.loads(open(sys.argv[1], encoding="utf-8").read()).get("deps", ""))' "$1"
+}
+
 GOLDEN_ID="$MODE"          # golden 文件名（既有 id 模式 = id；项目模式 = <库>_<入口简名>）
 MODE_TAG="$(echo "$MODE" | tr "/" "_")"   # /tmp 日志文件名（项目模式 MODE 含 /，须打平）
 SRCDIR="."                 # 源目录（"." = tests/lib_pilot 平铺单文件）
@@ -211,6 +221,13 @@ jc1|jc2|jc3|jc4)
             fi
         fi
         GOLDEN_ID="${LIB}_${MAIN##*.}"
+        # form.toml 可选 deps 键：该项目依赖锁（仓库相对路径）。读到即 cp 解析与 --deps 都改用该锁
+        # （deps-extra 双版本模块，锁内 path 相对位指向该模块 pilot-libs）；无键沿用主模块锁，行为不变
+        FORM_DEPS="$(form_deps "projects/$LIB/form.toml")"
+        if [[ -n "$FORM_DEPS" ]]; then
+            LOCK="$REPO_ROOT/$FORM_DEPS"
+            [ -f "$LOCK" ] || { echo "缺依赖锁 $LOCK：先跑 scripts/fetch_pilot_deps.sh --no-scan" >&2; exit 2; }
+        fi
         CPN="$(form_cp "projects/$LIB/form.toml")"
         CP="$(resolve_cp "$CPN")" || exit 2
         if [[ -n "$CPN" ]]; then
