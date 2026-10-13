@@ -311,8 +311,21 @@ pub fn class_text(
     }
 
     // §9.9 K4-2a：手写扩展 trait 声明（伴生 `impl __XHw{N} for X` 的机械镜像）。块后追加——
-    // 拆层后只在声明层（宏块尾的文本不进实现层），标记文件也不含（marker_text 只取宏块）
+    // 拆层后只在声明层（宏块尾的文本不进实现层），标记文件也不含（marker_text 只取宏块）。
+    // 签名 / 泛型界里的词经伴生 use 表解析为导入行（本文件作用域未绑定的才补——
+    // 镜像声明须可解析，如 Anchored / UnixMountEntry 一类非注册表类型）
     if let Some(hw) = ctx.input.handwritten.get(ci.name()).filter(|h| !h.hw_blocks.is_empty()) {
+        for (w, segs) in &hw.hw_sig_uses {
+            if w == &sname || ctx.ty.scope().is_some_and(|sc| sc.lookup(w).is_some()) {
+                continue;
+            }
+            let path = segs.join("::");
+            let last = segs.last().map(String::as_str).unwrap_or_default();
+            parts.push(if last == w { format!("use {path};") } else { format!("use {path} as {w};") });
+        }
+        if !hw.hw_sig_uses.is_empty() {
+            parts.push(String::new());
+        }
         for (i, blk) in hw.hw_blocks.iter().enumerate() {
             parts.extend(hw_trait_decl(&sname, i as u32 + 1, blk));
             parts.push(String::new());

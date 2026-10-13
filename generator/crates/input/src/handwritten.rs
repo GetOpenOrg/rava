@@ -43,6 +43,9 @@ pub struct HwEntry {
     /// `impl __XHw{N} for X` 扩展 trait 实现块（§9.9 K4-2a，`scripts/diag/k4_2a_rewrite_hw_impls.py`
     /// 改写后的形态；序号 = 块序）。发射层据此镜像 trait 声明，调用点按名登记导入。
     pub hw_blocks: Vec<HwBlock>,
+    /// hw 块签名 / 泛型界里出现、经伴生文件 use 表解析的名字 → 完整路径段
+    /// （声明文件按此补导入——镜像出的 trait 声明须在本文件作用域可解析）
+    pub hw_sig_uses: BTreeMap<String, Vec<String>>,
 }
 
 /// 一个手写扩展 trait 实现块的机械镜像（声明侧发射用）
@@ -520,6 +523,16 @@ pub fn type_words(text: &str) -> impl Iterator<Item = &str> {
     out.into_iter()
 }
 
+/// 泛型界词（std prelude 界，不需要导入）
+const BOUND_WORDS: [&str; 8] = ["Clone", "Default", "Sized", "Send", "Sync", "Into", "From", "Ord"];
+
+/// 签名 / 泛型界作用域内出现的词（`type_words` 已跳 `::` 路径尾段——全限定界可解析；
+/// std 界名不需导入）
+fn type_words_scope(chars: impl Iterator<Item = char>) -> Vec<String> {
+    let text: String = chars.collect();
+    type_words(&text).filter(|w| !BOUND_WORDS.contains(w)).map(str::to_string).collect()
+}
+
 /// 签名里出现、经文件 use 表导入的类型名 → 完整路径段
 fn sig_uses(content: &str, vtables: &BTreeMap<String, BTreeMap<String, (String, String)>>) -> BTreeMap<String, Vec<String>> {
     if vtables.is_empty() {
@@ -600,6 +613,8 @@ struct FileFacts {
     sig_uses: BTreeMap<String, Vec<String>>,
     /// `impl __XHw{N} for X` 扩展 trait 实现块（§9.9 K4-2a）
     hw_blocks: Vec<HwBlock>,
+    /// hw 块签名 / 泛型界里的词 → 本文件 use 表路径
+    hw_sig_uses: BTreeMap<String, Vec<String>>,
 }
 
 /// 读取并提取一个手写文件；非手写模块文件、不可读或含生成标记的文件返回 `None`
@@ -626,6 +641,25 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
     let vtables = vtable_sigs(&content);
     let sig_uses = sig_uses(&content, &vtables);
     let hw_blocks = hw_impl_blocks(&content);
+    let hw_sig_uses = if hw_blocks.is_empty() {
+        BTreeMap::new()
+    } else {
+        let uses = file_uses(&content);
+        let mut out = BTreeMap::new();
+        for blk in &hw_blocks {
+            let words = blk
+                .generics
+                .chars()
+                .chain(blk.where_c.chars())
+                .chain(blk.items.iter().flat_map(|i| i.sig.chars()));
+            for w in type_words_scope(words) {
+                if let Some(segs) = uses.get(w.as_str()) {
+                    out.entry(w).or_insert_with(|| segs.clone());
+                }
+            }
+        }
+        out
+    };
     Some(FileFacts {
         class_binary,
         file_pkg: pkg.join("/"),
@@ -634,6 +668,7 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
         vtables,
         sig_uses,
         hw_blocks,
+        hw_sig_uses,
     })
 }
 
@@ -656,7 +691,7 @@ impl HandwrittenMap {
     }
 
     fn absorb(&mut self, f: FileFacts, reg: &Registry, idents: &BTreeMap<String, Vec<&str>>) {
-        let FileFacts { class_binary, file_pkg, names, cores, vtables, sig_uses, hw_blocks } = f;
+        let FileFacts { class_binary, file_pkg, names, cores, vtables, sig_uses, hw_blocks, hw_sig_uses } = f;
         let refs: BTreeMap<String, String> = sig_uses
             .into_iter()
             .filter_map(|(w, segs)| {
@@ -672,6 +707,7 @@ impl HandwrittenMap {
             e.methods.extend(
                 hw_blocks.iter().flat_map(|b| b.items.iter().filter(|i| i.is_pub).map(|i| i.name.clone())),
             );
+            e.hw_sig_uses.extend(hw_sig_uses);
             e.hw_blocks.extend(hw_blocks);
         }
         for (name, core) in cores {
