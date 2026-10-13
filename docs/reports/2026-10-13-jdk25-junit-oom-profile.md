@@ -156,3 +156,40 @@ python3 /data/workspace/heavy_lock.py build/analyzer-target/release/rava closure
 - stack1.txt / stack2.txt（eu-stack 栈采样）、transpile.log（run_tests 全输出）
 - lambda-prof.txt（16 段打点全文 + 曲线整理表）、lambda-prof.out（stdout，无 summary——被杀）
 - monitor.py（护栏监控脚本）；classes/（副剖面预编译类目录）
+
+## 七、余 7 例严重度表（2026-10-13 补扫：32G 护栏串行剖面）
+
+> 对象：§2.1 triage 名单 63_junit 大槽 8 例中除 TestJunitFailureMessages 外的余 7 例（目录中另有的
+> TestJunitAssertFamily / TestJunitHamcrestBridge 不在大槽名单，不在本扫范围）。方法与 §二 同构、护栏收紧：
+> 逐例串行 `heavy_lock uv run python3 scripts/run_tests.py --jdk 25 --filter /<Test>.java --no-run
+> --transpile-timeout 2400 --out-dir build/j25sweep`，30s 粒度监控分析器（只显式 PID kill -9，禁 pkill），
+> 护栏任一即杀：① 分析器 RSS > 32 GiB；② MemAvailable < 20 G；③ 分析器已过 2400s；例间隔确认
+> available ≥ 25G 再起下一例。结果逐例即时落盘 /tmp/j25sweep-progress.tsv（可中断恢复：中途宿主侧
+> 后台任务被杀一次，按进度文件恢复续跑，已完 4 例结果保留；RSS 原始采样 /tmp/j25sweep/*.rss.tsv）。
+
+| # | 用例 | kill 原因 | 终值 RSS | 死亡时刻 et | 越线 et（22G / 32G / 40G 外推） | 速率特征（早段→全程→末段，MiB/s） | 物化锯齿 |
+|---|---|---|---|---|---|---|---|
+| 1 | TestJunitIgnoreAndExpected | RSS>32G | 34.03 GiB | 780s | 462 / 750 / ≈966 | 52 → 43.9 → 38（末段仍最陡） | 1×2.01G |
+| 2 | TestJunitNewInstancePerTest | AVAIL<20G* | 30.93 GiB | 750s | 457 / ≈784（外推*）/ ≈1040 | 55 → 41.4 → 32（起步最陡） | 1×1.70G |
+| 3 | TestJunitBeforeClassState | RSS>32G | 32.22 GiB | 810s | 491 / 805 / ≈1069 | 49 → 40.0 → 31 | 1×1.84G |
+| 4 | TestJunitLifecycleOrder | RSS>32G | 32.84 GiB | 840s | 481 / 818 / ≈1122 | 53 → 39.4 → 27 | 1×1.79G |
+| 5 | TestJunitAssertThrowsAssume | RSS>32G | 32.61 GiB | 900s | 526 / 883 / ≈1198 | 47 → 36.5 → 26 | 1×0.68G |
+| 6 | TestJunitRunnerResult | RSS>32G | 32.11 GiB | 900s | 530 / 897 / ≈1238 | 46 → 35.9 → 24 | 1×2.14G |
+| 7 | TestJunitTimeoutFast | RSS>32G | 33.37 GiB | 930s | 544 / 903 / ≈1231 | 42 → 36.1 → 25（720–750s 有 1.7G 回落再越线） | 1×1.74G |
+
+- 早段 = et 60–300s 斜率；全程 = 首末样本均值；末段 = 死前最后 300s 斜率；越线 et 为相邻采样线性内插；
+  40G 外推 = 32G 越线 + 8 GiB ÷ 末段斜率。全部 Threads=1 单线程，run_tests 记账均 transpile 1 failed
+  （run 0.00s，`--no-run`），无一完成转译——病理在转译侧，与 §二 FailureMessages 口径一致。
+- *TestJunitNewInstancePerTest：机器侧并发作业把 MemAvailable 压破 20G 触发护栏②（死时自身 RSS
+  30.93 GiB、末段 32 MiB/s，按该斜率 34s 后即越 32G，外推 ≈784s）——严重度判读不受实质影响。
+
+**严重度排序（重 → 轻，按 22G/32G 越线时刻与斜率）**：IgnoreAndExpected ≳ NewInstancePerTest（最重档，
+22G ≈460s、32G 750–784s）> BeforeClassState ≈ LifecycleOrder（中档，22G 480–490s、32G 805–818s）
+> AssertThrowsAssume ≈ RunnerResult ≈ TimeoutFast（相对轻档，22G 526–544s、32G 883–903s）。
+榜首两例差距在测量噪声内（32G 相差 ≈34s 且一为外推）；档内排序按 32G 越线时刻。
+
+**与 FailureMessages 外推模型的一致性核对**：7 例 22G 越线 457–544s 落在模型锚点 445s 的 +3%~+22%、
+40G 越线外推 966–1238s 落在模型锚点 985s 的 −2%~+26%，且全部复现「早段陡升（42–55 MiB/s ≈ 其 Phase A
+44）→ 一次物化锯齿（0.7–2.1G ≈ 其 Phase C）→ 末段减速不收敛（24–38 ≈ 其 B/D 20–27）」的同构曲线
+——junit 8 例同处一个严重度带（FailureMessages 22G/32G 越线 445s/~745s 居带首），§三的外推模型
+（22G 槽 ~7.4min 死、40G 槽 ~16.4min 死）对余 7 例整体成立，与 triage 记录的 40G 槽峰值 39.6–39.9G 吻合。
