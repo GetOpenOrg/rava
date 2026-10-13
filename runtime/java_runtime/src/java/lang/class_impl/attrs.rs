@@ -8,7 +8,6 @@ use crate::jdk::internal::loader::BuiltinClassLoader__Methods as _;
 use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::jdk::internal::reflect::ConstantPool__Methods as _;
 use super::*;
-use crate::java::security::__AccessControllerHw as _;
 use crate::java::lang::__ClassHw as _;
 
 impl Class {

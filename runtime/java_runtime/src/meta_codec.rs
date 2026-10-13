@@ -4,7 +4,6 @@
 //! 解码出的切片进程内常驻（每表一次）。各解码函数与发射层同名表的渲染函数字形一一对应。
 
 use crate::meta::{CpVal, FieldMeta, LineMethod, LineNumbers, MethodMeta, NestMeta};
-use crate::jdk::internal::loader::__EmbeddedClassPathHw as _;
 
 type Names = &'static [&'static str];
 

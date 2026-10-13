@@ -350,34 +350,37 @@ def fix_callers(src: str, check: bool) -> int:
                 segs = [KEYWORD_PKGS.get(s, s) for s in os.path.dirname(rel).split(os.sep) if s != "."]
                 pkg_of.setdefault(m.group(1), "crate::" + "::".join(segs) if segs else "crate")
                 break
-    # 方法名 → 唯一 (类, ordinal)（多主 / 常用泛型名跳过——按编译错误兜底）
-    skip_names = {"get", "put", "mode", "apply", "prim", "cas", "interpret", "invoke_member", "count", "new"}
-    name_owner: dict[str, tuple[str, int]] = {}
-    for cls, ords in items.items():
-        for ordn, names in ords.items():
-            for n in names:
-                if n in skip_names or n.startswith("__impl_"):
-                    continue
-                cands = [(c, o) for c, os_ in items.items() for o, ns in os_.items() if n in ns]
-                if len(cands) == 1:
-                    name_owner.setdefault(n, cands[0])
+    # 接收者形态只认白名单（`.m(` 单主匹配的误报率高——str / 迭代器 / 原子等常用名撞车，
+    # s7k4d-hw2 实测：`.bytes(`/`.count(`/`.pin(`/`.load(` 全是误报）。新增条目前先核实
+    # 接收者确为该 wrapper（文档注释不算）。
+    receiver_allow = {
+        "isPrimitive": "Class",
+        "getBoolean": "Array",
+        "makeInjectedInvoker": "MethodHandleImpl_BindCaller",
+        "__declared_method_rows": "Class",
+        "__method_from_meta": "Class",
+        "__table_declared_methods": "Class",
+    }
+    cls_ord_of: dict[str, dict[int, set[str]]] = items
 
     changed = 0
     for rel in walk_sorted(src):
-        if not rel.endswith(".rs") or rel.endswith("_impl.rs") or rel.endswith("_ext.rs") or rel == "lib.rs":
+        if not rel.endswith(".rs") or rel.endswith("_impl.rs") or rel.endswith("_ext.rs"):
             continue
         p = os.path.join(src, rel)
         text = open(p, encoding="utf-8").read()
         need: dict[str, set[int]] = {}
-        for cls, ords in items.items():
+        for cls, ords in cls_ord_of.items():
             for ordn, names in ords.items():
                 if any(re.search(rf"\b{cls}::{re.escape(n)}\s*[(<]", text) for n in names):
                     need.setdefault(cls, set()).add(ordn)
-        for n, (cls, ordn) in name_owner.items():
-            if cls in need:
+        for n, cls in receiver_allow.items():
+            if cls in need or cls not in cls_ord_of:
                 continue
             if re.search(rf"\.{re.escape(n)}\s*\(", text):
-                need.setdefault(cls, set()).add(ordn)
+                for ordn, names in cls_ord_of[cls].items():
+                    if n in names:
+                        need.setdefault(cls, set()).add(ordn)
         lines: list[str] = []
         for cls in sorted(need):
             segs = KEYWORD_PKGS.get(cls, cls)

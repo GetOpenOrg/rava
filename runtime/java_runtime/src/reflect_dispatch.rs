@@ -41,7 +41,6 @@ use crate::error::Result;
 use crate::java::lang::{Boolean, Byte, Character, Double, Float, Integer, Long, Object, Short};
 use crate::prelude::JArray;
 use crate::java::lang::__ClassHw as _;
-use crate::jdk::internal::loader::__EmbeddedClassPathHw as _;
 
 /// 按名分派入口：(方法名, 描述符, 接收者, 实参) → 处理结果（各类生成的 `__reflect_dispatch`）。
 /// `None` = 本类未声明该方法（上溯继续）；`Some(r)` = 已处理（含错误传播）。

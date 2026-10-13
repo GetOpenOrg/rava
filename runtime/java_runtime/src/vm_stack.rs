@@ -15,7 +15,6 @@
 //! - 闭包帧（DWARF 函数名含 `{closure`）不成帧：原位闭包（`__caller_sensitive`、`try_new_with`）与外层
 //!   方法同一行，外层帧即该 Java 帧；延迟闭包（lambda 代理）的位置是创建点，不在执行栈上。
 
-use crate::jdk::internal::loader::__EmbeddedClassPathHw as _;
 /// StackWalker 锚定的一条帧流：快照与下一个待检视帧的下标（存于执行上下文块，`exec_context::ExecState`）。
 pub(crate) struct AnchoredWalk {
     pub(crate) frames: Vec<JavaFrame>,

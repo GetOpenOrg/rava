@@ -25,7 +25,6 @@ use std::mem::{size_of, ManuallyDrop};
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crate::sync_model::__RefField;
-use crate::jdk::internal::loader::__NativeLibrariesHw as _;
 
 /// 基本元素槽：只经同宽原子指令访问（`repr(transparent)`：元素区可按 T 写入、按槽读取）
 #[repr(transparent)]

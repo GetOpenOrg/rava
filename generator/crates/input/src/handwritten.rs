@@ -422,7 +422,6 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
                 if !name.is_empty() {
                     items.push(HwItem { name, attrs: std::mem::take(&mut attrs), sig: decl, is_pub: hw_pub });
                 }
-                hw_pub = false;
             }
             attrs.clear();
             hw_pub = false;
