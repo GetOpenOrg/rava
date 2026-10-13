@@ -390,9 +390,11 @@ impl Engine<'_> {
         tab!("mirror_open", self.mirror_open.values().map(|v| v.capacity() * 12).sum::<usize>() + self.mirror_open.len() * 40 + self.mirror_open_seen.capacity() * 24 * 9 / 7);
         tab!("open_inj", self.open_inj.iter().map(|(_, v)| v.len() * (4 + BT)).sum::<usize>() + self.open_inj.capacity() * 40 * 9 / 7);
         tab!("array_of", self.array_of.capacity() * std::mem::size_of::<((usize, u32), ArrayOfSite)>() * 9 / 7 + self.array_of.values().map(|s| s.mirrors.len() * (4 + BT) + s.dsts.capacity() * std::mem::size_of::<Node>()).sum::<usize>());
-        tab!("gathers", self.gathers.capacity() * std::mem::size_of::<(gather::Slot, u32, bool)>() + self.gather_ids.capacity() * 40 * 9 / 7 + self.gather_ids.keys().map(|k| d.u32s(&k.2)).sum::<usize>()
+        // 汇集节点族逐子表（§4.19 内容驻留后拆项计量：键集 / 站点累计 / 手写族 / 驻留池开销与命中）
+        tab!("gathers", self.gathers.capacity() * std::mem::size_of::<(gather::Slot, u32, bool)>() + self.gather_ids.capacity() * 40 * 9 / 7 + self.gather_ids.keys().map(|k| d.u32s(&k.2.0)).sum::<usize>()
             + self.gather_last.capacity() * 40 * 9 / 7 + self.gather_last.values().map(|m| m.capacity() * 40 * 9 / 7).sum::<usize>() + self.gather_last.values().flat_map(|m| m.values()).map(|v| d.u32s(&v.1)).sum::<usize>()
-            + self.hw_gather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>() + self.hw_rgather_last.values().map(|v| 24 + d.u32s(&v.1)).sum::<usize>() + self.hw_wgather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>());
+            + self.hw_gather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>() + self.hw_rgather_last.values().map(|v| 24 + d.u32s(&v.1)).sum::<usize>() + self.hw_wgather_last.values().map(|v| 32 + d.u32s(&v.1)).sum::<usize>()
+            + self.gather_pool.deep_bytes());
         tab!("vm_hubs", self.vm_targets.capacity() * 8 * 9 / 7 + self.vm_open_hubs.capacity() * 8 * 9 / 7 + self.vm_rcall_hubs.capacity() * 24 * 9 / 7
             + self.vm_hub_targets.capacity() * 40 * 9 / 7 + self.vm_hub_targets.values().map(|v| v.capacity() * 8).sum::<usize>());
         tab!("eqm", self.eqm.deep_bytes());
@@ -563,6 +565,6 @@ impl Engine<'_> {
         for (name, b) in &small {
             line2.push_str(&format!(" {}={:.0}MiB", name, mib(*b)));
         }
-        eprintln!("{tag} census deep3b{line2} small_sum={:.0}MiB uniq_ptrs={}", mib(small_total), d.seen.len());
+        eprintln!("{tag} census deep3b{line2} small_sum={:.0}MiB uniq_ptrs={} gpool(hit/new/live)={}/{}/{}", mib(small_total), d.seen.len(), self.gather_pool.hits, self.gather_pool.news, self.gather_pool.live());
     }
 }

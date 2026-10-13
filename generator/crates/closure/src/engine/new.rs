@@ -135,6 +135,7 @@ impl<'a> Engine<'a> {
             gathers: Vec::new(),
             gather_ids: HashMap::default(),
             gather_last: HashMap::default(),
+            gather_pool: gather::SetPool::default(),
             hw_gather_last: HashMap::default(),
             hw_rgather_last: HashMap::default(),
             hw_wgather_last: HashMap::default(),

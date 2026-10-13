@@ -29,6 +29,70 @@ pub(super) enum Slot {
     Elem(u8),
 }
 
+/// 对象集元素哈希（可交换和式内容哈希的元素项；与 `setstore.rs` 同式）
+fn u32_elem_hash(x: u32) -> u64 {
+    let m = u128::from(u64::from(x).wrapping_add(1)) * 0x9e37_79b9_7f4a_7c15;
+    (m as u64) ^ (m >> 64) as u64
+}
+
+/// 对象集内容驻留池（§4.19）：同内容的 `Rc<[u32]>` 活分配只此一份——站点累计集（`gather_last` 族）与
+/// 汇集节点键（`gather_ids`）共享同一分配（§4.17 归因 gathers 为 sb3 死前第一大项，驻留主体即对象集；
+/// 各克隆上下文的同形站点以相同次序累计出相同集合——内容重复度高）。哈希为元素哈希之和，桶内
+/// 内容比对（碰撞安全）；弱引用记账，死分配随桶清理出表。只影响存储共享，不影响任何集合内容
+#[derive(Default)]
+pub(super) struct SetPool {
+    /// 内容哈希 → 活分配弱引用
+    ix: HashMap<u64, Vec<std::rc::Weak<[u32]>>>,
+    /// 观测：驻留命中（复用既有分配）/ 新登记
+    pub(super) hits: u64,
+    pub(super) news: u64,
+}
+
+impl SetPool {
+    /// v 驻留：已有同内容活分配则复用，否则登记 v；返回（分配, 内容哈希）
+    pub(super) fn intern(&mut self, v: Vec<u32>) -> (Rc<[u32]>, u64) {
+        let h = v.iter().fold(0u64, |a, &x| a.wrapping_add(u32_elem_hash(x)));
+        let bucket = self.ix.entry(h).or_default();
+        bucket.retain(|w| w.strong_count() > 0);
+        for w in bucket.iter() {
+            let rc = w.upgrade().unwrap();
+            if rc[..] == v[..] {
+                self.hits += 1;
+                return (rc, h);
+            }
+        }
+        self.news += 1;
+        let rc: Rc<[u32]> = v.into();
+        bucket.push(Rc::downgrade(&rc));
+        (rc, h)
+    }
+    /// 深堆字节（census deep3，只读）：索引桶
+    pub(super) fn deep_bytes(&self) -> usize {
+        self.ix.capacity() * 40 * 9 / 7 + self.ix.values().map(|v| 24 + v.len() * 16).sum::<usize>()
+    }
+    /// 活分配数（观测）
+    pub(super) fn live(&self) -> usize {
+        self.ix.values().map(|v| v.iter().filter(|w| w.strong_count() > 0).count()).sum()
+    }
+}
+
+/// 汇集节点键的对象集项：按预存内容哈希入桶、内容判等（§4.19——`Rc<[u32]>` 的缺省 `Hash` 对整段
+/// 走 SipHash，`gather_ids` 每次查找 O(n)；驻留池保证同内容至多一份活分配，指针先试后内容兜底）
+#[derive(Debug)]
+pub(super) struct SetKey(pub(super) Rc<[u32]>, u64);
+
+impl PartialEq for SetKey {
+    fn eq(&self, o: &Self) -> bool {
+        self.1 == o.1 && (Rc::ptr_eq(&self.0, &o.0) || self.0[..] == o.0[..])
+    }
+}
+impl Eq for SetKey {}
+impl std::hash::Hash for SetKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.1.hash(state);
+    }
+}
+
 impl Slot {
     /// 分配点 o 的该槽位节点
     fn node(self, o: u32) -> Node {
@@ -198,15 +262,18 @@ impl Engine<'_> {
             return (None, Some(g0));
         }
         if full.len() < GATHER_MIN {
-            return (Some((NO_GATHER, full.into())), None);
+            // 小集合也驻留：站点数远多于汇集节点数，同名小集合（未达阈值前的公共前缀）跨站点重复
+            let (full, _) = self.gather_pool.intern(full);
+            return (Some((NO_GATHER, full)), None);
         }
-        let full: Rc<[u32]> = full.into();
-        let g = match self.gather_ids.get(&(slot, put, full.clone())) {
+        // 内容驻留（§4.19）：同内容集合只此一份分配——站点累计集与汇集节点键共享
+        let (full, kh) = self.gather_pool.intern(full);
+        let g = match self.gather_ids.get(&(slot, put, SetKey(full.clone(), kh))) {
             Some(&g) => g,
             None => {
                 let g = self.gathers.len() as u32;
                 self.gathers.push((slot, full.len() as u32, put));
-                self.gather_ids.insert((slot, put, full.clone()), g);
+                self.gather_ids.insert((slot, put, SetKey(full.clone(), kh)), g);
                 // 新集合 = 原汇集节点的集合（子集）∪ 其余对象；无原节点时全部对象逐个接边
                 let rest: Vec<u32> = if g0 == NO_GATHER {
                     full.to_vec()
@@ -231,5 +298,47 @@ impl Engine<'_> {
             }
         };
         (Some((g, full)), Some(g))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SetKey, SetPool};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::rc::Rc;
+
+    /// 内容驻留语义：同内容复用同一分配、异内容各自登记；SetKey 判等与哈希口径一致
+    #[test]
+    fn setpool_intern_semantics() {
+        let mut p = SetPool::default();
+        let (a, ha) = p.intern(vec![1, 3, 5]);
+        let (b, hb) = p.intern(vec![1, 3, 5]);
+        assert_eq!(ha, hb);
+        assert!(Rc::ptr_eq(&a, &b), "同内容必须复用同一分配");
+        let (c, hc) = p.intern(vec![1, 3]);
+        assert_ne!(ha, hc);
+        assert!(!Rc::ptr_eq(&a, &c));
+        // 内容哈希与顺序无关的等价集（升序输入为常态，同内容不同分配路径只在测试构造）
+        let (d, _) = p.intern(vec![1, 3, 5]);
+        assert!(Rc::ptr_eq(&a, &d));
+        // SetKey：指针相等快速路径 + 内容兜底（哈希一致）
+        let k1 = SetKey(a.clone(), ha);
+        let k2 = SetKey(b.clone(), hb);
+        let k3 = SetKey(c.clone(), hc);
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+        let h = |k: &SetKey| {
+            let mut s = DefaultHasher::new();
+            k.hash(&mut s);
+            s.finish()
+        };
+        assert_eq!(h(&k1), h(&k2));
+        // 死分配出桶：drop 后再 intern 同内容得到新分配（桶内清理）
+        drop((c, k3));
+        let (e, he) = p.intern(vec![1, 3]);
+        assert_eq!(he, hc);
+        assert_ne!(p.live(), 0);
+        let _ = e;
     }
 }
