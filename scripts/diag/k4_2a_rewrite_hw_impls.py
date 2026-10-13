@@ -99,6 +99,10 @@ def parse_hw_head(head: str) -> tuple[str, str, int, str, str] | None:
     if not hm:
         return None
     i = _skip_ws(head, m.end())
+    # trait 名后的自类型实参组（幂等重入形态）
+    if i < len(head) and head[i] == "<":
+        _, i = _balanced(head, i)
+        i = _skip_ws(head, i)
     if head[i:i + 4] != "for ":
         return None
     i = _skip_ws(head, i + 4)
@@ -252,7 +256,8 @@ def rewrite_file(path: str, text: str, local_types: set[str], counters: dict[str
                 ordn = counters.get(cls, 0) + 1
                 counters[cls] = ordn
                 suffix = "" if ordn == 1 else str(ordn)
-                new_head = f"impl {gen} __{cls}Hw{suffix} for {cls}{app}{where}{{"
+                # 泛型 trait 的 impl 必须应用其形参：`impl<T> __XHw<T> for X<T>`
+                new_head = f"impl {gen} __{cls}Hw{suffix}{app} for {cls}{app}{where}{{"
                 new_head = re.sub(r"\s+", " ", new_head).replace("{ ", "{").replace(" }", "}")
                 new_head = re.sub(r",?\s*\{$", " {", new_head).replace("impl <", "impl<")
                 spans.append((i, j, k - 1, new_head))

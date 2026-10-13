@@ -136,7 +136,7 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     _ensure(info.0.__unsafe_int_set("bci", frame.bci), "bci");
 }
 
-impl<R, T> __StackStreamFactory_AbstractStackWalkerHw for StackStreamFactory_AbstractStackWalker<R, T> where R: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe {
+impl<R, T> __StackStreamFactory_AbstractStackWalkerHw<R, T> for StackStreamFactory_AbstractStackWalker<R, T> where R: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe {
 
 
 

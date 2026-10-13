@@ -333,7 +333,7 @@ fn decl_sig(sig: &str) -> String {
 
 /// 单个手写文件的 `impl __XHw{N} for X` 块（发射序；行级扫描——改写脚本保证第 0 列头、
 /// 条目缩进 4 列，属性单行）
-fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
+pub fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
     let lines: Vec<&str> = content.lines().collect();
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -745,6 +745,19 @@ fn scans_real_class_loader_impl() {
     }
     assert!(blocks.len() >= 2);
     assert!(blocks[1].items.iter().any(|x| x.name == "defineClass1"), "{:?}", blocks[1].items.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
+}
+
+#[test]
+fn scans_real_phantom_reference() {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime/src/java/lang/ref/phantom_reference_impl.rs");
+    let text = std::fs::read_to_string(&p).unwrap();
+    let blocks = hw_impl_blocks(&text);
+    for (i, b) in blocks.iter().enumerate() {
+        println!("block {}: gen={:?} args={:?} where={:?} items={:?}", i + 1, b.generics, b.self_args, b.where_c, b.items.iter().map(|x| x.name.as_str()).collect::<Vec<_>>());
+    }
+    assert_eq!(blocks.len(), 1);
+    assert!(blocks[0].generics.starts_with("<T:"), "{:?}", blocks[0].generics);
+    assert_eq!(blocks[0].self_args, "<T>");
 }
 
     /// K4-2a：`impl __XHw{N} for X` 块的机械镜像（泛型 / where / 条目签名 / cfg 属性 / 多行签名）

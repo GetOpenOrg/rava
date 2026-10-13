@@ -13,7 +13,7 @@ use super::ClassSpecializer_SpeciesData;
 use crate::java::lang::Class;
 use super::__ClassSpecializer_FactoryHw;
 
-impl<T, K, S> __ClassSpecializer_FactoryHw for ClassSpecializer_Factory<T, K, S> where T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, K: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, S: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe {
+impl<T, K, S> __ClassSpecializer_FactoryHw<T, K, S> for ClassSpecializer_Factory<T, K, S> where T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, K: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, S: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe {
 
 
 

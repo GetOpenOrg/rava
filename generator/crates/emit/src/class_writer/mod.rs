@@ -347,6 +347,16 @@ fn hw_trait_decl(sname: &str, ord: u32, blk: &input::handwritten::HwBlock) -> Ve
 mod tests {
     use super::*;
 
+    #[test]
+    fn hw_trait_decl_real_phantom_reference() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime/src/java/lang/ref/phantom_reference_impl.rs");
+        let text = std::fs::read_to_string(&p).unwrap();
+        let blk = input::handwritten::hw_impl_blocks(&text).remove(0);
+        let out = hw_trait_decl("PhantomReference", 1, &blk).join("\n");
+        println!("{out}");
+        assert!(out.contains("pub trait __PhantomReferenceHw<T: Clone"), "{out}");
+    }
+
     /// K4-2a：hw 扩展 trait 声明 = 伴生 `impl __XHw{N} for X` 头与条目的机械镜像
     #[test]
     fn hw_trait_decl_mirrors_companion_block() {
