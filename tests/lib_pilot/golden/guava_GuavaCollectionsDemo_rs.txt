@@ -1,0 +1,11 @@
+[Immutable] [alice, bob, carol] [1, 2, 3] {alice=95, bob=88}
+[Immutable] add 被拒绝: UnsupportedOperationException
+[Multiset] java=3, go=2, rust=1, 排序元素集=[go, java, rust]
+[BiMap] alice->1, 2->bob
+[BiMap] 值重复被拒绝: IllegalArgumentException
+[Table] 张三成绩={数学=92, 语文=88}, 数学列={张三=92, 李四=79}
+[Splitter] [alice, bob, carol]
+[Joiner]   alice | bob | carol
+[Preconditions] 年龄 18 不合法
+[Preconditions] checkNotNull("x") = x
+[BloomFilter] alice=true, bob=true, carol=false（可能误判，参数固定则结果恒定）

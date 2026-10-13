@@ -50,7 +50,7 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
     let rt = ctx.crates().root();
     let mut out = Vec::new();
     let mut paths = Vec::new();
-    for (c, e) in &user.entries {
+    for c in user.entries.keys() {
         // 不透明（L1）类只有类型身份、不初始化，没有 `__class_init`
         let Some(ci) = ctx.class(c).filter(|_| !ctx.is_opaque(c)) else { continue };
         let self_desc = format!("L{c};");
@@ -59,17 +59,15 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
         if !(enum_shaped || has_clinit) {
             continue;
         }
-        let mut p = vec!["crate".to_string()];
-        p.extend(e.pkg_parts.iter().cloned());
-        p.push(e.mod_name.clone());
-        p.push(ctx.declared(c));
+        // 用户类路径走 class_use_path 的模块层定向（`crate::<包>::<模块>::<类>`）：包段关键字
+        // 转义与类模块名同源单一口径，不再手拼
+        let path = crate::phase2::uses::class_use_path(ctx, c, USER_CRATE);
         out.push(format!(
-            "    (\"{c}\", {rt}::sync_model::__Shared::new(|| {}{}::__class_init())),",
-            p.join("::"),
+            "    (\"{c}\", {rt}::sync_model::__Shared::new(|| {path}{}::__class_init())),",
             registration_turbofish(ctx, ems, c)
         ));
         // 接口载体的 `__class_init` 同在 I__Methods 上（§9.9 K6 前置项）
-        paths.push(p.join("::"));
+        paths.push(path);
     }
     // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`；
     // 不透明（L1）类只有类型身份、不初始化，不登记
@@ -165,10 +163,14 @@ pub fn write_main(
         lines.extend(top.map(|m| user_mod_decl(user_src, m, "")));
     }
     lines.push(format!("use {use_path};"));
-    // 主类 `main` 与钩子类 `__class_init` 在各类方法 trait 上（§9.9 K3）：匿名导入
+    // 主类 `main` 与钩子类 `__class_init` 在各类方法 trait 上（§9.9 K3）：匿名导入。
+    // 方法 trait 是宏在类模块内的展开项：用户 crate 的包 mod.rs 只按名再导出类型本体，
+    // trait 不在包路径上——用户类走 class_use_path 的模块层定向（与钩子类同一口径；包路径形
+    // 只在 JDK / lib crate 成立，那边包 mod.rs 有 glob 再导出）。语料单文件（无包声明）
+    // 两形同路，此缺陷只落在多文件项目的用户 crate 面
     let (hb, hook_paths) = hook_block(ctx, user, jdk, ems, disp);
     let mut traits: std::collections::BTreeSet<String> = hook_paths.into_iter().collect();
-    traits.insert(use_path.clone());
+    traits.insert(crate::phase2::uses::class_use_path(ctx, main_bin, USER_CRATE));
     lines.extend(traits.iter().map(|p| format!("use {p}{METHODS_SUFFIX} as _;")));
     // 反射元数据表 crate：运行时以导出符号读取其表，此处把它纳入链接
     lines.push("use java_meta as _;".into());

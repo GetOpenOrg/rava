@@ -1823,6 +1823,22 @@ doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「协议面保
 since = "2026-10-12"
 
 [[pattern]]
+id = "user-crate-methods-trait-package-path"
+stage = "compile"
+symptom = "多文件用户项目（com.example.* 包）rs 编译 E0432：unresolved import `com::example::<pkg>::<Main>__Methods`（main.rs 的匿名导入行），连带 E0599（no associated function named `main`）"
+match = [["unresolved import", "com::example", "__Methods"],
+         ["unresolved import", "__Methods", "main.rs"]]
+tests = ["guava/GuavaCollectionsDemo", "esper/EsperPatternDemo", "templates/ThymeleafDemo（项目模式）"]
+cause = "K3 给 main.rs 的主类方法 trait 匿名导入复用了类型导入的包路径形（`<包>::<类>__Methods as _`）：JDK / lib crate 的包 mod.rs 有 glob 再导出（`pub use <模块>::*;`）所以包路径成立，而用户 crate 的包 mod.rs 只按名再导出类型本体（P5a(a) 既有设计），方法 trait 是宏在类模块内的展开项、不在包路径上。语料 e2e 全部无包声明（主类模块即顶层模块，两形同路），该缝只在多文件项目模式暴露。修法（entry.rs）：主类与钩子类的 trait 导入统一走 phase2::uses::class_use_path 的用户类定向——模块路径 `crate::<包>::<模块>::<类>`（与 imports/fill 同 crate 定向、钩子路径同一口径），并顺带收编 class_init_hooks 的手拼路径（包段关键字转义同源）"
+introduced = "430f6bd8（s7-k3 K3：main.rs 钩子类与主类导入方法 trait；合入 batch-1013，多文件项目模式当时未验收 rs 编译）"
+fixed = ["（b1015-fix；验收：guava/GuavaCollectionsDemo GOLDEN OK——E0432 修后直达转绿，未见预言的 E0308 残留（j25-r2-fix SAM 桥接已收）；esper / templates 同验；四例种子 0/1/2 闭包集合对 batch-1015 全同 + 确定性两项 + generator cargo check --tests 过）"]
+status = "fixed"
+owner = "b1015-fix"
+diagnose = "E0432 指向 user crate 的 `use <包路径>::X__Methods as _;`：X 是用户类（com.example.* 等）即本条；对照 scratch 里 user/src/<包>/mod.rs 的再导出形态（按名 vs glob）与类模块内 trait 展开位置。JDK / lib 类的包路径形不受影响（那边有 glob 再导出）"
+doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「用户 crate 方法 trait 导入路径统一」"
+since = "2026-10-13"
+
+[[pattern]]
 id = "escape-lambda-virtual-cycle"
 stage = "transpile"
 symptom = "JDK 25：转译在闭包完成后 abort——thread '<unknown>' has overflowed its stack（fatal runtime error: stack overflow），RUST_MIN_STACK=128M 仍溢出（非深而有限）"
