@@ -392,10 +392,13 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
                 let is_const = t.starts_with("const") || t.starts_with("unsafe const");
                 let mut sig = t.to_string();
                 let mut m = k;
+                let mut inner_braces = 0i32;
                 let done = |s: &str| if is_const { s.contains(';') } else { s.contains('{') };
                 while m < lines.len() && !done(&sig) {
                     sig.push(' ');
                     sig.push_str(lines[m].trim());
+                    // 被吞的续行（含尾 `{`）同样计入块深——否则块边界提前收
+                    inner_braces += lines[m].matches('{').count() as i32 - lines[m].matches('}').count() as i32;
                     m += 1;
                 }
                 let end = if is_const {
@@ -405,6 +408,7 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
                 };
                 let sig = sig[..end].to_string();
                 k = m;
+                depth += inner_braces;
                 let name = sig
                     .split(|c: char| c == '(' || c == '<' || c == ':')
                     .next()
@@ -728,6 +732,20 @@ mod tests {
         assert_eq!(vt["Iter"]["next"], ("a: i32".to_string(), "Object".to_string()));
         assert_eq!(vt["Iter"].len(), 1);
     }
+
+
+#[test]
+fn scans_real_class_loader_impl() {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime/src/java/lang/class_loader_impl.rs");
+    let text = std::fs::read_to_string(&p).unwrap();
+    let blocks = hw_impl_blocks(&text);
+    for (i, b) in blocks.iter().enumerate() {
+        let names: Vec<&str> = b.items.iter().map(|x| x.name.as_str()).collect();
+        println!("block {}: gen={:?} args={:?} items={:?}", i + 1, b.generics, b.self_args, names);
+    }
+    assert!(blocks.len() >= 2);
+    assert!(blocks[1].items.iter().any(|x| x.name == "defineClass1"), "{:?}", blocks[1].items.iter().map(|x| x.name.clone()).collect::<Vec<_>>());
+}
 
     /// K4-2a：`impl __XHw{N} for X` 块的机械镜像（泛型 / where / 条目签名 / cfg 属性 / 多行签名）
     #[test]
