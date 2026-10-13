@@ -1646,6 +1646,102 @@ g1c11-prof = sb3 全程到 32G 槽死点，4891s / OOM-kill，死前 #87 @4544s�
    先行建档。hubs links / recv_fp 内容驻留（§4.19 排序的次项）本轮未做——死点换位后
    g_sub / methods+an 优先级反超，下轮按新排序派。
 
+### 4.21 S1 埋点 + S2 无限链排查（`g1-ctx2`，2026-10-14，未解除）
+
+承 §4.20 结论 2/3（S 路线：表征压缩线 diminishing returns，methods+an 线性增长交声明式降级；
+本轮按优化方案 `2026-10-13-closure-analysis-optimization-plan.md` S1/S2 定义派发——先诊断再优化）。
+提交 6d2ab4d0（growth.rs 埋点）+ ce09f297（closure-level 骨架）+ 7fc783d7（site 行标签）+
+b268ba33（g_sub 容量修复）。作业 tag g1s1-*（dev 32 GiB 槽，RAVA_CLUSTER_CONFIG 局部覆盖副本
+slot_mem_gb=32；语料回归 jp1）。宪法输入：CLAUDE.md 不变量 #2 改写版（closure-level 相对口径）。
+
+**S1 埋点＝增长链追踪（`engine/growth.rs`，随 `--lambda-prof` dump 打印，缺省零开销）**。七段：
+`growth fam/rel`（实体 / 关系族水位 + 较上段增量）、`growth names/tmpl`（新名分类计数 +
+数字段坍缩模板前列——S2 实锤检测）、`growth site`（新 ctx / 对象名按来源站点前列，名字自带
+溯源）、`growth depth`（上下文 / 对象堆链段数直方图）、`growth rows`（g_sub / mirror_open 行
+规模前列 + hub_sites 调用点接入枢纽数前列）。方法与配套见优化方案 §八。
+
+**S1 验收**：语料四例 × 种子 0/1/2 **12/12 SAME**（g1s1-reg @6d2ab4d0，对 g1c11-reg2 =
+96f21ea6 ≡ 922f8883 基线——其后仅文档提交；mc 逐例相同：HelloWorld 6011×3、DeepCopy
+109666/109666/109665、CollectorsDemo 6511×3、TSLP 113581/111197/113585）；**closure lib
+259 全过 0 失败**（g1s1-unit @ce09f297，含新增 growth_template / closure_level_roundtrip）；
+确定性两项 g1s1-det @ce09f297 **在途**（jp1 独立槽跑 closure_independent_of_order / hash_seed，历史测试段 3700–4000s；同 tag 重发派发器即续接取回）；`cargo check -p closure -p driver --tests` 过。
+**缺省近零开销**：构造性——dump 代码只在剖析开启时运行、缺省路径零新增指令（快照存于
+LambdaProf，剖析关闭时不分配）；实测——四例三种子 elapsed_ms 较基线 **−6.3% ~ −16.3% 全负增量**
+（基线作业与 sb3/det 并槽共跑被 CPU 争用压慢、本轮较静——方向与零开销一致，无一例变慢）。
+
+**S2 无限链排查（sb3 全程到死点 g1s1-sb3 / S0 A 看门狗 g1s1-s0a / junit 代表 3 例 + esper +
+thymeleaf 780s 截断 g1s1-j8e，均 `--lambda-prof` 开）——无界增长链清单**：
+
+| # | 链 | 来源（结构 / 站点） | 增长律（sb3 实测） | 死点规模 | 可降级性评估 |
+|---|---|---|---|---|---|
+| 1 | **方法上下文克隆**（methods×ctx） | `ctxsel.rs` 全策略：对象敏感 `recv_ctx` / 调用点 `site_ctx` / `const_ctx` / selector / level / concrete | 与前沿锁步（ctx Δ ≈ 0.94×methods Δ）；**成员前沿饱和后纯上下文铸造仍在**（末段 members +0/30s、ctx +120/30s）；ctx/members 比 5.9→12 缓慢单调升 | 77.03 万方法 / 71.18 万 ctx；methods+an 821 MiB（事件 args 内层 + MemberRef 串） | **S7 上下文上限 + 超限折叠回 NOCTX**（widening）；**S9 RTA 档无上下文**（声明式降级的统一落点）；残余增长主体 = λ 读者上下文（`ReferencePipeline$$Lambda@site` 族，随 ctx 线性） |
+| 2 | **g_sub 行**（G 子集索引） | `classes.rs g_of` 惰性建行（每查过的过滤类型一行）+ `grow.rs on_g_grow` 中位插入 | 行数饱和（5117 行 +0/30s）、元素随 G 线性（+240/30s）；**容量病理：每行 capacity≈\|G\|**（精确长度迭代器经 filter 的 collect 按上界预留） | Σlen 仅 34.1 万元素（内容 ~1.3 MiB）**驻留 1094 MiB**（§4.20 第一大项）——99.9% 是预留容量浪费 | **本轮已修**（b268ba33 shrink_to_fit，行为中性）；内容本身已小，行内容共享（§4.18 同法）不再必要 |
+| 3 | **mirror_open**（getClass 作用于 open(T)） | `reflect.rs mirror_into / mirror_reopen`（G 增长补类镜像） | 行随 open 类型饱和（2402 行 +0）、元素随 G×登记节点线性后趋停（死前 +0/30s） | 465 万元素 / 286 MiB（含 mirror_open_seen 去重集） | **S6 饱和**（开放类型流超阈值不再精确登记——正是该机制的直接对象）；行内容差分 / 驻留可再省 |
+| 4 | **hub_sites**（调用点接入枢纽集） | `hub.rs` 按调用点建模目标；同站点多克隆枢纽 | **死点仍增长**（sites +1084/30s、edges +55.5 万/30s） | 22.0 万站点 / 2181 万边 / 258 MiB；top：`Optional.ifPresent@12`×1026、`TypeMappedAnnotation.adapt`×528×2 | **S7 上下文收拢**（克隆数下降直接乘小）；**S4 差分传播**；同站点克隆枢纽行内容共享（§4.18 RowSet 同法） |
+| 5 | **pstr succ 子集边** | `pstrs.rs`（§4.18 已证 96% 为枢纽扇出） | 死点仍缓慢增长（slots +17.2 万/30s） | 1.145 亿槽 / 251 MiB | **S3 注册表**（污染源截断 worklist 推导）；S4 差分 |
+| 6 | **事件流 aev** | 方法分析 events（args 内层 Vec）+ MemberRef 串 | 随前沿线性、末段趋停（+2.4K/30s） | 528 万事件（methods+an 主体之一） | **声明式降级**（rta 档不逐事件——§4.20 结论 2 既定路线）；S10 物化解耦 |
+| 7 | **图边 / 推送** | flow 差分传播 | 死点仍增长（edges +193 万/30s；adds[2] 累计 5840 万元素） | 1.77 亿边 / 边列 1360 MiB | **S4 epoch worklist + 差分传播**（优化方案核心项，直接对象） |
+
+**实锤检测结论（S2 定义）**：新登记名字的数字段坍缩模板逐段检查——obj/array/mirror/ctx 名的
+数字 = 分配 / 调用点身份（`@<mbase 下标>:<偏移>`，程序有界）；λ 实体名 = **站点键**
+（`java/util/stream/ReferencePipeline$$Lambda@<方法>:<偏移>`——「生成类按生成点命名（有限化）」
+已实装）；枚举常量名（`InfoCmp$Capability#<const@N>`）一次性出齐；**未发现任何 javassist /
+CGLIB / 运行时递增计数器模板持续增长**。结论：**非「不收敛 bug」型无限链，是「可达前沿线性 ×
+每查询 / 每站点扇出」型容量增长，外加一处容量病理（g_sub，本轮已修）**——与优化方案「先诊断
+（S1/S2）再优化（S4/S7/S9）」的排序互证。sb3 死点前沿已近闭合（members 5.95 万、末段 +0），
+尾段消耗在上下文铸造与关系累积——**慢收敛尾段而非格无界**，但 32G 预算内到不了终点。
+
+**sb3 死点增长律（fam 系列采样，32 GiB 槽死点 5152 s / 峰值 33.5 GB / 77.03 万方法——与
+§4.20 g1c11-sb3 同刻；到死 5152 s vs 5560 s 系本轮机器较静）**：
+
+| t | methods（+/n） | members（+/n） | ctx（+/n） | G（+/n） | ctx/members |
+|---|---|---|---|---|---|
+| 33 s | +77583/77583 | +11659/11659 | +68571/68571 | +11412/11412 | 5.88 |
+| 446 s | +6427/308720 | +149/25943 | +6286/285164 | +1843/48935 | 10.99 |
+| 1329 s | +14050/593422 | +94/50661 | +13961/543520 | +76/64617 | 10.73 |
+| 2626 s | +6519/684282 | +56/56145 | +6467/629057 | +555/71789 | 11.20 |
+| 4467 s | +2858/755627 | +214/57930 | +2672/698717 | +150/76477 | 12.06 |
+| **5112 s（死）** | **+120/770320** | **+0/59526** | **+120/711811** | +120/79080 | 11.96 |
+
+死点仍在长的族：hub_sites 边（+55.5 万/30s）、图边（+193 万/30s）、pstr 槽（+17.2 万/30s）、
+sub 查询位图（+61.4 万位/30s）、ctx/λ（+120/30s）；已饱和的族：members、objs、arrays、
+mirrors、classes、gsub 行、mirror_open（行 + 元素）、gathers、aev（趋停）。链深直方图：
+ctx 与 objs 全部 ≤2 段（HEAP_DEPTH 截断工作正常，无 3+ 段深链）；esper 的深链模板
+（`ConcurrentHashMap$TreeNode@#:##@#:#~@#:#`）为容器对象敏感克隆在 length-window churn 下的
+站点×站点组合（有界但组合大——S7 的对象）。
+
+**观察列对照（780s 截断，进度锚定）**：junit 3 代表例（NewInstancePerTest T1 / BeforeClassState
+T2 / FailureMessages 带首）末点方法数与 RSS 与 g1c11-j8e 基线**逐点吻合**（430541/12850 vs
+12842；423719/12453 vs 12452；NewInstance 44.4 万 / 14813 与基线同刻内插一致），40 万锚
+±6% 波内；esper 32.18 万 / 10.65 GB @714s（基线 32.0 万 / 10.54 GB @706s）；thymeleaf
+17.68 万 / 9.46 GB @611s（基线 17.7 万 / 9.47 GB @648s）——**埋点对各例行为零扰动**。
+S0 A 看门狗档（g1s1-s0a，30 GiB / 5400s）：**派发器中途被杀、远端随之中止 @3150 s / 22.5 GB**
+（未到看门狗死点；死点口径仍以 §4.20 g1c11-s0a2 为准）。已取段内的增长律与 sb3 同构而更陡：
+**members 前沿 @1601 s 起近闭（末窗 +0/36158）、methods 仍 +1749/30s 纯上下文铸造**，ctx/members
+比 9.3 → **15.1**（sb3 为 5.9→12）——S0 A 的上下文乘数更高，纯链 1 的形态。
+
+**g_sub 容量修复（b268ba33，S2 排查的直接产出）**：`g_of` 行构造 `g.into_iter().filter(..).collect()`
+——g 的 IntoIter 是精确长度迭代器（|G|），filter 的 collect 按其上界预留容量，每行驻留 ~|G|×4B；
+rustc 行为独立核实（76000 元素源 filter 出 76 元素 → capacity=76000）。修复 = collect 后
+`shrink_to_fit()`（集合内容与顺序逐位不变）。预期 sb3 死点 g_sub 1094 → ~2 MiB（−99.8%，
+32G 预算的 3.4%）；全套验收（四例三种子 SAME ：g1s1-reg2 **12/12 全 SAME——唯一差异＝骨架新增的 summary.closure_level 元数据键**（集合与 mc 逐项相同））。
+
+**closure-level 三档枚举骨架（ce09f297，优化方案 S11 参数面）**：`ClosureLevel`（rta | 0cfa（缺省）
+| 0cfa-saturated）+ `--closure-level` 入参 + `summary.closure_level` 档案元数据 + 缓存键
+fingerprint 增 closure_level 字段（级别变化 = 摘要变化——CLAUDE.md #2 改写的「档案 = 声明级别的
+输出」有键可查）；骨架期 rta / 0cfa-saturated 显式报错退出（不静默换档），语义本体归 S9 / S6；
+往返验证：closure_level_roundtrip 单测 + every_input_changes_the_key 增两档变体。
+
+**结论与下一步**：
+1. **S2 判据兑现**：无限实体链（计数器合成）不存在；增长 = 前沿线性 × 扇出 + 一处容量病理。
+   死点第一大项 g_sub 的 1094 MiB 是容量浪费而非状态本体（已修，待下轮 sb3 复测量化死点收益）。
+2. **S4 / S7 / S9 的优先序有了实证依据**：死点仍在增长的族（hub_sites 边 / 图边 / pstr 槽 /
+   ctx 铸造）正是 S4（差分传播）与 S7（上下文收拢）的射程；methods+an / aev 随前沿线性且末段
+   趋停，声明式降级（S9 RTA 档 / closure-level 骨架已备参数面）是结构出口。S6 饱和对
+   mirror_open（286 MiB）与开放类型扇出直接适用。
+3. **下轮起手**：sb3 复测 g_sub 修复的死点移动（预期 ~+3% 预算换方法数）；随后按优化方案
+   落地序 S4（epoch worklist + 差分传播——治图边 / 推送浪费源④）→ S7（上下文上限 + 共享）。
+
 
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
