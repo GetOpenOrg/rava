@@ -54,11 +54,12 @@ pub(super) struct LambdaProf {
     rss_max: u64,
     /// 全程 RSS 采样峰值
     rss_max_all: u64,
+    /// 增长链追踪快照（`growth.rs`，S1 埋点；dump 时读旧写新）
+    pub(super) growth: std::cell::RefCell<super::growth::GrowthSnap>,
 }
 
 impl LambdaProf {
-    pub(super) fn new(secs: u64) -> LambdaProf {
-        let now = Instant::now();
+    pub(super) fn new(secs: u64) -> LambdaProf {        let now = Instant::now();
         LambdaProf {
             every: Duration::from_secs(secs.max(1)),
             t0: now,
@@ -77,7 +78,12 @@ impl LambdaProf {
             revived: 0,
             rss_max: 0,
             rss_max_all: 0,
+            growth: Default::default(),
         }
+    }
+    /// 自开启剖析起的秒数（增长链 fam 行的时间轴）
+    pub(super) fn elapsed_s(&self) -> u64 {
+        self.t0.elapsed().as_secs()
     }
 }
 
@@ -592,6 +598,8 @@ impl Engine<'_> {
         if super::gather::shape_on() {
             self.gathers_shape_dump(&tag);
         }
+        // 增长链追踪（优化方案 S1 埋点）：实体 / 关系族水位与增量、新名字分类与计数器模板、深度分布
+        self.growth_dump(&tag);
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {

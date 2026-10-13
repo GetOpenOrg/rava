@@ -397,6 +397,11 @@ impl PStrs {
             ("pstr_top", self.top_m.capacity() * 8 * 9 / 7 + self.top_h.capacity() * 4 * 9 / 7 + self.offsite.capacity() * 8 * 9 / 7 + self.top_f.capacity() * 8 * 9 / 7 + self.active.capacity() * 16),
         ]
     }
+
+    /// succ 表水位（增长链 rel 行，只读）：(行数, Σ槽元素数)
+    pub(super) fn growth_stats(&self) -> (u64, u64) {
+        (self.succ.rows.len() as u64, self.succ.rows.values().map(|(_, r)| r.len() as u64).sum())
+    }
 }
 
 /// 边集形态画像开关（`RAVA_PSTR_SHAPE=1`，只读诊断；逐 dump 全量走边有秒级代价，验收运行不开）

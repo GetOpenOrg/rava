@@ -62,6 +62,7 @@ mod recv_fp;
 mod site_prof;
 mod lambda_prof;
 mod deep3;
+mod growth;
 mod ctx_prof;
 mod ctx_free;
 mod ctx_flat;
