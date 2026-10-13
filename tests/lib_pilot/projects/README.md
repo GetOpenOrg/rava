@@ -47,6 +47,27 @@ JVM 侧 golden 全入口先行；**rs 侧随能力闸门点亮**（缺口分析 
 | containers | ContainerShowdownDemo | 完整应用（Tomcat / Jetty / Undertow / Netty 四容器回环对比） |
 | frameworks | FrameworkComparisonDemo、HelloEndpoints、RouteAnnotationDemo | 完整应用 |
 
+## 双版本依赖模块（deps-extra，方案 A）
+
+依赖锁是「每坐标一份 jar」的扁平表，而 Maven 单 pom 对同一 GA 坐标只能产出一个版本
+（依赖调解）。当某项目需要的版本与主模块锁钉值冲突时，**在 `tests/lib_pilot/deps-extra/<模块>/`
+开独立模块并存**（独立 pom，不继承主 pom；独立 `target/pilot-libs/` 与 `target/deps.lock.toml`），
+不改主锁、不降级已存档 golden 的钉值。机制议题与裁决记录：
+`docs/plans/2026-10-13-lib-pilot-dual-version-mechanism.md`。
+
+- **何时开新模块**：项目运行所需的某依赖版本 ≠ 主锁钉值（典型：上游库自己声明的传递钉值，
+  主锁里被别的传递线调解成了另一版本），且主锁钉值有已存档 golden 背书不可改。
+- **form.deps 用法**：冲突项目 form.toml 把 `deps` 键指到模块锁
+  （如 `deps = "tests/lib_pilot/deps-extra/esper/target/deps.lock.toml"`），`cp` 照常列锁条目名。
+  e2e（`scripts/e2e_form.py`）与 golden（`scripts/lib_pilot_golden.sh` 项目模式）读到该键即以该锁
+  解析 cp 与 `--deps`；锁内 jar 路径相对锁所在目录。**模块须自持该项目全部 cp 条目**（其他依赖
+  与主模块同版钉值重复声明即可）。无 `deps` 键 / 指向主锁的行为与旧完全一致。
+- **取包**：`scripts/fetch_pilot_deps.sh` 先跑主模块（行为不变），再循环处理 `deps-extra/*/` 各模块
+  （同一 rm -rf 清残留、copy-dependencies 导出与锁生成口径）。
+- **现有模块**：`esper`（esper 7.1.0 + antlr4-runtime 4.7，主锁经 hibernate 调解为 4.13.2 会
+  ATN 版本失配）；`thymeleaf`（thymeleaf 3.1.3 + ognl 3.3.4，主锁钉 3.4.14 有三个单文件 pilot
+  golden 背书；模块另自持 FreeMarker / Velocity 等项目 cp）。
+
 ## 已知运行前置（测试机上处理）
 
 - **aspectj**：注解面 javac 直接过，但切面生效需织入（上游用 aspectj-maven-plugin 编译期织入）。
