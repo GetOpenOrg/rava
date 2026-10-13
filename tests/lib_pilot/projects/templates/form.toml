@@ -5,4 +5,5 @@
 # Velocity，与主模块同版钉值）。
 deps  = "tests/lib_pilot/deps-extra/thymeleaf/target/deps.lock.toml"
 cp    = ["thymeleaf", "freemarker", "velocity-engine-core", "commons-lang3", "slf4j-api",
-        "ognl", "attoparser", "unbescape", "javassist"]fetch = "scripts/fetch_pilot_deps.sh --no-scan"
+        "ognl", "attoparser", "unbescape", "javassist"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"
