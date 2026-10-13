@@ -75,6 +75,19 @@ impl StackSim<'_> {
     }
 
     fn needs_object_boxing(&self, slot: u16, c: &StoreCtx) -> bool {
+        // 无 LVT（类文件只带行号表，如 joda）的合成局部：首次 `aconst_null; astore` 以 Object 定型
+        // （`let mut local_N: Object = Object::default()`），后续存入具体类值同样要装箱——否则
+        // `local_N = Clone::clone(&string_val)` 在期望类型驱动下解析为 `<Object as Clone>::clone`
+        // 的 &Object 形参（E0308，joda DateTimeFormatterBuilder$TimeZoneId.parseInto 的 bestMatch）
+        if c.decl.is_none()
+            && !self.state.param_slots.contains(&slot)
+            && !c.src_is_object
+            && !is_scalar(&c.ty)
+            && !is_object(&c.ty)
+            && self.state.locals.get(&slot).is_some_and(|l| is_object(&l.ty))
+        {
+            return true;
+        }
         let Some(decl) = c.decl.as_ref().filter(|d| d.ty.is_none()) else {
             return false;
         };
