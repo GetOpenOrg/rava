@@ -127,4 +127,8 @@ impl SubRow {
             self.yes[w] |= 1 << b;
         }
     }
+    /// 位图容量字节（census deep 行，只读）
+    pub(super) fn prof_bytes(&self) -> usize {
+        (self.known.capacity() + self.yes.capacity()) * 8
+    }
 }

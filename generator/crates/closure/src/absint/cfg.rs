@@ -21,6 +21,16 @@ pub struct Cfg {
 }
 
 impl Cfg {
+    /// 深堆字节（engine/deep3.rs 的 census 行，只读；capacity 口径）
+    pub fn prof_bytes(&self) -> usize {
+        self.starts.capacity() * 4
+            + self.ends.capacity() * 4
+            + self.succ.capacity() * 24
+            + self.succ.iter().map(|v| v.capacity() * 8).sum::<usize>()
+            + self.handlers.capacity() * 24
+            + self.handlers.iter().map(|v| v.capacity() * 8).sum::<usize>()
+    }
+
     pub fn build(code: &Code) -> Cfg {
         let insns = &code.insns;
         let n = insns.len();

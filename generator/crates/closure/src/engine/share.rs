@@ -47,6 +47,22 @@ pub(super) struct Shared {
     deps: Rc<[Dep]>,
 }
 
+impl Shared {
+    /// 深堆字节（engine/deep3.rs 的 census 行，只读；分析本体 `a` 由 methods 行按指针去重，此处不计）
+    pub(super) fn prof_bytes(&self, d: &mut deep3::Deep) -> usize {
+        const BT: usize = 8; // B 树节点摊还
+        self.params.capacity() * std::mem::size_of::<Option<V>>()
+            + self.params.iter().flatten().map(|x| d.v(x)).sum::<usize>()
+            + self.mirrors.capacity() * std::mem::size_of::<Option<BTreeSet<Rc<str>>>>()
+            + self.mirrors
+                .iter()
+                .flatten()
+                .map(|t| t.len() * (16 + BT) + t.iter().map(|x| d.rc_str(x)).sum::<usize>())
+                .sum::<usize>()
+            + self.holders.capacity() * 8
+    }
+}
+
 impl Ctx<'_> {
     /// 上下文 m 登记依赖 d；分析进行中（`dep_log` 打开）同时记入日志
     pub(super) fn dep(&self, m: usize, d: Dep) {

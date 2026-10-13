@@ -276,6 +276,68 @@ pub(super) enum Recv {
     Bounded(TypeSet, u32),
 }
 
+/// 有序集合的数组形态（性能计划 §4.17 枢纽结构压缩：`BTreeSet` 节点摊还 6–14 B/条 → 数组 4–8 B/条）。
+/// 只用于「插入去重 + 升序遍历 + len / is_empty」的枢纽站点集合——插入 O(n) 搬移（枢纽集合多为个位到
+/// 千级条目，memmove 代价可忽略），遍历序与 `BTreeSet` 完全相同（升序），行为与确定性不变
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct SortedSet<T: Ord>(Vec<T>);
+
+impl<T: Ord> Default for SortedSet<T> {
+    fn default() -> Self {
+        SortedSet(Vec::new())
+    }
+}
+
+impl<T: Ord> SortedSet<T> {
+    /// 插入：已存在返回 false（与 `BTreeSet::insert` 同口径）
+    pub(super) fn insert(&mut self, x: T) -> bool {
+        match self.0.binary_search(&x) {
+            Ok(_) => false,
+            Err(i) => {
+                self.0.insert(i, x);
+                true
+            }
+        }
+    }
+    /// 是否含 x（`Rc` 共享行插入前的在场检查，避免无谓克隆）
+    pub(super) fn contains(&self, x: &T) -> bool {
+        self.0.binary_search(x).is_ok()
+    }
+    /// 粗判：x 是否可能在 [首, 末] 值域内（有序行的反查前置过滤——惰性逆边重建时逐行先看值域再二分）
+    pub(super) fn may_contain(&self, x: &T) -> bool {
+        !self.0.is_empty() && self.0.first() <= Some(x) && self.0.last() >= Some(x)
+    }
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub(super) fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.0.iter()
+    }
+    /// 容量字节（census deep2 行，只读）
+    pub(super) fn cap_bytes(&self) -> usize {
+        self.0.capacity() * std::mem::size_of::<T>()
+    }
+}
+
+impl<T: Ord> IntoIterator for SortedSet<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T: Ord> IntoIterator for &'a SortedSet<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 /// 派发枢纽：同一调用成员在同一接收者集合上的派发。
 ///
 /// 虚调用的派发目标只由接收者决定（抽象对象取其克隆上下文、类与数组取方法本体），与调用方上下文无关；
@@ -300,9 +362,9 @@ pub(super) struct Hub {
     pub(super) via: Via,
     /// open 枢纽已按 G 展开（首个调用点接入后）；已并入的接收者
     pub(super) expanded: bool,
-    pub(super) recvs: BTreeSet<u32>,
+    pub(super) recvs: SortedSet<u32>,
     /// 经枢纽中转的目标
-    pub(super) plain: BTreeSet<usize>,
+    pub(super) plain: SortedSet<usize>,
     /// 逐调用点派发的 lambda / 手写实现对象接收者（接入时取快照，故按 `Rc` 共享）
     pub(super) lambdas: Rc<Vec<u32>>,
     /// 按调用点建模的目标 → 其接收者：逐调用点接边，同目标的接收者合成一条
@@ -318,12 +380,12 @@ pub(super) struct Hub {
     /// 锚点只是读者单元的宿主（随接入先后而定）：读者的效果归枢纽而非锚点调用点（`hub_reader.rs`），与锚点是谁无关
     pub(super) anchor: Option<(usize, u32)>,
     /// 本枢纽 lambda 读者接边的目标：报告中计入枢纽的每个接入点（与 `plain` 同口径）
-    pub(super) ltargets: BTreeSet<usize>,
+    pub(super) ltargets: SortedSet<usize>,
     /// 本枢纽 lambda 读者接入的枢纽（方法引用的虚分派）：其目标同样计入本枢纽的每个接入点
-    pub(super) lhubs: BTreeSet<u32>,
+    pub(super) lhubs: SortedSet<u32>,
     /// 本枢纽 lambda 读者接边的实现方法形参段：（目标, 首个 SAM 实参所在形参位, 首个取用的枢纽实参序号）。
     /// SAM 实参常量取枢纽合流值 `vals`，合流值变宽时按此重新并入（`hub_reader.rs`）
-    pub(super) lbind: BTreeSet<(usize, usize, usize)>,
+    pub(super) lbind: SortedSet<(usize, usize, usize)>,
     /// 增长枢纽的共享键（调用成员, 接口调用, 只收抽象对象）：接收者超过 `HUB_SHARE` 时据此升级（`hub_share.rs`）
     pub(super) share: Option<(MemberRef, bool, bool)>,
     /// 已升级：调用点接入与接收者一律转发到此共享枢纽

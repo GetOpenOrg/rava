@@ -52,6 +52,10 @@ impl<'a> Engine<'a> {
         self.ctx.stats.borrow_mut().mark_rss("setup");
         let mut batch = 0usize;
         loop {
+            // RSS 采样（剖析开启时；工作表填充波不触发 lambda 计数，见 `lambda_prof.rs`）
+            if batch & 0xfff == 0 {
+                self.lprof_rss_sample();
+            }
             self.pkey_flush();
             self.fopen_flush();
             if !self.obj_dirty.is_empty() {
@@ -68,6 +72,15 @@ impl<'a> Engine<'a> {
                 self.drain_flows();
                 self.obj_flush();
                 self.stat_leave();
+                // 预算降级合并的第二检查点位（§4.15，仅预算档）：批间排空（fwork 已全应用、集合稳定）。
+                // sb3 / S0 的主循环到被杀都未达全空闲点（mwork / swork / cwork 持续非空，g1c6-sb3 实测
+                // bhits=0——只在全空闲点查预算永远不触发），站点重跑的后续增长与排空点后的种子补入同型，
+                // 合并语义一致（近似档）；显式位 1/2 通道与缺省档不经此点位
+                if self.eq_budget > 0 && self.eq_merge_due() {
+                    self.stat_enter(Phase::Flows);
+                    self.eq_merge_checkpoint();
+                    self.stat_leave();
+                }
             }
             batch += 1;
             if let Some((k, e, s)) = self.rpending.pop() {
@@ -106,6 +119,13 @@ impl<'a> Engine<'a> {
                 // 直连反射调用点的精确接收者在不动点上判定涵盖（`reflect_direct.rs::rdirect_release`）
                 if self.rdirect_release() {
                     continue;
+                }
+                // 工作队列排空：排空点等价类合并（§4.14 ①，`eqmerge.rs`；位 1/2 通道开才做，
+                // 分档门控）。合并在种子轮前——种子补入的新工作沿合并后的图继续传播
+                if self.eq_merge_due() {
+                    self.stat_enter(Phase::Flows);
+                    self.eq_merge_checkpoint();
+                    self.stat_leave();
                 }
                 // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
                 self.stat_enter(Phase::Seeds);
@@ -379,8 +399,16 @@ impl<'a> Engine<'a> {
                 let hot: HashSet<u32> = code.insns.iter().zip(&cold).filter(|(_, c)| !**c).map(|(x, _)| x.offset).collect();
                 a.events.retain(|(off, _)| hot.contains(off));
             }
-            // 摘要常驻到下次失效（读者重跑 / 重分析按偏移比对都要用），收掉构建期的余量
+            // 摘要常驻到下次失效（读者重跑 / 重分析按偏移比对都要用），收掉构建期的余量；
+            // 内层实参 Vec 同收（§4.17：`pop_args` 按形参数预留、`insert` 接收者翻倍，
+            // 虚调用普遍带 ~1/3 容量余量；事件驻留整个分析期）
             a.events.shrink_to_fit();
+            for (_, e) in a.events.iter_mut() {
+                match e {
+                    Event::Invoke { args, .. } | Event::Indy { args, .. } => args.shrink_to_fit(),
+                    _ => {}
+                }
+            }
             let a = Rc::new(a);
             if let (Some((params, mirrors)), Some(deps)) = (entry, deps) {
                 self.share_record(m, (params, mirrors, queries.clone()), sites, &a, deps);

@@ -155,6 +155,18 @@ fn param_of(v: &V) -> Option<usize> {
     }
 }
 
+impl SpRet {
+    /// 深堆字节（engine/deep3.rs 的 census 行，只读；`d` 记 MemberRef 键深）
+    pub(super) fn deep_bytes(&self, d: &mut deep3::Deep) -> usize {
+        const BT: usize = 8;
+        self.methods.len() * (std::mem::size_of::<MemberRef>() + BT) + self.methods.iter().map(|m| d.member(m)).sum::<usize>()
+            + self.untracked.capacity() * std::mem::size_of::<MemberRef>() * 9 / 7 + self.untracked.iter().map(|m| d.member(m)).sum::<usize>()
+            + self.virt.len() * (48 + BT)
+            + self.lambda_in.capacity() * std::mem::size_of::<MemberRef>() * 9 / 7 + self.lambda_in.iter().map(|m| d.member(m)).sum::<usize>()
+            + self.nodes.capacity() * 40 * 9 / 7 + self.nodes.keys().map(|m| d.member(m)).sum::<usize>() + self.nodes.values().map(|v| v.len() * (8 + BT)).sum::<usize>()
+    }
+}
+
 impl Ctx<'_> {
     /// 由调用实参派生的结果：值相等判定、属性表持有方法、属性读取
     /// level = 读取点所在的引导档位（None = 非档位上下文）

@@ -33,6 +33,15 @@ pub(super) struct RecvFp {
     seen: Option<IdSet>,
 }
 
+impl RecvFp {
+    /// 深堆字节（census deep2 行，只读）
+    pub(super) fn prof_bytes(&self) -> usize {
+        std::mem::size_of::<RecvFp>()
+            + self.recv.as_ref().map_or(0, |(a, b)| 32 + a.len() * 4 + b.len() * 4)
+            + self.seen.as_ref().map_or(0, |s| s.heap_bytes())
+    }
+}
+
 /// 增量取值的结果
 pub(super) struct Since {
     /// 精确部分：增量时只含新增，否则为全集；open 部分恒为全集

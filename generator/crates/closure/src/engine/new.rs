@@ -105,6 +105,13 @@ impl<'a> Engine<'a> {
             objs: HashMap::default(),
             obj_chain: HashMap::default(),
             seg_cls: HashMap::default(),
+            // 宽分配点封顶（engine.rs `SITE_CAP`）：RAVA_SITE_CAP 覆盖（0 = 关闭）。
+            // 缺省阈值取语料分配点变体数实测上界之上，语料零触发（行为与关闭一致）
+            site_variants: HashMap::default(),
+            site_capped: HashSet::default(),
+            site_cap: std::env::var("RAVA_SITE_CAP").ok().map_or(SITE_CAP, |v| v.parse().unwrap_or(SITE_CAP)),
+            // 预算降级合并（eqmerge.rs §4.15）：RSS 预算（字节，K/M/G 后缀）；0 = 关闭（缺省，路径零影响）
+            eq_budget: std::env::var("RAVA_EQ_BUDGET").ok().map_or(0, |v| eqmerge::parse_budget(&v)),
             ctx_heap: HashMap::default(),
             containers: HashMap::default(),
             dflt_alloc: HashSet::default(),
@@ -181,11 +188,12 @@ impl<'a> Engine<'a> {
             ctx_free_hits: 0,
             ctx_flat_memo: HashMap::default(),
             ctx_flat_hits: 0,
-            // RAVA_CTX_FLAT 位开关（诊断 / 二分用）：1 继承收口、2 接收者收口、4 lambda 创建上下文收口、
-            // 8 反射池静态成员短路、16 宽档（容器分配放行）。0/off 全关（= 基线行为）。缺省 8：
-            // 继承 / 接收者 / lambda 三路收口在语料上精度变宽（性能计划 §4.13：DeepCopy 超时 / OOM、lambdas +1），
-            // 只有池静态短路过四例集合口径（DeepCopy 类 / 方法等全一致，仅统计项差：method_contexts −46、
-            // 句柄通道 targets 417→374——被去掉的（静态成员, 池对象）克隆不产生成员级差异）
+            // RAVA_CTX_FLAT 位开关：1 继承通道、2 接收者通道（§4.14 ① 起为排空点等价类合并的通道开关，
+            // `eqmerge.rs`——§4.13 的建点急切收口已按其实测精度崩塌结论废除）、4 lambda 创建上下文收口（诊断用）、
+            // 8 反射池静态成员短路、16 宽档（容器分配放行）。0/off 全关（= 基线行为）。缺省 8。
+            // 位 1/2 合并通道为**实验性近似档**（g1c5 实测：试金石不崩，但任一实际合并即引入输出漂移
+            // 且次序依赖——双模拟对开放增长不封闭，见 `eqmerge.rs` 模块说明与性能计划 §4.14 实施节）；缺省不受影响
+            // （零合并时记账不动输出，四例 × 三种子与基线逐项相同，g1c4-reg/g1c5-touch）
             ctx_flat_mode: std::env::var("RAVA_CTX_FLAT").ok().map_or(8, |v| match v.as_str() {
                 "0" | "off" | "false" => 0,
                 "1" | "inherit" => 1,
@@ -196,6 +204,7 @@ impl<'a> Engine<'a> {
                 "broad" => 31,
                 other => other.parse().unwrap_or(8),
             }),
+            eqm: Default::default(),
             level_inited: HashSet::default(),
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),
@@ -243,6 +252,8 @@ impl<'a> Engine<'a> {
             static_offset_live: false,
             static_base_waits: Vec::new(),
             fwork: VecDeque::new(),
+            fwork_bytes: 0,
+            fwork_bytes_peak: 0,
             xreaders: HashMap::default(),
             pkey_dirty: BTreeSet::new(),
             lookup_top: HashSet::default(),

@@ -251,7 +251,15 @@ impl Engine<'_> {
     /// 不在此处同步重跑：污染发生在接边中途（`edge` → `bind_params`），同步重跑会重入调用事件并清掉
     /// 外层调用点的实参值（`call_vals`），外层余下的接边随之丢失形参字符串集
     pub(super) fn taint_slot(&mut self, s: PSlot, why: TaintWhy) {
-        let mut work = vec![(s, why)];
+        let mut work = vec![(s, why.clone())];
+        // 方法形参槽的污染锁步扇出到等价组成员（`eqmerge.rs`；透传来源记原槽）
+        if let PSlot::M(t, i) = s {
+            for u in self.eqm.mates.get(&t).into_iter().flatten().copied().collect::<Vec<_>>() {
+                if u != t {
+                    work.push((PSlot::M(u, i), why.clone()));
+                }
+            }
+        }
         while let Some((s, why)) = work.pop() {
             let fresh = match s {
                 PSlot::M(t, i) => self.ptaint.insert((t, i)),
@@ -323,6 +331,7 @@ impl Engine<'_> {
 }
 
 /// 形参槽污染的来源（诊断）
+#[derive(Clone)]
 pub(super) enum TaintWhy {
     /// 沿形参子集边自方法 / 枢纽形参槽透传
     Pass(PSlot),

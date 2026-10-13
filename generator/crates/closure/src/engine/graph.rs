@@ -108,6 +108,10 @@ impl FlowGraph {
         self.seen = HashMap::default();
         self.edge_count = 0;
     }
+    /// 去重索引的条目数（观测）
+    pub(super) fn seen_len(&self) -> usize {
+        self.seen.values().map(|t| t.len()).sum()
+    }
 
     /// 节点序号（首次出现时驻留）
     #[inline]
@@ -223,7 +227,23 @@ impl FlowGraph {
     pub(super) fn len(&self) -> usize {
         self.iter().count()
     }
-    /// 全部流边按源节点展开（诊断 / 观测）
+    /// 固定列与驻留键表的深字节估计（census deep 行；capacity 口径）：返回
+    /// （ids 表, 节点列合计, 边容量, delta 槽列, seen 表, members/rep_taus）
+    pub(super) fn prof_columns(&self) -> (usize, usize, usize, usize, usize, usize) {
+        let n = self.nodes.len();
+        let cols = n * (std::mem::size_of::<Node>()
+            + 7 // kinds / mirror_src / hooked / injected / tau_broken / queued / rep（各 1–4B，按 7 估）
+            + 8 // sets 槽（Rc）
+            + 8 // hashes
+            + std::mem::size_of::<TypeSet>() // delta 槽内联
+            + 24); // push_src 三计数
+        let edges = self.edges.capacity() * 24 + self.edges.iter().map(|e| e.capacity() * 8).sum::<usize>();
+        let seen: usize = self.seen.values().map(|t| t.capacity() * 4).sum();
+        let extra = self.members.values().map(|v| v.capacity() * 4).sum::<usize>()
+            + self.rep_taus.values().map(|v| v.capacity() * 4).sum::<usize>();
+        (self.ids.capacity() * (std::mem::size_of::<Node>() + 4) * 9 / 7 + n * 4, cols, edges, 0, seen, extra)
+    }
+
     /// 节点所属代表的序号（诊断）
     pub(super) fn rep_of(&self, n: &Node) -> Option<u32> {
         let &i = self.ids.get(n)?;

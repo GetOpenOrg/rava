@@ -85,6 +85,10 @@ impl<'a> Engine<'a> {
                 let load = self.man.names.is_class_load(&key);
                 let (named, top) = if load || self.man.names.is_class_lookup(&key) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.method_ctx(resolved, ctx, via);
+                // 继承调用方上下文的克隆标合并通道（`eqmerge.rs`；调用点 / 选择子克隆不标）
+                if ctx != NOCTX && ctx == self.methods[m].ctx {
+                    self.mark_merge(t, 1);
+                }
                 self.site_linked(m, off, t);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
@@ -244,16 +248,20 @@ impl<'a> Engine<'a> {
             Some(sel) => {
                 let (o, n, d) = sel.key();
                 let key = MemberRef { owner: o, name: n, desc: d };
-                // 接收者 / 中继继承来源的上下文：key 是上下文平方法时并入本体（`ctx_flat.rs`）
+                // 接收者 / 中继继承来源的上下文（`ctxsel.rs`）
                 let base = match self.recv_ctx(r) {
                     NOCTX => {
-                        let r = self.relay_ctx(m, &key);
-                        self.flat_ctx(&key, r, 1)
+                        let rc = self.relay_ctx(m, &key);
+                        self.flat_ctx(&key, rc, 1)
                     }
                     c => self.flat_ctx(&key, c, 2),
                 };
                 let cx = self.recv_call_ctx(m, off, &key, base);
                 let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
+                // 继承 / 接收者来源的克隆标合并通道（`eqmerge.rs`；调用点常量克隆不标）
+                if cx == base && cx != NOCTX {
+                    self.mark_merge(t, if self.recv_ctx(r) == NOCTX { 1 } else { 2 });
+                }
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             None => {
@@ -332,18 +340,24 @@ impl<'a> Engine<'a> {
             }
         }
         for x in objs {
-            // 接收者来源的上下文：key 是上下文平方法时并入本体（`ctx_flat.rs`）
+            // 接收者来源的上下文（`ctxsel.rs`）；接收者克隆标合并通道（`eqmerge.rs`）
             let base = self.flat_ctx(&key, self.recv_ctx(x), 2);
             let c = cx(self, base);
             let t = self.method_ctx(key.clone(), c, via.clone());
+            if c == base && c != NOCTX {
+                self.mark_merge(t, 2);
+            }
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
-            // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体；平方法同样收口
+            // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体；继承克隆标合并通道
             let r = self.relay_ctx(m, &key);
             let base = self.flat_ctx(&key, r, 1);
             let c = cx(self, base);
             let t = self.method_ctx(key, c, via);
+            if c == base && c != NOCTX {
+                self.mark_merge(t, 1);
+            }
             // 物化后的值集不再带来源节点：来源的接口界随接收者传下（`getClass` 结果只展开同时 ⊂ 该接口的子类型）
             let recv = match self.feeds_bound(&fs) {
                 Some(b) => Recv::Bounded(rest, b),
@@ -375,6 +389,8 @@ impl<'a> Engine<'a> {
             if let Some(cv) = self.call_vals.clone() {
                 let string = self.id(STRING);
                 self.pstr_site(m, off, &cv, |j| Some(pstrs::PSlot::M(t, base + j)), |j| ptypes.get(base + j).copied().flatten() == Some(string));
+                // 常量载体（`eqmerge.rs`）：调用点各实参的常量格内容进入被调形参的内容集（合并判定的常量维度）
+                self.carrier_join(m, off, t, base, ptypes.len(), &cv);
             }
         }
         // 按字段句柄存取、接收者为来源标记（或由标记给出身份的句柄对象）：按调用点建模，对象实参与写入值
@@ -588,6 +604,29 @@ impl<'a> Engine<'a> {
         self.pvals.insert(t, new);
         if cur.is_some() {
             self.invalidate(t, Why::ParamConst);
+        }
+        // 锁步扇出（`eqmerge.rs` 等价组）：同一实参并入组内成员，常量格保持全同（合并的前置不变）
+        for u in self.eqm.mates.get(&t).into_iter().flatten().copied().collect::<Vec<_>>() {
+            if u == t {
+                continue;
+            }
+            let cur = self.pvals.get(&u).cloned();
+            let new: Vec<PV> = (0..n)
+                .map(|i| {
+                    let v = match (vals, i.checked_sub(base)) {
+                        (Some(vs), Some(j)) => vs.get(j).cloned().unwrap_or(PV::Top),
+                        _ => PV::Top,
+                    };
+                    PV::join(cur.as_ref().and_then(|c| c.get(i)), &v)
+                })
+                .collect();
+            if cur.as_ref() == Some(&new) {
+                continue;
+            }
+            self.pvals.insert(u, new);
+            if cur.is_some() {
+                self.invalidate(u, Why::ParamConst);
+            }
         }
     }
 }

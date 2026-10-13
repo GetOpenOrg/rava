@@ -41,17 +41,17 @@ impl<'a> Engine<'a> {
             vals: None,
             via,
             expanded: false,
-            recvs: BTreeSet::new(),
-            plain: BTreeSet::new(),
+            recvs: Default::default(),
+            plain: Default::default(),
             lambdas: Rc::default(),
             special: BTreeMap::new(),
             links: BTreeMap::new(),
             link_seq: 0,
             edged: HashSet::default(),
             anchor: None,
-            ltargets: BTreeSet::new(),
-            lhubs: BTreeSet::new(),
-            lbind: BTreeSet::new(),
+            ltargets: Default::default(),
+            lhubs: Default::default(),
+            lbind: Default::default(),
             share,
             fwd: None,
             skeys: HashSet::default(),
@@ -391,10 +391,13 @@ impl<'a> Engine<'a> {
         };
         let (o, n, d) = sel.key();
         let via = self.hubs[h as usize].via.clone();
-        // 接收者来源的上下文：目标是上下文平方法时并入本体（`ctx_flat.rs`）
+        // 接收者来源的上下文（`ctxsel.rs`）；接收者克隆标合并通道（`eqmerge.rs`）
         let key = MemberRef { owner: o, name: n, desc: d };
         let cx = self.flat_ctx(&key, self.recv_ctx(r), 2);
         let t = cut::with_ctx(Some(format!("H:{h}")), Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
+        if cx != NOCTX && self.recv_ctx(r) != NOCTX {
+            self.mark_merge(t, 2);
+        }
         if self.vm_hubs.contains(&h) {
             // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参按枢纽接法：实参池 / open；返回值由反射调用点给出）
             self.vm_targets.insert(t);

@@ -243,6 +243,20 @@ pub fn peak_mem_mb() -> u64 {
     peak_rss_mb()
 }
 
+/// 当前 RSS（MB）：Linux 读 `/proc/self/statm` 第二字段（4 KiB 页）；读不到回退峰值。
+/// 尖峰剖析用：两段 dump 之间的峰值另由 `--lambda-prof` 的采样点记录（`rss_max`）
+pub fn cur_rss_mb() -> u64 {
+    if cfg!(target_os = "linux") {
+        let mut s = String::new();
+        if std::fs::File::open("/proc/self/statm").and_then(|mut f| std::io::Read::read_to_string(&mut f, &mut s)).is_ok() {
+            if let Some(pages) = s.split_whitespace().nth(1).and_then(|x| x.parse::<u64>().ok()) {
+                return pages * 4096 >> 20;
+            }
+        }
+    }
+    peak_rss_mb()
+}
+
 /// 进程峰值 RSS（MB）：getrusage；macOS 以字节计，Linux 以 KB 计
 pub fn peak_rss_mb() -> u64 {
     #[repr(C)]
@@ -417,6 +431,21 @@ impl<'a> Engine<'a> {
         // 选择性上下文（ctx_flat.rs）：档位、继承 / 接收者来源并入本体的次数、判为平的成员数、
         // 略去的静态反射成员「接收者」派发数（reflect_call_pool.rs）
         v["ctx_flat"] = json!([self.ctx_flat_mode, self.ctx_flat_hits, self.ctx_flat_memo.values().filter(|&&f| f).count(), self.rcall_stats.static_recvs]);
+        // 宽分配点封顶（classes.rs `obj_at`）：[封顶分配点数, 有变体的分配点数, 单点最大变体数, 阈值]
+        v["site_cap"] = json!([
+            self.site_capped.len(),
+            self.site_variants.len(),
+            self.site_variants.values().copied().max().unwrap_or(0),
+            self.site_cap
+        ]);
+        // 排空点等价类合并（eqmerge.rs）：[检查点数, 合并的节点等价类数, 并掉的节点数, 登记的克隆等价组数,
+        // 累计细化轮数, 耗时 ms, 标记通道的克隆数, 预算字节, 预算触发数, 最近触发 RSS MiB]
+        let mut eq = self.eqm.stats.to_vec();
+        eq.push(self.eqm.marks.len() as u64);
+        eq.push(self.eq_budget as u64);
+        eq.push(self.eqm.budget_hits);
+        eq.push(self.eqm.budget_trig_rss);
+        v["eq_merge"] = json!(eq);
         v
     }
 }

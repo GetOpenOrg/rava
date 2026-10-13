@@ -79,6 +79,14 @@ impl Engine<'_> {
             self.rcall_stats.static_recvs
         );
         eprintln!("{tag} ctxkind objs={} {}", self.objs.len(), ks.iter().map(|(k, n, d)| format!("{k:?}={n}/{d}")).collect::<Vec<_>>().join(" "));
+        // 宽分配点封顶（classes.rs `obj_at`，`SITE_CAP`）：封顶数 / 分配点数 / 最大变体数 / 阈值
+        eprintln!(
+            "{tag} sitecap capped={} sites={} max={} T={}",
+            self.site_capped.len(),
+            self.site_variants.len(),
+            self.site_variants.values().copied().max().unwrap_or(0),
+            self.site_cap
+        );
         let bounds = [8usize, 64, 256, 1024, usize::MAX];
         let mut hist = [(0u64, 0u64); 5];
         for cs in per_m.values() {
