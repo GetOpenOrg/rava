@@ -70,3 +70,12 @@
 
 - **分支可合入 main 的部分**：e2e 17 例、47 pilot 语料与 deps 钉值、graalvm 原始件、本轮 harness 修复与 golden 存档——均不依赖未点亮能力。
 - §七 e2e 放量节奏修正建议：A/B 批并非全绿（B 批 0 点亮），按 §二矩阵的实际点亮集（lang3/io/servlet/jpa/spring 工具族/log4j2-api/asm 生成面/slf4j×2）进 75+ 目录；闭包病态 5 库与编译缺口库登记 known_failures 或暂缓，等闸门立项。
+
+## 八、后续处置（10-13）
+
+§四移交事项在后续分支的收口情况，截至 2026-10-13：
+
+- **AsmCommonsMain 转绿**（`libtests-corpusfix`）：§四.2 的语料缺陷已按 AsmTransformMain 同法自足化，rs 侧第 22 个 GOLDEN OK。
+- **JVM 侧 golden 全量收齐**（`libtests-jvm-goldens`）：28 项目 55 入口全跑，45 干净、19 处 CP_FIX（§三.4 的按锁补 cp 口径常态化）。
+- **闭包病理五库已定位**（`libtests-closure-diag`）：§四.1 的 worklist 不动点三层爆点已定位并取得栈证据，为生成器侧剪枝/降级立项提供了直接输入。
+- **上游清障收尾**（`libtests-upstream-fix`，本分支）：frameworks 项目补钉 `io.micronaut:micronaut-http:4.10.31` + `org.springframework:spring-web:6.2.19` 入 deps/pom.xml（依赖锁 188→197 条），FrameworkComparisonDemo / RouteAnnotationDemo 两入口 JVM golden 干净落档；asm 项目补上游遗漏的 `ChildClassLoader`（同包顶层类，defineClass 公开化），AsmProxyDemo JVM golden 落档。遗留：HelloEndpoints 上游即无 main（holder 类），入口口径待定夺。
