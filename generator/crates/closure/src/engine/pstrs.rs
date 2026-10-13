@@ -82,6 +82,12 @@ impl PStrs {
     }
 }
 
+/// 边集形态画像开关（`RAVA_PSTR_SHAPE=1`，只读诊断；逐 dump 全量走边有秒级代价，验收运行不开）
+pub(super) static SHAPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+pub(super) fn shape_on() -> bool {
+    *SHAPE.get_or_init(|| std::env::var("RAVA_PSTR_SHAPE").ok().as_deref() == Some("1"))
+}
+
 /// 非常量输入为字段写入值（而非调用点实参）时的序号
 const FIELD_VALUE: usize = usize::MAX;
 
@@ -508,5 +514,124 @@ impl<'a> Engine<'a> {
             return false;
         }
         complete
+    }
+
+    /// pstr 边集形态画像（§4.18 选型证据，`RAVA_PSTR_SHAPE=1` 时随 `--lambda-prof` dump 打印，只读）：
+    /// succ / pred 逐表——行数 / 边数（按槽类与「类×类」分解）、行大小分布、**后继表内容重复度**
+    /// （哈希去重后的相弧行数与摊平字节——共享后继表的收益上限）、H 槽行按枢纽聚合的目标方法集一致性
+    /// （按枢纽存目标表的可派生性）、pred 行里已入 demand 的槽占比（惰性逆边的收益上限）。
+    /// 哈希按内容（PSlot::hash），碰撞概率对画像量级可忽略；打印前列排序，可复现
+    pub(super) fn pstr_shape_dump(&self, tag: &str) {
+        use std::hash::{Hash, Hasher};
+        let p = &self.pstr;
+        let mib = |b: usize| b as f64 / 1048576.0;
+        let label = |s: &PSlot| match s {
+            PSlot::M(t, i) => format!("M{t}.{i}"),
+            PSlot::H(h, j) => format!("H{h}.{j}"),
+            PSlot::F(f) => format!("F{f}"),
+            PSlot::V(f) => format!("V{f}"),
+        };
+        // 行大小分桶：[1,1] [2,4] [5,16] [17,64] [65,256] [257,1024] [1025,∞)
+        let bucket = |n: usize| n.min(7).checked_sub(1).map_or(6, |x| match x {
+            0 => 0,
+            1..=3 => 1,
+            4..=15 => 2,
+            16..=63 => 3,
+            64..=255 => 4,
+            256..=1023 => 5,
+            _ => 6,
+        });
+        let analyze = |name: &str, t: &HashMap<PSlot, SortedSet<PSlot>>| {
+            let kidx = |s: &PSlot| match s {
+                PSlot::M(..) => 0,
+                PSlot::H(..) => 1,
+                PSlot::F(..) => 2,
+                _ => 3,
+            };
+            let mut rows = 0usize;
+            let mut edges = 0usize;
+            let mut by_kind = [0usize; 4]; // 行按 from 类
+            let mut pair = [[0usize; 4]; 4]; // 边按 from 类 × to 类
+            let mut b_rows = [0usize; 7];
+            let mut b_edges = [0usize; 7];
+            let mut uniq: HashMap<u64, (usize, usize)> = HashMap::default(); // 内容哈希 → (len, 出现次数)
+            let mut hub_j: HashMap<u32, Vec<(usize, std::collections::BTreeSet<usize>)>> = HashMap::default(); // H 行：hub → 各 j 的目标方法集
+            let mut top: Vec<(usize, String)> = Vec::new();
+            for (s, v) in t {
+                let n = v.len();
+                rows += 1;
+                edges += n;
+                by_kind[kidx(s)] += 1;
+                b_rows[bucket(n)] += 1;
+                b_edges[bucket(n)] += n;
+                let fi = kidx(s);
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                n.hash(&mut h);
+                for x in v.iter() {
+                    x.hash(&mut h);
+                    pair[fi][kidx(x)] += 1;
+                }
+                let e = uniq.entry(h.finish()).or_insert((n, 0));
+                e.1 += 1;
+                if let PSlot::H(hu, j) = s {
+                    hub_j.entry(*hu).or_default().push((*j, v.iter().filter_map(|x| match x {
+                        PSlot::M(t, _) => Some(*t),
+                        _ => None,
+                    }).collect()));
+                }
+                top.push((n, label(s)));
+            }
+            let distinct = uniq.len();
+            let uniq_edges: usize = uniq.values().map(|(n, _)| n).sum();
+            let dup_rows: usize = uniq.values().map(|(_, c)| c - 1).sum();
+            let dup_edges = edges - uniq_edges;
+            top.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            let tops = top.iter().take(5).map(|(n, l)| format!("{l}:{n}")).collect::<Vec<_>>().join(" ");
+            // H 行按枢纽：同一枢纽各 j 的目标方法集是否一致（一致 ⟹ 按枢纽存一份目标表可派生各行）
+            let mut hubs_same = 0usize;
+            let mut hubs_diff = 0usize;
+            let mut edges_same = 0usize;
+            let mut edges_diff = 0usize;
+            for (_, js) in hub_j.iter() {
+                let base = js.first().map(|(_, m)| m);
+                let same = js.iter().all(|(_, m)| Some(m) == base);
+                let e: usize = js.iter().map(|(_, m)| m.len()).sum();
+                if same {
+                    hubs_same += 1;
+                    edges_same += e;
+                } else {
+                    hubs_diff += 1;
+                    edges_diff += e;
+                }
+            }
+            eprintln!(
+                "{tag} pstr-shape {name} rows={rows} edges={edges} bytes~{:.0}MiB rows_by_kind(M/H/F/V)={by_kind:?} \
+                 edges_pair(fromM->M/H/F/V|fromH->M/H/F/V)=[{:?}|{:?}] \
+                 bucket_rows(=1/2-4/5-16/17-64/65-256/257-1k/>1k)={b_rows:?} bucket_edges={b_edges:?} \
+                 uniq_rows={distinct} uniq_edges={uniq_edges} dup_rows={dup_rows} dup_edges={dup_edges} intern_save={:.0}MiB \
+                 hub_j_same={hubs_same}({edges_same}e) hub_j_diff={hubs_diff}({edges_diff}e) top={tops}",
+                mib(edges * std::mem::size_of::<PSlot>() + rows * 40 * 9 / 7),
+                pair[0], pair[1],
+                mib(dup_edges.saturating_mul(std::mem::size_of::<PSlot>()).saturating_sub(distinct * 32)),
+            );
+            if name == "pred" {
+                // 惰性逆边收益：pred 行中键已入 demand（按名求值遍历到过）的槽的行字节占比
+                let mut hot = 0usize;
+                let mut hot_rows = 0usize;
+                for (s, v) in t {
+                    if p.demand.contains_key(s) {
+                        hot += v.cap_bytes();
+                        hot_rows += 1;
+                    }
+                }
+                let all: usize = t.values().map(|v| v.cap_bytes()).sum();
+                eprintln!(
+                    "{tag} pstr-shape {name} demand_slots={} hot_rows={}/{} hot_bytes={:.0}MiB/{:.0}MiB",
+                    p.demand.len(), hot_rows, rows, mib(hot), mib(all),
+                );
+            }
+        };
+        analyze("succ", &p.succ);
+        analyze("pred", &p.pred);
     }
 }

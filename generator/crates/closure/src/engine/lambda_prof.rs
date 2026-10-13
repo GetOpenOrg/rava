@@ -582,6 +582,10 @@ impl Engine<'_> {
         self.hub_prof_dump(&tag);
         // 小分配 soup 逐表深字节归因（§4.17）：deep3 大表一行 + deep3b 小表与对账一行
         self.deep3_dump(&tag);
+        // pstr 边集形态画像（§4.18 选型证据）：RAVA_PSTR_SHAPE=1 时才走（逐 dump 全量走边有秒级代价）
+        if super::pstrs::shape_on() {
+            self.pstr_shape_dump(&tag);
+        }
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {
