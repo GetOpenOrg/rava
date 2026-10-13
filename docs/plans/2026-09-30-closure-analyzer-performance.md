@@ -1312,6 +1312,39 @@ B 树族、mrefs 族、名字表 / 分配点链、工作队列。
   密度高于 sb3，惰性 pred 首访重建与插边哈希的 CPU 份额更大；回收路径同上（批量建边 / 增量哈希 /
   首访重建分档）。
 
+**junit@JDK25 整族 8 例纳入 G1 验收回归集（报告 §七 @batch-1015 13e40cef，协调者输入；本轮起生效）**：
+整族同构——余 7 例全部撞 32G 护栏（transpile 路径 12.5–15.5 min、终值 30.9–34.0G、36–44 MiB/s，
+每例一次 0.7–2.1G 物化锯齿同 FailureMessages Phase C）；**三档严重度带（重 → 轻，按 22G/32G 越线
+时刻）**：T1 IgnoreAndExpected ≳ NewInstancePerTest（22G ≈457–462 s）> T2 BeforeClassState ≈
+LifecycleOrder（481–491 s）> T3 AssertThrowsAssume ≈ RunnerResult ≈ TimeoutFast（526–544 s），
+FailureMessages 居带首（445 s）；外推模型全带吻合（22G 越线 457–544 s 对锚点 445 s 的 +3%~+22%）。
+**回归协议（本节口径）**：dev 服务器作业、`rava closure` 预编译类目录 + `--cp hamcrest,junit` +
+`--lambda-prof 130`、逐例 780 s 截断，取逐例 RSS 曲线与末段 `rss_peak`/`methods`/`hubs`——
+**严重度带即改动分辨率：pstr / 枢纽类改动生效时，三档的同刻 RSS 应整体下移、（换算到越线时刻）
+整体右移且档间分化**。本轮实测（g1c9-j8base = 6f3759d0 / g1c9-j8new = 1905a8c3，8/8 全降）：
+
+| 用例（报告档位） | 基线 rss@780s | 本轮 rss@780s | Δ | 基线 rss@40 万方法 | 本轮 | Δ |
+|---|---:|---:|---|---:|---:|---|
+| IgnoreAndExpected（T1） | 15266 MiB | 11596 MiB | −24.0% | 10990 | 9692 | −11.8% |
+| NewInstancePerTest（T1） | 15590 | 10870 | −30.3% | 12390 | 10681 | −13.8% |
+| BeforeClassState（T2） | 16552 | 11419 | −31.0% | 11888 | 9878 | −16.9% |
+| LifecycleOrder（T2） | 18473 | 10740 | −41.9% | 12092 | 10320 | −14.7% |
+| AssertThrowsAssume（T3） | 16707 | 11449 | −31.5% | 10413 | 9790 | −6.0% |
+| RunnerResult（T3） | 18023 | 10940 | −39.3% | 12518 | 10811 | −13.6% |
+| TimeoutFast（T3） | 18247 | 10909 | −40.2% | 11932 | 10553 | −11.6% |
+| FailureMessages（带首） | 15916 | 10782 | −32.3% | 12374 | 10655 | −13.9% |
+
+- **整族效应成立**：固定截断时刻 −24%~−42%（8/8 无例外；含 pstr 份额随规模增长的后期效应）；
+  进度锚定（40 万方法）−6%~−17%。
+- **档序稳定性**：40 万方法 RSS 档序基线 vs 本轮仅相邻位交换（TimeoutFast↔LifecycleOrder、
+  IgnoreAndExpected↔AssertThrowsAssume）——带结构保持，本轮对全带近似均匀作用（符合 pstr 是
+  全族共同第一大项的形态）。
+- **协议判读口径**：closure 路径与报告 transpile 路径的档序不同（closure@40 万方法以
+  RunnerResult / NewInstancePerTest / FailureMessages 偏重），且固定截断时刻的 RSS 受本轮
+  墙钟回归（+25~30%，同刻方法数少 3~8%）混淆——**回归集以进度锚定（同方法数 RSS）为主判、
+  固定截断 RSS 为辅助**；报告的三档带（transpile 路径 22G 越线时刻）保持主口径，closure 档序
+  作为补充指纹。墙钟回收（§4.18 结论 2）落地后两口径应重新对齐。
+
 **与 C1 剖面的交叉对照（`docs/reports/2026-10-13-jdk25-junit-oom-profile.md` @499e2bf8，协调者输入；
 作业 g1c9-c1base / g1c9-c1new：TestJunitFailureMessages@JDK25 同口径短程——预编译类目录 +
 `--cp hamcrest,junit` + `--lambda-prof 60`，1260 s 截断，dev 服务器）**：
@@ -1353,8 +1386,8 @@ B 树族、mrefs 族、名字表 / 分配点链、工作队列。
 3. 剩余主项（sb3 死前 deep3 排序更新）：**gathers 4791 MiB（对象集 `Rc<[u32]>` 族驻留，已升
    第一大项）**、**hubs links（`Rc<Link>` 实参去重）**、recv_fp（recv 对内容驻留）、g_sub、
    methods+an 806 MiB（C1 上已升第一）、值波瞬态（§4.14，10–14% 上限）。画像机制
-   （deep3 / pstr-shape）现成可复用；C1 例（jdk25-junit-oom-profile）应纳入 G1 回归对照集
-   （外推斜率即可见效应，本节口径已建立）。
+   （deep3 / pstr-shape）现成可复用；**junit@JDK25 整族 8 例已纳入 G1 验收回归集**（报告 §七
+   三档严重度带 + 本节 closure 口径协议与首轮基线数字，进度锚定为主判）。
 
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
