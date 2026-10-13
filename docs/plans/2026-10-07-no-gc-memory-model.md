@@ -299,3 +299,8 @@ C4 收官之后实施。入队路径进闭包后，`ReferenceQueue.poll` 当前�
 3. **引用类语义**：随 `Rc` 释放触发。
 4. **JDK 方法体内的区域**：需要开放世界分析。档案共享方法体，事实只能取自 JDK 侧。
 5. `thread_local_lint` 文档头需要登记新载体槽 `region_slot` 的理由。该文件属闭包 crate（G1 负责），本分支未改。
+
+以上四项的设计已于 2026-10-13 成稿：[nogc-phase2-design](2026-10-13-nogc-phase2-design.md)（弱引用原语路线、
+W1 推断规则与证明义务 INV、开放世界五查询保守重解读与首批事实清单草案、引用类观察弱 + 登记侧表 + pending 链
++ handler 线程方案、判据探针 `tests/perf/NogcWeakCycle.java`）。其中第 5 条（lint 文档头登记）已在 nogc-design
+分支顺手完成。
