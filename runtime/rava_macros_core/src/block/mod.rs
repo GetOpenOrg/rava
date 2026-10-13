@@ -74,17 +74,19 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
     // ── 泛型参数补齐 Clone + Default + 'static + From<Object> + Into<Object> ──────────────────────────────
     let generics = gen::context::augment_generic_bounds(&input.generics);
 
-    // 剥体标注只出现在非接口类的声明层（§7.5.2）
+    // 剥体标注只出现在非接口类的声明层（§7.5.2）；标记层（§9.9 K6）复用同一份剥体后的块文本，
+    // 标注原样带入（标记层不展开方法面，标注不生效）
     if let Some(f) = input.fns.iter().find(|f| f.moved.is_some()) {
-        if meta.layer != Layer::Decl || meta.is_interface {
+        if !matches!(meta.layer, Layer::Decl | Layer::Marker) || meta.is_interface {
             return Err(syn::Error::new_spanned(&f.sig.ident, "rava_moved 只用于非接口类的声明层"));
         }
     }
 
     // ── 接口：同名载体类型（接口引用 + 静态成员）────────────────────────────
     if meta.is_interface {
-        // 接口载体整体属声明层（default / static 方法体进实现层是后续项，见拆 crate 文档 §7.5）
-        if meta.layer == Layer::Body {
+        // 接口载体整体属声明层（default / static 方法体进实现层是后续项，见拆 crate 文档 §7.5）；
+        // 标记层（§9.9 K6）本轮不拆接口（载体 struct 留接口文件），展开为空
+        if meta.layer == Layer::Body || meta.layer == Layer::Marker {
             return Ok(TokenStream2::new());
         }
         return Ok(expand_interface(
@@ -96,17 +98,35 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
 
     let layer = ctx.meta.layer;
     let binary_name = ctx.meta.binary_name.clone();
-    // 存储层与 vtable impl 只进实现层：声明模式不计算（已下沉的体不在声明层文本里）
-    let (layout, dispatch_impls) = if layer == Layer::Decl {
+    // 存储层与 vtable impl 只进实现层：声明 / 标记模式不计算（已下沉的体不在声明层文本里）
+    let (layout, dispatch_impls) = if layer == Layer::Decl || layer == Layer::Marker {
         (TokenStream2::new(), TokenStream2::new())
     } else {
         (gen::struct_layout::generate(&ctx), gen::virtual_dispatch::vtable_impls(&ctx)?)
     };
+    // 标记层（§9.9 K6）不展开方法面与分派：只算标记部分、转换与 alloc / offsets 钩子声明。
+    // 实现层要方法面生成的体函数 / base 函数（定义），声明层要 vtable trait 与外壳，两者都要算
+    let need_marker = matches!(layer, Layer::Full | Layer::Marker);
+    let need_trait = matches!(layer, Layer::Full | Layer::Decl);
+    let need_methods = matches!(layer, Layer::Full | Layer::Decl | Layer::Body);
     let hooks = gen::storage_hooks::generate(&ctx);
-    let dispatch_trait = gen::virtual_dispatch::vtable_trait(&ctx);
-    let (wrapper, body_fns) = gen::wrapper::generate(&ctx)?;
+    let (dispatch_trait, base_fns): (TokenStream2, Vec<_>) = if need_methods {
+        (
+            if need_trait { gen::virtual_dispatch::vtable_trait(&ctx) } else { TokenStream2::new() },
+            gen::virtual_dispatch::base_fns(&ctx),
+        )
+    } else {
+        (TokenStream2::new(), Vec::new())
+    };
+    let wrapper_marker = if need_marker { gen::wrapper::generate_marker(&ctx) } else { TokenStream2::new() };
+    let (wrapper_decl, body_fns): (TokenStream2, Vec<TokenStream2>) = if need_methods {
+        let (d, b) = gen::wrapper::generate_decl(&ctx)?;
+        (if need_trait { d } else { TokenStream2::new() }, b)
+    } else {
+        (TokenStream2::new(), Vec::new())
+    };
+    // 标记层（§9.9 K6）：转换（BINARY_NAME / 描述符 / From 三族）整体属标记面
     let (conversions, inner_consts) = gen::type_conversions::generate(&ctx);
-    let base_fns = gen::virtual_dispatch::base_fns(&ctx);
     // 非泛型 base 函数随存储层拆入实现层；泛型者（类 / 方法泛型）与存根留在声明层
     let (generic_base, split_base): (Vec<_>, Vec<_>) = base_fns.into_iter().partition(|b| b.decl_only);
     let generic_base: Vec<TokenStream2> = generic_base.into_iter().map(|b| b.item).collect();
@@ -121,7 +141,8 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
             #layout
             #hooks
             #dispatch_impls
-            #wrapper
+            #wrapper_marker
+            #wrapper_decl
             #body_fns
             #conversions
             #inner_consts
@@ -134,11 +155,19 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
             #digest
             #dispatch_trait
             #hooks
-            #wrapper
+            #wrapper_decl
             #body_fns
-            #conversions
             #(#generic_base)*
             #split_base
+            }
+        }
+        Layer::Marker => {
+            // hooks 即 alloc / offsets 的外部声明块（place_fns 对标记层同声明层），
+            // 供描述符 `X__DESC` 的分配 / 偏移闭包引用
+            quote! {
+            #wrapper_marker
+            #conversions
+            #hooks
             }
         }
         Layer::Body => {

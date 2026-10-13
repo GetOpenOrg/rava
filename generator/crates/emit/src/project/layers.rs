@@ -136,7 +136,7 @@ pub fn split_text(
 /// 二进制名或 Rust 名必在属性串、签名或尾巴文本中出现，按词剪枝不漏。**例外**：留在声明层的方法体
 /// （wrapper 上下文体不可下沉）按推断类型解析方法调用，接收者类名可以不在文本中出现——这类体的
 /// 导入需求按 [`AnonKeep::Set`] 差分保留（`ProjectState::method_traits`），缺属性时退全保留。
-fn prune_uses(header: &str, rest: &[&str], anon: &AnonKeep) -> String {
+pub(crate) fn prune_uses(header: &str, rest: &[&str], anon: &AnonKeep) -> String {
     let mut words: BTreeSet<String> = BTreeSet::new();
     let single = |line: &str| -> Option<String> {
         let path = line.strip_prefix("use crate::")?.strip_suffix(';')?;
