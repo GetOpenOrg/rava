@@ -448,6 +448,9 @@ def main() -> int:
     uses_needed: dict[str, set[int]] = {}
     changed = 0
     all_reports: list[str] = []
+    # 两遍：第一遍改写头并收集全部类完整块序（跨文件后见块补前文件的 use 行），
+    # 第二遍按完整集合插 use 行落盘
+    staged: list[tuple[str, str, str]] = []  # (path, old, new)
     for rel in walk_sorted(src):
         if not (rel.endswith("_impl.rs") or rel.endswith("_ext.rs")):
             continue
@@ -458,9 +461,28 @@ def main() -> int:
         all_reports.extend(reports)
         if new != text:
             changed += 1
-            if not args.check:
-                with open(p, "w", encoding="utf-8") as fh:
-                    fh.write(new)
+        staged.append((p, text, new))  # 无头改写的文件也要走 use 补齐遍
+    for p, text, new in staged:
+        # 补齐本文件涉及类的全部 ordinal（首文件后见的块）
+        lines = new.split("\n")
+        ins: list[str] = []
+        for m in re.finditer(r"^impl\s*(?:<.*>\s*)?__(\w+?)Hw(\d*)(?:<[^>]*>)?\s+for\s", "\n".join(
+                l for l in lines if l.startswith("impl")), re.M):
+            cls, ordn = m.group(1), int(m.group(2)) if m.group(2) else 1
+            for o in sorted(uses_needed.get(cls, set())):
+                suffix = "" if o == 1 else str(o)
+                line = f"use super::__{cls}Hw{suffix};"
+                if line not in lines:
+                    ins.append(line)
+        if ins:
+            last_use = max((i for i, l in enumerate(lines) if l.startswith("use ") and l.endswith(";")), default=-1)
+            lines.insert(last_use + 1, "\n".join(sorted(set(ins))))
+            new = "\n".join(lines)
+        if not args.check and new != text:
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(new)
+        if args.check and new != text:
+            print(f"[check] {p}: 将补 {len(set(ins)) if 'ins' in dir() else '?'} use 行")
 
     for r in all_reports:
         print(r)

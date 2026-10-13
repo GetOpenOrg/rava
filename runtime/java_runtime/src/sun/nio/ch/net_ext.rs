@@ -8,6 +8,7 @@ use super::net_impl::{ipv6_available, socket_error, socket_exception, io_excepti
 use crate::java::io::FileDescriptor;
 use crate::net_posix::{self, errno};
 use super::__NetHw;
+use super::__NetHw2;
 
 /// netinet/ip.h 的 `IPTOS_TOS_MASK | IPTOS_PREC_MASK`
 const IPTOS_MASK: i32 = 0x1e | 0xe0;
