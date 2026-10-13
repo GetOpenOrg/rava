@@ -1,0 +1,10 @@
+UNDERFLOW sp=4 dp=3 out=41 4f1a 42
+UNDERFLOW sp=5 dp=3 out=98a9 2b 43
+UNDERFLOW sp=4 dp=1 out=7084
+UNDERFLOW sp=4 dp=1 out=7084
+MALFORMED[2] sp=0 dp=0 out=
+MALFORMED[4] sp=0 dp=0 out=
+UNDERFLOW sp=1 dp=1 out=41
+MALFORMED[1] sp=0 dp=0 out=
+UNDERFLOW sp=0 dp=0 out=
+OVERFLOW sp=0 dp=0 out=

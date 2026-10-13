@@ -1,0 +1,9 @@
+dotdot-eq=true
+canon-file-name=x.txt
+abs-parent-match=true
+canon-endswith=true
+mtime-positive=true fresh-positive=true
+mkdir-existing=false
+mkdir-orphan=false
+isfile=true isabs=true
+cleaned=true

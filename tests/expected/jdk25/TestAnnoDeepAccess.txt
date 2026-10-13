@@ -1,0 +1,12 @@
+default-name=anon
+default-level=3
+default-tags=[a, b]
+name=custom level=3 tags=[x]
+to-string=@TestAnnoDeepAccess.Conf(name="custom", level=3, tags={"x"})
+cached-same=true eq=true
+child-inherited=true
+child-declared=true
+repeat-count=2 first=one second=two
+container=true
+container-not-entry=true
+array-eq=true

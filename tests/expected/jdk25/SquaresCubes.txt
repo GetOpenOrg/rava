@@ -1,0 +1,33 @@
+Square and cube: 1
+Square: 4
+Square: 9
+Square: 16
+Square: 25
+Square: 36
+Square: 49
+Square and cube: 64
+Square: 81
+Square: 100
+Square: 121
+Square: 144
+Square: 169
+Square: 196
+Square: 225
+Square: 256
+Square: 289
+Square: 324
+Square: 361
+Square: 400
+Square: 441
+Square: 484
+Square: 529
+Square: 576
+Square: 625
+Square: 676
+Square and cube: 729
+Square: 784
+Square: 841
+Square: 900
+Square: 961
+Square: 1024
+Square: 1089

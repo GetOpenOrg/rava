@@ -1,0 +1,6 @@
+NULL
+A
+len5
+NPE:NullPointerException
+A
+other

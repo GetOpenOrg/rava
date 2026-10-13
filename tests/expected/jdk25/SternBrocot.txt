@@ -1,0 +1,13 @@
+The first 15 elements are: [1, 1, 2, 1, 3, 2, 3, 1, 4, 3, 5, 2, 5, 3, 4]
+First occurrence of 1 is at 1
+First occurrence of 2 is at 3
+First occurrence of 3 is at 5
+First occurrence of 4 is at 9
+First occurrence of 5 is at 11
+First occurrence of 6 is at 33
+First occurrence of 7 is at 19
+First occurrence of 8 is at 21
+First occurrence of 9 is at 35
+First occurrence of 10 is at 39
+First occurrence of 100 is at 1179
+All GCDs are 1

@@ -1,0 +1,5 @@
+The mean angle of [350.0, 10.0] is -1.614809932057922E-15
+The mean angle of [90.0, 180.0, 270.0, 360.0] is -90.0
+The mean angle of [10.0, 20.0, 30.0] is 19.999999999999996
+The mean angle of [370.0] is 9.999999999999975
+The mean angle of [180.0] is 180.0

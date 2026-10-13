@@ -1,0 +1,9 @@
+hello, world, java, streams, rocks
+[hello, world, java, streams, rocks]
+[HELLO, WORLD, JAVA, STREAMS, ROCKS]
+4
+[Alice, Charlie, Eve]
+[Bob, Dave]
+[hello, rocks, streams, world]
+[java]
+15

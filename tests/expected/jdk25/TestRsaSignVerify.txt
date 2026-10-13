@@ -1,0 +1,7 @@
+algo=RSA bits=2048
+format=X.509/PKCS#8
+sig-len=256
+verify-true=true
+verify-tampered=false
+pub-roundtrip=true
+deterministic=true

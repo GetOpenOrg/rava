@@ -1,0 +1,34 @@
+scl = app
+scl again same = true
+chain = app -> platform -> null
+platform same = true
+user == scl: true
+nested == scl: true
+Nested[][] == scl: true
+int = null
+void = null
+int[] = null
+String = null
+String[] = null
+java.sql.Time = platform
+java.sql.Time[] = platform
+forName(app) same = true
+forName(missing) CNFE TestAppClassLoader$Missing
+assert(Early) desired = false
+assert(Early) runs = false
+assert(Late) desired = true
+assert(Late) runs = true
+assert(Early) after = false
+assert(String) = false
+main ctx == scl: true
+child ctx == scl: true
+child ctx after set = probe
+ServiceLoader via probe:
+  probe.getResources META-INF/services/TestAppClassLoader$Service
+  hasNext = false
+ServiceLoader explicit scl:
+  hasNext = false
+child ctx null = null
+ServiceLoader with null ctx:
+  hasNext = false
+main ctx restored = true

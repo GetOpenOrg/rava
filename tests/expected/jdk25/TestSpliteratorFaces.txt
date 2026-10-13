@@ -1,0 +1,7 @@
+exact-size=4 estimate=4
+ordered=true sized=true subsized=true
+advance=a;b;c;d;
+remaining=bcd
+half-size=2 orig-size=2
+unknown-exact=-1 max=true
+stream-join=a-b-c-d

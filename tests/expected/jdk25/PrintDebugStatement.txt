@@ -1,0 +1,3 @@
+[DEBUG][PrintDebugStatement.java PrintDebugStatement.main#30] Hello world.
+[DEBUG][PrintDebugStatement.java PrintDebugStatement.blah#26] Made It!
+[DEBUG][PrintDebugStatement.java PrintDebugStatement.lambda$main$0#33] oops

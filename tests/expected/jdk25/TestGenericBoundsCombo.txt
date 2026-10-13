@@ -1,0 +1,11 @@
+count=3 largest=L9
+max word=cherry
+max num=11
+hello/7.0
+cross=0
+total=6.0
+42:0
+9:0
+yz
+3
+done

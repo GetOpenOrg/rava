@@ -1,0 +1,3 @@
+saw ready, stage=1 spun=true
+pingpong stage=11
+slots last=4

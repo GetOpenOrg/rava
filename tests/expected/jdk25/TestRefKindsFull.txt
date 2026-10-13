@@ -1,0 +1,8 @@
+ctor=hi
+static=3
+inst=4
+arrLen=3
+intArrLen=4
+listCtor=0
+superRef=super:parent
+thisRef=this:child

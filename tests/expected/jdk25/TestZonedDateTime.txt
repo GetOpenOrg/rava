@@ -1,0 +1,6 @@
+ny=2024-06-01T12:00-04:00[America/New_York]
+tokyo=2024-06-02T01:00+09:00[Asia/Tokyo]
+offsetHours=13
+sameInstant=true
+utc=2024-01-01T00:00Z[UTC]
+zoneId=Asia/Tokyo

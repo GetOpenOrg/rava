@@ -1,0 +1,10 @@
+intersection: [3, 4, 5]
+union: [1, 2, 3, 4, 5, 6, 7]
+difference: [1, 2]
+A containsAll {2,3}: true
+A containsAll {2,3,6}: false
+unique count: 3
+forEach: [Alice, Bob, Charlie]
+empty: false
+after clear empty: true
+Done.

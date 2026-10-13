@@ -1,0 +1,27 @@
+UTF-8 bytes=68c3a96c6c6f20e4b896e7958c20f09f9880
+UTF-8 read=héllo 世界 😀
+utf8 bytes=68c3a96c6c6f20e4b896e7958c20f09f9880
+utf8 read=héllo 世界 😀
+ISO-8859-1 bytes=68e96c6c6f203f3f203f
+ISO-8859-1 read=héllo ?? ?
+latin1 bytes=68e96c6c6f203f3f203f
+latin1 read=héllo ?? ?
+US-ASCII bytes=683f6c6c6f203f3f203f
+US-ASCII read=h?llo ?? ?
+UTF-16 bytes=feff006800e9006c006c006f00204e16754c0020d83dde00
+UTF-16 read=héllo 世界 😀
+UTF-16LE bytes=6800e9006c006c006f002000164e4c7520003dd800de
+UTF-16LE read=héllo 世界 😀
+printstream=70733ac3a9
+reader UEE: NO-SUCH-CHARSET
+writer UEE: NO-SUCH-CHARSET
+reader UEE: bad name!
+writer UEE: bad name!
+encoding=UTF8
+n=3 abc [-23]
+closed encoding=null
+ISO-8859-1 writer encoding=ISO8859_1
+US-ASCII writer encoding=ASCII
+UTF-16BE writer encoding=UnicodeBigUnmarked
+UTF-16LE writer encoding=UnicodeLittleUnmarked
+UTF-32 writer encoding=UTF-32

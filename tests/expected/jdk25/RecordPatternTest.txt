@@ -1,0 +1,11 @@
+=== instanceof example ===
+obj is a ColoredPoint: ColoredPoint[p=Point[x=10, y=10], color=blue]
+obj is not a point
+Point [10,10] has color blue
+=== switch example ===
+Point [21,21]
+ColoredPoint [42,42] with color red
+Decorated string: test
+=== generic type inference example ===
+x=42, y=42; color=RED
+

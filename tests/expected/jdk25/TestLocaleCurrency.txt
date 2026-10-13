@@ -1,0 +1,8 @@
+cny=CNY sym=[¥]
+jpy=JPY sym=[￥] digits=0
+eur=EUR sym=[€]
+fmt-cn=1,234,567.89
+fmt-de=1.234.567,89
+fmt-jp=1,234,567.89
+cur-cn=¥9,999.50
+cur-kr=₩1,234

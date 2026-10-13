@@ -1,0 +1,11 @@
+hello from Greeter + hello from Speaker
+speaker-v1
+hello from Speaker
+greeter-v1
+B/via-C
+abstract-hello
+via Greeter=hello from Greeter + hello from Speaker
+via Speaker=hello from Greeter + hello from Speaker
+via Speaker version=speaker-v1
+lambda-named / lambda-described
+done

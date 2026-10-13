@@ -1,0 +1,5 @@
+Regex split:
+[a, , b, , c]
+
+Manual split:
+"a" "" "b" "" "c" 

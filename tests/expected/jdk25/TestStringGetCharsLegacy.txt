@@ -1,0 +1,11 @@
+copied=bcde
+offset-copy=bccd
+range-ex=StringIndexOutOfBoundsException
+dst-ex=StringIndexOutOfBoundsException
+tochararray-eq=true
+legacy-target=via-legacy same-as-cause=true
+pkg-null=false name-defined=true
+string-pkg=java.lang
+security-null=true
+epoch-pos=true
+roundtrip-md=10-3

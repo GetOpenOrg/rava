@@ -1,0 +1,5 @@
+Cat:3
+Rex:5/Husky
+Spot
+1
+Dalmatian

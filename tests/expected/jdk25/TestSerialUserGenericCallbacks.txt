@@ -1,0 +1,6 @@
+box: Box(alpha, marker=42)
+ibox: Box(7, marker=42)
+nested: Box(Box(inner, marker=42), marker=42)
+pair: Pair(left, 3)
+shape: Square(red@Square, 3) Square
+boxed shape: Box(Square(blue@Square, 2), marker=42)

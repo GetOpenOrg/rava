@@ -1,0 +1,12 @@
+ws-space=true ws-nbsp=false ws-tab=true
+lod=truetruefalse
+lower=true upper=false
+ident-start=truefalsetrue
+ident-part=truefalsetrue
+charCount=2 bmp=1
+supp-len=2 codePointAt=1d11e
+int=true long=300 double=300.0
+char-value=Z numeric=35
+short-value=700 int-from-short=700
+byte-value=40 double-from-byte=40.0
+float-from-long=5.0

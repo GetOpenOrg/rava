@@ -1,0 +1,17 @@
+startDocument
+pi e2e [flag='on']
+prefix+ a=urn:a
+prefix+ =urn:default
+start root uri=[urn:default]
+start item uri=[urn:a] k=v
+end item
+start plain uri=[urn:default]
+end plain
+end root
+prefix- a
+prefix- 
+endDocument
+sysid=mem://e2e pubid=pub-e2e
+ai-len=2 first=v1 by-q=v1
+ai-set=v1b
+ai-after-remove=1

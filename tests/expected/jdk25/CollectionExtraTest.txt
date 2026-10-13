@@ -1,0 +1,26 @@
+LinkedList: [A, B, C]
+size: 3
+get(1): B
+contains B: true
+isEmpty: false
+After addFirst/addLast: [Z, A, B, C, D]
+getFirst: Z
+getLast: D
+After remove first/last: [A, B, C]
+peek: A
+After offer E: [A, B, C, E]
+After poll: [B, C, E]
+ArrayDeque: [1, 2, 3]
+After addFirst/addLast: [0, 1, 2, 3, 4]
+peekFirst: 0
+peekLast: 4
+After poll first/last: [1, 2, 3]
+size: 3
+Stack: [X, Y, Z]
+peek: Z
+pop: Z
+After pop: [X, Y]
+search X: 2
+search Y: 1
+empty: false
+size: 2

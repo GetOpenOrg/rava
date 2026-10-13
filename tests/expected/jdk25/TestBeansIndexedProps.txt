@@ -1,0 +1,11 @@
+indexed=tags idx-read=true idx-write=true array-read=true
+via-indexed=idx-value
+md=getTags
+md=getTags
+md=setTags
+md=setTags
+md=total
+decap-UserName=userName
+decap-URL=URL
+decap-A=a
+decap-lower=already

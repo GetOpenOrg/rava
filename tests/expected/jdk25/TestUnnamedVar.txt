@@ -1,0 +1,5 @@
+count=5
+entry
+total=3
+lambda
+done

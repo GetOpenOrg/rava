@@ -1,0 +1,11 @@
+t0 = 0.0 : no answer
+t0 = 0.1 : intersection at (0.881025, 1.118975)
+t0 = 0.2 : no answer
+t0 = 0.3 : no answer
+t0 = 0.4 : no answer
+t0 = 0.5 : no answer
+t0 = 0.6 : no answer
+t0 = 0.7 : no answer
+t0 = 0.8 : no answer
+t0 = 0.9 : intersection at (-0.681025, 2.681025)
+t0 = 1.0 : no answer

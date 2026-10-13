@@ -1,0 +1,2 @@
+integrate sin(x), x = 0 .. Pi = 1.999999999998.  Function calls = 121
+integrate sin(x), x = 0 .. 1 = 0.459697694131.  Function calls = 33

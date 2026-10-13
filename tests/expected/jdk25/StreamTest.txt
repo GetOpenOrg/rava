@@ -1,0 +1,11 @@
+Evens: [2, 4, 6]
+Doubled: [2, 4, 6, 8, 10, 12]
+ForEach count: 6
+Sum: 21
+Count: 6
+First: 1
+Sorted: [1, 2, 3, 4, 5]
+Filtered+Mapped: [30, 40, 50, 60]
+IntStream range sum: 15
+Has even: true
+None negative: true

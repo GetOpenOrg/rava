@@ -1,0 +1,25 @@
+get: 10
+getAndIncrement: 10
+after increment: 11
+incrementAndGet: 12
+getAndDecrement: 12
+decrementAndGet: 10
+getAndAdd(5): 10
+addAndGet(3): 18
+getAndSet(100): 18
+after set: 100
+compareAndSet(100,200): true
+after CAS: 200
+compareAndSet(0,999): false
+after failed CAS: 200
+intValue: 200
+ab.get: false
+ab after set: true
+ab.getAndSet(false): true
+ab after getAndSet: false
+ab.compareAndSet(false,true): true
+ab after CAS: true
+ar.get: hello
+ar after set: world
+ar.getAndSet: world
+ar after getAndSet: foo

@@ -1,0 +1,16 @@
+bindTo 105 (int)int
+insert c#9 (String)String
+drop d#1 (Object,long,String,int)String
+filterReturn 7
+filterArgs f#42
+asType g#5 (Object,Integer)Object
+constant K
+identity 7
+guard pos neg
+spreader s#2
+varargs true a-b-c
+collector x-y
+asList [1, 2, 3]
+withArgs h#6
+withList i#7
+chain caught fail 8

@@ -1,0 +1,8 @@
+1: weekend
+2: weekday
+3: weekday
+4: weekday
+5: weekday
+6: weekday
+7: weekend
+10

@@ -1,0 +1,7 @@
+null-arr=no-arg empty-arr=no-arg
+null-arg=hi:null
+static=hi:rava
+ite-cause=IllegalStateException msg=boom-ihe
+npe-cause=NullPointerException
+argc-iae=IllegalArgumentException
+type-iae=IllegalArgumentException

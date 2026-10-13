@@ -1,0 +1,8 @@
+size=2 contains=true
+after-remove=1
+after-addall=3
+view-remove-works=true
+view-add-ex=UnsupportedOperationException
+absent-old-null=true present-old=9
+mapping-count=2
+iter-count=2

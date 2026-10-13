@@ -1,0 +1,7 @@
+raw0=hello
+raw1=42
+size=2
+typed0=hello
+mapGet=1
+mapSize=1
+listClass=ArrayList

@@ -1,0 +1,10 @@
+local=-2147483648
+param1=-9223372036854775808
+param2=32767
+field=SIZE,8
+concat=MAX_VALUE,65535
+concat2=MIN_RADIX,2
+public=1023
+recv=8
+missing=NoSuchFieldException,NO_SUCH_0
+missing2=nope

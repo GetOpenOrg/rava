@@ -1,0 +1,7 @@
+obj=n0,n1,n2,n3
+ints=[0, 1, 4, 9, 16]
+longs=[10, 20, 40]
+doubles=[0.0, 0.5, 1.0]
+parallel-eq=true
+empty-ok=true
+rebased=[1, 2, 5, 10, 17]

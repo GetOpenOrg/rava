@@ -1,0 +1,15 @@
+byte-max=127
+byte-min=-128
+byte-hex=127
+byte-octal=8
+byte-overflow-ex=NumberFormatException
+byte-empty-ex=NumberFormatException
+short-max=32767
+short-min=-32768
+short-hex=255
+short-overflow-ex=NumberFormatException
+byte-cached=true
+short-cached=true
+short-beyond=false
+roundtrip=-5300
+decode-hex=12732767

@@ -1,0 +1,7 @@
+sleep interrupted: sleep interrupted flag=false fast=true
+pre-interrupted sleep: sleep interrupted flag=false
+wait interrupted msg=null holds=true flag=false
+pre-interrupted wait flag=false
+park returned flag=true reparkFast=true interrupted()=true after=false
+join interrupted flag=false
+interrupted()=true then=false

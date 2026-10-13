@@ -1,0 +1,54 @@
+
+With functions:  [Divisor 3, Divisor 2, Subtractor 1]
+  Minimum steps to 1:
+     2: 1 step : [-1 -> 1]
+     3: 1 step : [/3 -> 1]
+     4: 2 steps: [/2 -> 2, -1 -> 1]
+     5: 3 steps: [-1 -> 4, /2 -> 2, -1 -> 1]
+     6: 2 steps: [/3 -> 2, -1 -> 1]
+     7: 3 steps: [-1 -> 6, /3 -> 2, -1 -> 1]
+     8: 3 steps: [/2 -> 4, /2 -> 2, -1 -> 1]
+     9: 2 steps: [/3 -> 3, /3 -> 1]
+    10: 3 steps: [-1 -> 9, /3 -> 3, /3 -> 1]
+  There are 16 numbers in the range 1-2000 that have maximum 'minimal steps' of 14:
+    [863, 1079, 1295, 1439, 1511, 1583, 1607, 1619, 1691, 1727, 1823, 1871, 1895, 1907, 1919, 1943]
+  There are 5 numbers in the range 1-20000 that have maximum 'minimal steps' of 20:
+    [12959, 15551, 17279, 18143, 19439]
+  There is 1 number in the range 1-100000 that have maximum 'minimal steps' of 24:
+    [77759]
+
+With functions:  [Divisor 3, Divisor 2, Subtractor 2]
+  Minimum steps to 1:
+     2: 1 step : [/2 -> 1]
+     3: 1 step : [-2 -> 1]
+     4: 2 steps: [/2 -> 2, /2 -> 1]
+     5: 2 steps: [-2 -> 3, -2 -> 1]
+     6: 2 steps: [/3 -> 2, /2 -> 1]
+     7: 3 steps: [-2 -> 5, -2 -> 3, -2 -> 1]
+     8: 3 steps: [/2 -> 4, /2 -> 2, /2 -> 1]
+     9: 2 steps: [/3 -> 3, -2 -> 1]
+    10: 3 steps: [/2 -> 5, -2 -> 3, -2 -> 1]
+  There is 1 number in the range 1-2000 that have maximum 'minimal steps' of 17:
+    [1699]
+  There is 1 number in the range 1-20000 that have maximum 'minimal steps' of 24:
+    [19681]
+  There is 1 number in the range 1-100000 that have maximum 'minimal steps' of 28:
+    [98413]
+
+With functions:  [Divisor 2, Divisor 3, Subtractor 2, Subtractor 1]
+  Minimum steps to 1:
+     2: 1 step : [-1 -> 1]
+     3: 1 step : [-2 -> 1]
+     4: 2 steps: [/2 -> 2, -1 -> 1]
+     5: 2 steps: [-2 -> 3, -2 -> 1]
+     6: 2 steps: [/2 -> 3, -2 -> 1]
+     7: 3 steps: [-2 -> 5, -2 -> 3, -2 -> 1]
+     8: 3 steps: [/2 -> 4, /2 -> 2, -1 -> 1]
+     9: 2 steps: [/3 -> 3, -2 -> 1]
+    10: 3 steps: [/2 -> 5, -2 -> 3, -2 -> 1]
+  There is 1 number in the range 1-2000 that have maximum 'minimal steps' of 13:
+    [1943]
+  There are 2 numbers in the range 1-20000 that have maximum 'minimal steps' of 17:
+    [17495, 19439]
+  There are 22 numbers in the range 1-100000 that have maximum 'minimal steps' of 19:
+    [58319, 69983, 76463, 77759, 78623, 87479, 89423, 90071, 90287, 90359, 90383, 90395, 91259, 91355, 91367, 93311, 95255, 95471, 95903, 96119, 96191, 98171]

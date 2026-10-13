@@ -1,0 +1,13 @@
+p1.x = 3
+p1.y = 4
+p1.toString = Point[x=3, y=4]
+p1.hashCode == p2.hashCode: true
+p1.equals(p2): true
+p1.equals(p3): false
+person.toString = Person[name=Alice, age=30]
+person.name = Alice
+person.age = 30
+person.equals(person2): true
+person.equals(person3): false
+w.toString = Wrapper[value=hello]
+w.value = hello

@@ -1,0 +1,4 @@
+assertTrue-ok
+afterAssert-false
+msg=computed
+done

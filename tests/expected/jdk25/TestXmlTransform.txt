@@ -1,0 +1,5 @@
+identity=[<root><a x="1">one</a><b>two</b></root>]
+decl-head=<?xml version="1.0" encoding="UTF-8"?>
+decl-newline-body=false
+xsl-count-out=[<?xml version="1.0" encoding="UTF-8"?><out>3</out>]
+template-reuse-eq=true

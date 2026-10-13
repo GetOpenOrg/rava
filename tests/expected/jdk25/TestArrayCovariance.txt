@@ -1,0 +1,12 @@
+as-object-array type=String[] values=a b c 
+caught ArrayStoreException
+strings[1]=z
+back[0]=a length=3
+caught ClassCastException
+matrix rows=2 row0=2
+row0[0]=x
+isArray=true
+collected len=3 component=String[]
+collected len=2 component=Integer[]
+dest=a,z,c
+done

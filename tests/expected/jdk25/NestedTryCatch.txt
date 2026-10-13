@@ -1,0 +1,7 @@
+outer try
+inner try
+inner catch: inner error
+after inner try
+outer caught: bubbled
+x = 2
+done

@@ -1,0 +1,10 @@
+enc=a+b%2Bc%26%3D%E4%B8%AD
+roundtrip=true
+enc-named=%E6%A2%A6
+dec-named=梦
+plus=a b
+amp=%26 eq=%3D pct=%25
+keep=aZ09.*-_
+trunc-ex=IllegalArgumentException
+badhex-ex=IllegalArgumentException
+charset-ex=UnsupportedEncodingException

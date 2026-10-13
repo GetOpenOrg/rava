@@ -1,0 +1,9 @@
+count=3.0
+sum=6.0
+zh-id=2
+zh-id=3
+first=1
+last-lang=zh
+bool=true
+bool-miss=false
+name=qa

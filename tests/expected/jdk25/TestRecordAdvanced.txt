@@ -1,0 +1,21 @@
+point=Point[x=3, y=4]
+accessors=3,4
+distance=5.0
+translated=Point[x=4, y=5]
+normalized=5,6
+origin=Point[x=0, y=0]
+static field=point
+equals=true
+hashCode equal=true
+toString=Point[x=1, y=2]
+3-arg ctor used
+3-arg=Point[x=7, y=8]
+id=530
+record=PersonRecord[name=alice, age=30]
+via interface id=530
+compare=1
+sorted=[PersonRecord[name=bob, age=25], PersonRecord[name=alice, age=30]]
+validation -> negative age
+int box=Box[label=int, value=21] doubled=42
+str box=Box[label=str, value=ab] doubled=abab
+done

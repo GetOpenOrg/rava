@@ -1,0 +1,16 @@
+true
+false
+world
+true
+false
+hello
+false
+true
+end
+true
+false
+default
+true
+false
+hello
+was null

@@ -1,0 +1,9 @@
+int=42
+int-back=42
+int-notrim-ex=NumberFormatException
+str=plain
+none=false
+custom=Level(7)
+custom-back=7
+fired=true value=9
+bad-text-ex=NumberFormatException

@@ -1,0 +1,16 @@
+0 -> zero,low,mid,
+1 -> low,mid,
+2 -> mid,
+3 -> mid,
+4 -> four,def,
+5 -> def,
+h1=60
+h2=50
+h3=30
+h9=-1
+seven
+after-no-match
+tmp=20
+good
+s1000
+done

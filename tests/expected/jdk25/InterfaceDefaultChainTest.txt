@@ -1,0 +1,3 @@
+In interface B concrete method
+In interface A static method
+In interface B static method

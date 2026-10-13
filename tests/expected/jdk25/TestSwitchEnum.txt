@@ -1,0 +1,4 @@
+SPRING: warm and rainy
+SUMMER: hot and sunny
+FALL: cool and windy
+WINTER: cold and snowy

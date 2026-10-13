@@ -1,0 +1,6 @@
+no exception
+caught IllegalArgumentException
+caught RuntimeException
+caught ArithmeticException
+caught as RuntimeException
+outer: ArithmeticException

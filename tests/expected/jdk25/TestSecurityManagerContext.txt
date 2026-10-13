@@ -1,0 +1,4 @@
+direct = [TestSecurityManagerContext$Probe, TestSecurityManagerContext]
+nested = [TestSecurityManagerContext$Probe, TestSecurityManagerContext$Inner, TestSecurityManagerContext$Outer, TestSecurityManagerContext]
+reflect = [TestSecurityManagerContext$Probe, TestSecurityManagerContext, TestSecurityManagerContext]
+lambda = [TestSecurityManagerContext$Probe, TestSecurityManagerContext, TestSecurityManagerContext]

@@ -1,0 +1,15 @@
+Hello, World!
+Hello, World!
+hello, world!
+HELLO, WORLD!
+Hello, Java!
+true
+true
+true
+4
+World!
+4
+a-b-c-d
+abcabcabc
+true
+false

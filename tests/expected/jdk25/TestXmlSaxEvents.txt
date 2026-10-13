@@ -1,0 +1,13 @@
+start log uri=[]
+start entry uri=[]
+  attr level=INFO
+text entry=[boot]
+end entry
+start entry uri=[]
+  attr level=WARN
+text entry=[retry]
+end entry
+end log
+start a uri=[]
+start b uri=[]
+parse-ex line=1 col=9

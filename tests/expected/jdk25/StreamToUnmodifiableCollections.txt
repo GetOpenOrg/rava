@@ -1,0 +1,10 @@
+Testing
+Immutable
+List
+From
+Stream
+From -> 4 letters
+Immutable -> 9 letters
+List -> 4 letters
+Stream -> 6 letters
+Testing -> 7 letters

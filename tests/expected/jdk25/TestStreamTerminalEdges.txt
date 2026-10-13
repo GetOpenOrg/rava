@@ -1,0 +1,9 @@
+findany=a
+findany-empty=true
+sum=3
+summary-max=1
+frozen=3
+frozen-ex=UnsupportedOperationException
+supplier=true
+supplier-counted=true1
+boxed=[1, 1, 1]

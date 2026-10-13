@@ -1,0 +1,15 @@
+int: 42
+str: hello
+dbl: 3.14
+bool: true
+count=10, name=test, pi=3.14
+matrix: [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+even sum 1-10: 30
+chain: hi, earth!
+sb: 0-10-20-30-40
+max: 20
+min: 10
+abs: 42
+pow: 1024
+sorted arr: [1, 2, 3, 4, 5]
+Done.

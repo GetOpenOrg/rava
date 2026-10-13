@@ -1,0 +1,4 @@
+size=3
+get1=b
+str=a/b/c
+empty=true

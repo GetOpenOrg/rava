@@ -1,0 +1,16 @@
+10
+4611686018427387919
+10.75
+16.0
+locals: 1 2 3 4.5 5
+locals2: 20 9.0
+pick(int,int)=1
+pick(long,int)=2
+pick(double,int)=3
+pick(int,long)=4
+10 1.5 1
+20 2.5 2
+30 3.5 3
+r=100000000000
+r+1=100000000001
+done

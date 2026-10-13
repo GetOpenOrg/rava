@@ -1,0 +1,13 @@
+java.lang.CloneNotSupportedException: TestObjectNativeFrames$Plain
+  java.lang.Object.clone Object.java:-2 native=true
+  TestObjectNativeFrames$Plain.copy TestObjectNativeFrames.java:5 native=false
+  TestObjectNativeFrames.main TestObjectNativeFrames.java:14 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.notify Object.java:-2 native=true
+  TestObjectNativeFrames.main TestObjectNativeFrames.java:20 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.notifyAll Object.java:-2 native=true
+  TestObjectNativeFrames.main TestObjectNativeFrames.java:26 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.notify Object.java:-2 native=true
+  TestObjectNativeFrames.main TestObjectNativeFrames.java:31 native=false

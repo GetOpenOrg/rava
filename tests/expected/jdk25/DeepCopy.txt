@@ -1,0 +1,27 @@
+Demonstrate shallow copy.  Both are the same object.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Set city on person 2.  City on both objects is changed.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=New York, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=New York, state=NY, code=010101]]
+
+Demonstrate copy constructor.  Object p2 is a deep copy of p1.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Set city on person 2.  City on objects is different.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=New York, state=NY, code=010101]]
+
+Demonstrate serialization.  Object p2 is a deep copy of p1.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Set city on person 2.  City on objects is different.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=New York, state=NY, code=010101]]
+
+Demonstrate cloning.  Object p2 is a deep copy of p1.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Set city on person 2.  City on objects is different.
+Person p1 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=Metropolis, state=NY, code=010101]]
+Person p2 = [first name=Clark, last name=Kent, address=[street=1 World Center, city=New York, state=NY, code=010101]]

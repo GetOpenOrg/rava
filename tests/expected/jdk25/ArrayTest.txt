@@ -1,0 +1,22 @@
+int array length: 5
+nums[0] = 10
+nums[4] = 50
+double array length: 3
+doubles[1] = 2.5
+bools[0] = true
+bools[1] = false
+names length: 3
+names[2] = Charlie
+created length: 4
+0
+10
+20
+30
+nums[2] after modify = 999
+matrix[0][1] = 2
+matrix[1][2] = 6
+matrix length: 2
+matrix[0] length: 3
+arraycopy dest[0] = 20
+arraycopy dest[1] = 30
+arraycopy dest[2] = 40

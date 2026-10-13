@@ -1,0 +1,11 @@
+TestNestHostDollar$Top
+false
+1
+TestNestHostDollar
+TestNestHostDollar
+true
+TestNestHostDollar
+int
+[Ljava.lang.String;
+TestNestHostDollar
+[TestNestHostDollar, TestNestHostDollar$Api, TestNestHostDollar$Inner, TestNestHostDollar$Inner$Deep]

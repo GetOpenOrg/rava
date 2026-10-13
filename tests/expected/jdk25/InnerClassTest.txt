@@ -1,0 +1,8 @@
+Outer name: Test
+Outer value: 10
+Inner value: 20
+Sum: 30
+Outer name: Other
+Outer value: 100
+Inner value: 50
+Sum: 150

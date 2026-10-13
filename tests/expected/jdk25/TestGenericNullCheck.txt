@@ -1,0 +1,9 @@
+string true false dflt hi
+integer true false -1
+user true Pt3
+array true false
+isNull true false true false false
+describe null! val:x null! val:Pt2
+nullValues 2
+firstNonNull z null
+optional false none else

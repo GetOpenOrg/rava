@@ -1,0 +1,10 @@
+secret -> IAE
+pkgField -> 2
+protField -> 3
+pubField -> 4
+hide -> IAE
+hide accessible hidden
+secret after setAccessible 42
+nestmate field 5
+nestmate method nested-tag
+set private -> IAE

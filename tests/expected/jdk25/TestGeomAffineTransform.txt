@@ -1,0 +1,7 @@
+scale-translate=12.000,26.000
+inverse=1.000,2.000
+rot90=-0.000,1.000
+rot180=-1.000,-0.000
+compose=12.000,26.000 same-as-single=true
+identity=true
+type-after-scale=false

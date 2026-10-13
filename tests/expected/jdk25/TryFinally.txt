@@ -1,0 +1,7 @@
+try
+after work
+finally
+try
+finally
+caught: test error
+done

@@ -1,0 +1,7 @@
+first=a
+last=c
+reversed=[c, b, a]
+after=[x, a, b, c, y]
+mfirst=p=1
+mlast=q=2
+mreversed={q=2, p=1}

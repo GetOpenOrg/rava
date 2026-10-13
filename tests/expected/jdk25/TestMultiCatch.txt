@@ -1,0 +1,16 @@
+result: 5
+ArithmeticException: / by zero
+result: 5
+caught: ArithmeticException
+caught: NumberFormatException
+parsed: 1
+bad number: abc
+parsed: 3
+bad number: bad
+parsed: 5
+try: 0
+finally: 0
+caught: fail at 1
+finally: 1
+try: 2
+finally: 2

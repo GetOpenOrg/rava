@@ -1,0 +1,11 @@
+Ints 208844
+Flags 39398
+Wide 978625328
+Wide NaN 2127036416
+Wide -0.0 0
+Named -1414973014
+Named null 0
+Outer 93909762
+Box 118 99
+Empty 0
+set size 2 contains true

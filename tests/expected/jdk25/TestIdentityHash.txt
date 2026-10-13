@@ -1,0 +1,13 @@
+stable=true
+stableDefault=true
+defaultIsIdentity=true
+objectDefault=true
+null=0
+overrideEq=true,217
+overrideIdentityStable=true
+strHash=96354,true
+strSameRef=false
+hashSetIdentity=2,true,false
+hashMapValue=1,second
+identityMap=2,again,second,false
+identityMapStr=2

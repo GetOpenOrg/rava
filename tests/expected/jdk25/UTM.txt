@@ -1,0 +1,97 @@
+[ [H] 1 1 1 ] --- (q0,1)=>(q0,1)/1
+[ 1 [H] 1 1 ] --- (q0,1)=>(q0,1)/1
+[ 1 1 [H] 1 ] --- (q0,1)=>(q0,1)/1
+[ 1 1 1 [H] b ] --- (q0,b)=>(qf,1)/0
+[ 1 1 1 [H] 1 ] --- (qf,1)
+Output (si): [1, 1, 1, 1]
+
+[ [H] 0 ] --- (a,0)=>(b,1)/1
+[ 1 [H] 0 ] --- (b,0)=>(a,1)/-1
+[ [H] 1 1 ] --- (a,1)=>(c,1)/-1
+[ [H] 0 1 1 ] --- (c,0)=>(b,1)/-1
+[ [H] 0 1 1 1 ] --- (b,0)=>(a,1)/-1
+[ [H] 0 1 1 1 1 ] --- (a,0)=>(b,1)/1
+[ 1 [H] 1 1 1 1 ] --- (b,1)=>(b,1)/1
+[ 1 1 [H] 1 1 1 ] --- (b,1)=>(b,1)/1
+[ 1 1 1 [H] 1 1 ] --- (b,1)=>(b,1)/1
+[ 1 1 1 1 [H] 1 ] --- (b,1)=>(b,1)/1
+[ 1 1 1 1 1 [H] 0 ] --- (b,0)=>(a,1)/-1
+[ 1 1 1 1 [H] 1 1 ] --- (a,1)=>(c,1)/-1
+[ 1 1 1 [H] 1 1 1 ] --- (c,1)=>(halt,1)/0
+[ 1 1 1 [H] 1 1 1 ] --- (halt,1)
+Output (bb): [1, 1, 1, 1, 1, 1]
+[ [H] b a b b a b a b a a ] --- (s0,b)=>(s1,B)/1
+[ B [H] a b b a b a b a a ] --- (s1,a)=>(s1,a)/1
+[ B a [H] b b a b a b a a ] --- (s1,b)=>(s1,b)/1
+[ B a b [H] b a b a b a a ] --- (s1,b)=>(s1,b)/1
+[ B a b b [H] a b a b a a ] --- (s1,a)=>(s1,a)/1
+[ B a b b a [H] b a b a a ] --- (s1,b)=>(s1,b)/1
+[ B a b b a b [H] a b a a ] --- (s1,a)=>(s1,a)/1
+[ B a b b a b a [H] b a a ] --- (s1,b)=>(s1,b)/1
+[ B a b b a b a b [H] a a ] --- (s1,a)=>(s1,a)/1
+[ B a b b a b a b a [H] a ] --- (s1,a)=>(s1,a)/1
+[ B a b b a b a b a a [H] * ] --- (s1,*)=>(s2,*)/-1
+[ B a b b a b a b a [H] a * ] --- (s2,a)=>(s3,b)/-1
+[ B a b b a b a b [H] a b * ] --- (s3,a)=>(s3,a)/-1
+[ B a b b a b a [H] b a b * ] --- (s3,b)=>(s3,b)/-1
+[ B a b b a b [H] a b a b * ] --- (s3,a)=>(s3,a)/-1
+[ B a b b a [H] b a b a b * ] --- (s3,b)=>(s3,b)/-1
+[ B a b b [H] a b a b a b * ] --- (s3,a)=>(s3,a)/-1
+[ B a b [H] b a b a b a b * ] --- (s3,b)=>(s3,b)/-1
+[ B a [H] b b a b a b a b * ] --- (s3,b)=>(s3,b)/-1
+[ B [H] a b b a b a b a b * ] --- (s3,a)=>(s3,a)/-1
+[ [H] B a b b a b a b a b * ] --- (s3,B)=>(s0,a)/1
+[ a [H] a b b a b a b a b * ] --- (s0,a)=>(s0,a)/1
+[ a a [H] b b a b a b a b * ] --- (s0,b)=>(s1,B)/1
+[ a a B [H] b a b a b a b * ] --- (s1,b)=>(s1,b)/1
+[ a a B b [H] a b a b a b * ] --- (s1,a)=>(s1,a)/1
+[ a a B b a [H] b a b a b * ] --- (s1,b)=>(s1,b)/1
+[ a a B b a b [H] a b a b * ] --- (s1,a)=>(s1,a)/1
+[ a a B b a b a [H] b a b * ] --- (s1,b)=>(s1,b)/1
+[ a a B b a b a b [H] a b * ] --- (s1,a)=>(s1,a)/1
+[ a a B b a b a b a [H] b * ] --- (s1,b)=>(s1,b)/1
+[ a a B b a b a b a b [H] * ] --- (s1,*)=>(s2,*)/-1
+[ a a B b a b a b a [H] b * ] --- (s2,b)=>(s2,b)/-1
+[ a a B b a b a b [H] a b * ] --- (s2,a)=>(s3,b)/-1
+[ a a B b a b a [H] b b b * ] --- (s3,b)=>(s3,b)/-1
+[ a a B b a b [H] a b b b * ] --- (s3,a)=>(s3,a)/-1
+[ a a B b a [H] b a b b b * ] --- (s3,b)=>(s3,b)/-1
+[ a a B b [H] a b a b b b * ] --- (s3,a)=>(s3,a)/-1
+[ a a B [H] b a b a b b b * ] --- (s3,b)=>(s3,b)/-1
+[ a a [H] B b a b a b b b * ] --- (s3,B)=>(s0,a)/1
+[ a a a [H] b a b a b b b * ] --- (s0,b)=>(s1,B)/1
+[ a a a B [H] a b a b b b * ] --- (s1,a)=>(s1,a)/1
+[ a a a B a [H] b a b b b * ] --- (s1,b)=>(s1,b)/1
+[ a a a B a b [H] a b b b * ] --- (s1,a)=>(s1,a)/1
+[ a a a B a b a [H] b b b * ] --- (s1,b)=>(s1,b)/1
+[ a a a B a b a b [H] b b * ] --- (s1,b)=>(s1,b)/1
+[ a a a B a b a b b [H] b * ] --- (s1,b)=>(s1,b)/1
+[ a a a B a b a b b b [H] * ] --- (s1,*)=>(s2,*)/-1
+[ a a a B a b a b b [H] b * ] --- (s2,b)=>(s2,b)/-1
+[ a a a B a b a b [H] b b * ] --- (s2,b)=>(s2,b)/-1
+[ a a a B a b a [H] b b b * ] --- (s2,b)=>(s2,b)/-1
+[ a a a B a b [H] a b b b * ] --- (s2,a)=>(s3,b)/-1
+[ a a a B a [H] b b b b b * ] --- (s3,b)=>(s3,b)/-1
+[ a a a B [H] a b b b b b * ] --- (s3,a)=>(s3,a)/-1
+[ a a a [H] B a b b b b b * ] --- (s3,B)=>(s0,a)/1
+[ a a a a [H] a b b b b b * ] --- (s0,a)=>(s0,a)/1
+[ a a a a a [H] b b b b b * ] --- (s0,b)=>(s1,B)/1
+[ a a a a a B [H] b b b b * ] --- (s1,b)=>(s1,b)/1
+[ a a a a a B b [H] b b b * ] --- (s1,b)=>(s1,b)/1
+[ a a a a a B b b [H] b b * ] --- (s1,b)=>(s1,b)/1
+[ a a a a a B b b b [H] b * ] --- (s1,b)=>(s1,b)/1
+[ a a a a a B b b b b [H] * ] --- (s1,*)=>(s2,*)/-1
+[ a a a a a B b b b [H] b * ] --- (s2,b)=>(s2,b)/-1
+[ a a a a a B b b [H] b b * ] --- (s2,b)=>(s2,b)/-1
+[ a a a a a B b [H] b b b * ] --- (s2,b)=>(s2,b)/-1
+[ a a a a a B [H] b b b b * ] --- (s2,b)=>(s2,b)/-1
+[ a a a a a [H] B b b b b * ] --- (s2,B)=>(se,b)/-1
+[ a a a a [H] a b b b b b * ] --- (se,a)=>(se,a)/-1
+[ a a a [H] a a b b b b b * ] --- (se,a)=>(se,a)/-1
+[ a a [H] a a a b b b b b * ] --- (se,a)=>(se,a)/-1
+[ a [H] a a a a b b b b b * ] --- (se,a)=>(se,a)/-1
+[ [H] a a a a a b b b b b * ] --- (se,a)=>(se,a)/-1
+[ [H] * a a a a a b b b b b * ] --- (se,*)=>(see,*)/1
+[ * [H] a a a a a b b b b b * ] --- (see,a)
+Output (sort): [*, a, a, a, a, a, b, b, b, b, b, *]
+

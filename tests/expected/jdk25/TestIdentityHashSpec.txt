@@ -1,0 +1,7 @@
+nonNeg=true nonZero=true stable=true same=true
+low4 buckets=16 distinct>1990=true
+custom 42 identity nonNeg=true
+toString suffix true
+null identity 0
+identity map 100 get 57
+hash set 2000 contains true false

@@ -1,0 +1,14 @@
+shallow.distinct=true,class=Point
+shallow.fields=3,4
+shallow.primIndependent=3
+shallow.refShared=true,true
+shallow.mutationVisible=42,[p, q]
+deep.class=Deep,label=deep
+deep.independent=1,[p],[p, e]
+deep.viaBase=Deep
+notCloneable=CloneNotSupportedException
+arr.int=[1, 2, 3],[100, 2, 3],true
+arr.ref=true,true,true
+arr.2d=9,2,true
+arr.empty=0,true
+arr.char=hi

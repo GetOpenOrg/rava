@@ -1,0 +1,18 @@
+type (String,int)String
+exact a#3
+invoke b#4
+area 4.0
+area 3.0
+ctor type (int,int)Point
+sum 7
+scaled 70
+field x=3 sum=13
+private y=10
+static count=42 direct=42
+unreflect i#8
+unreflectConstructor Pair[k=k, v=1]
+unreflectGetter 10
+caught boom
+WMTE
+NSME
+NSFE

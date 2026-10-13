@@ -1,0 +1,12 @@
+p1: (0,0)
+p2: (3,4)
+dist p1-p2: 5.00
+line: (0,0)->(3,4)
+length: 5.00
+tri: Triangle[(0,0),(3,4),(6,0)]
+perimeter: 16.00
+sq: Square[(0,0),(5,0),(5,5),(0,5)]
+sq perimeter: 20.00
+found: Triangle[(0,0),(3,4),(6,0)]
+points: 3
+Done.

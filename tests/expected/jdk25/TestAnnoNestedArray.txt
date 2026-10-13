@@ -1,0 +1,9 @@
+@TestAnnoNestedArray.Inners({@TestAnnoNestedArray.Inner(1), @TestAnnoNestedArray.Inner(-2)})
+[@TestAnnoNestedArray.Inner(1), @TestAnnoNestedArray.Inner(-2)]
+@TestAnnoNestedArray.Tree({@TestAnnoNestedArray.Branch({@TestAnnoNestedArray.Leaf("a"), @TestAnnoNestedArray.Leaf("b\"c")}), @TestAnnoNestedArray.Branch({})})
+@TestAnnoNestedArray.Nothing({})
+@TestAnnoNestedArray.Tags({@TestAnnoNestedArray.Tag("x"), @TestAnnoNestedArray.Tag("y")})
+[@TestAnnoNestedArray.Tag("x"), @TestAnnoNestedArray.Tag("y")]
+@TestAnnoNestedArray.Inners({@TestAnnoNestedArray.Inner(7)})
+equal=true differ=false hash=true
+@TestAnnoNestedArray.Inner(1) value=1 type=Inner

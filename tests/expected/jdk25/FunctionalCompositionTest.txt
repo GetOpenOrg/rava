@@ -1,0 +1,20 @@
+andThen(5): 20
+compose(5): 30
+4 pos&even: true
+3 pos&even: false
+-2 pos|even: true
+-3 pos|even: false
+-1 !pos: true
+1 !pos: false
+squared: [1, 4, 9, 16, 25]
+doubled: [2, 4, 6, 8, 10]
+filtered>3: [4, 5]
+evens: [2, 4]
+upper: [HELLO, WORLD, HI]
+lower: [hello, world]
+odd*10: [10, 30, 50]
+multiplier(5): 15
+multiplier(7): 21
+processed: [13, 14, 15]
+scaled: [100, 200, 300, 400, 500]
+Done.

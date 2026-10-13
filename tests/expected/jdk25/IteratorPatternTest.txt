@@ -1,0 +1,14 @@
+iterator: Alice, Bob, Charlie
+sum: 15
+entries: [Alice=95, Bob=87, Charlie=92]
+keys: [Alice, Bob, Charlie]
+values: [87, 92, 95]
+matrix sum: 45
+forEach: [Alice:95, Bob:87, Charlie:92]
+getOrDefault Alice: 95
+getOrDefault Dave: 0
+containsKey Bob: true
+containsKey Dave: false
+size: 3
+isEmpty: false
+Done.

@@ -1,0 +1,4 @@
+main ctx non-null: true
+main ctx == scl: true
+child inherits: true
+own loader == scl: true

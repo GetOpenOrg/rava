@@ -1,0 +1,11 @@
+isAlive before=true
+after join A, log=[A0, A1, A2]
+after join B, log=[A0, A1, A2, B0, B1]
+after join rename, log=[A0, A1, A2, B0, B1, from-renamed-thread]
+sorted combined=[C0, C1, C2, C3, D0, D1, D2, D3]
+combined size=8
+main alive=true
+workers joined alive=false false
+sleep log contains slept=true
+after anon size=10 hasRunnable=true
+done

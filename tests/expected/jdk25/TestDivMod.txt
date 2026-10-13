@@ -1,0 +1,8 @@
+idiv=3,-3,-3
+imod=1,-1,1
+ddiv=Infinity
+dmod=NaN
+intDivZero=ArithmeticException
+intModZero=ArithmeticException
+longMod=0
+dblModSign=2.0

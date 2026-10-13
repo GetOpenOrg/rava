@@ -1,0 +1,8 @@
+Monday
+Friday
+Sunday
+Unknown
+-1
+0
+1
+2

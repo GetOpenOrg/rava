@@ -1,0 +1,35 @@
+Test static block 1
+Base static block
+Base static field
+Test static field 1
+Test static field 2
+Test static block 2
+--- new DerivedInit() ---
+Derived static block
+Derived static field
+Base instance block
+Base instance field
+Base constructor body
+Derived instance block
+Derived instance field
+Derived constructor body
+derivedField=Derived instance field baseField=Base instance field
+--- new DerivedInit() again (static 只跑一次) ---
+Base instance block
+Base instance field
+Base constructor body
+Derived instance block
+Derived instance field
+Derived constructor body
+--- new TestInitOrder() ---
+Test instance block 1
+Test instance field 1
+Test instance block 2
+Test instance field 2
+Test constructor body
+i1=Test instance field 1 i2=Test instance field 2
+--- 实例计数器 ---
+created id=1 total=1
+created id=2 total=2
+total=2
+done

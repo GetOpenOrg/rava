@@ -1,0 +1,17 @@
+get n=3 getInt=3 getLong=3
+after set n=5
+after setInt n=6
+big=1099511627776
+big after=42
+label=changed direct=changed
+static counter=7
+static after=9
+final set IAE
+type IAE
+null receiver NPE
+static invoke=42
+instance invoke=changed:12
+virtual invoke=derived/base:6
+private invoke=hidden-6
+ITE cause=java.lang.IllegalStateException: kaboom
+arg IAE

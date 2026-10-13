@@ -1,0 +1,3 @@
+Weight on MERCURY is  28.33
+Weight on VENUS is  67.87
+Weight on EARTH is  75.00

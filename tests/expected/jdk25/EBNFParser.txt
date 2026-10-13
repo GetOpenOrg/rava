@@ -1,0 +1,75 @@
+parse:
+"a" {
+    a = "a1" ( "a2" | "a3" ) { "a4" } [ "a5" ] "a6" ;
+} "z"  ===>
+
+productions:
+{{a,, 0,, {{terminal,, a1},, {or,, {terminal,, a2},, {terminal,, a3}},, {repeat,, {terminal,, a4}},, {optional,, {terminal,, a5}},, {terminal,, a6}}}}
+
+idents:
+{a}
+
+ididx:
+{0}
+
+extras:
+{{title,, a},, {comment,, z}}
+
+tests:
+"a1a3a4a4a5a6", pass
+"a1 a2a6", pass
+"a1 a3 a4 a6", pass
+"a1 a4 a5 a6", fail
+"a1 a2 a4 a5 a5 a6", fail
+"a1 a2 a4 a5 a6 a7", fail
+"your ad here", fail
+
+parse:
+{
+    expr = term { plus term } .
+    term = factor { times factor } .
+    factor = number | '(' expr ')' .
+ 
+    plus = "+" | "-" .
+    times = "*" | "/" .
+ 
+    number = digit { digit } .
+    digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" .
+} ===>
+
+productions:
+{{expr,, 0,, {{ident,, term,, 1},, {repeat,, {{ident,, plus,, 2},, {ident,, term,, 1}}}}},, {term,, 1,, {{ident,, factor,, 3},, {repeat,, {{ident,, times,, 4},, {ident,, factor,, 3}}}}},, {factor,, 3,, {or,, {ident,, number,, 5},, {{terminal,, (},, {ident,, expr,, 0},, {terminal,, )}}}},, {plus,, 2,, {or,, {terminal,, +},, {terminal,, -}}},, {times,, 4,, {or,, {terminal,, *},, {terminal,, /}}},, {number,, 5,, {{ident,, digit,, 6},, {repeat,, {ident,, digit,, 6}}}},, {digit,, 6,, {or,, {terminal,, 0},, {terminal,, 1},, {terminal,, 2},, {terminal,, 3},, {terminal,, 4},, {terminal,, 5},, {terminal,, 6},, {terminal,, 7},, {terminal,, 8},, {terminal,, 9}}}}
+
+idents:
+{expr,, term,, plus,, factor,, times,, number,, digit}
+
+ididx:
+{0,, 1,, 3,, 2,, 4,, 5,, 6}
+
+extras:
+{}
+
+tests:
+"2", pass
+"2*3 + 4/23 - 7", pass
+"(3 + 4) * 6-2+(4*(4))", pass
+"-2", fail
+"3 +", fail
+"(4 + 3", fail
+
+parse:
+a = "1" ===>
+invalid ebnf (missing opening {)
+
+parse:
+{ a = "1" ; ===>
+invalid ebnf (missing closing })
+
+parse:
+{ hello world = "1"; } ===>
+invalid ebnf (= expected)
+
+parse:
+{ foo = bar . } ===>
+invalid ebnf (undefined:bar)
+

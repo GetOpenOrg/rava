@@ -1,0 +1,6 @@
+try block
+finally block
+caught exception
+finally after catch
+inner finally
+outer caught

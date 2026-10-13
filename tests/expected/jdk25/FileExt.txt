@@ -1,0 +1,9 @@
+Extensions: [.txt, .gz, , .bat]
+
+text.txt: true
+text.TXT: true
+test.tar.gz: true
+test/test2.exe: false
+test\test2.exe: false
+test: true
+a/b/c\d/foo: true

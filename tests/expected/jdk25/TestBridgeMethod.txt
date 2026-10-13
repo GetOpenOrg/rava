@@ -1,0 +1,16 @@
+StringStore.put hello
+get=hello
+store value=hello
+IntStore.put 7
+get=7
+store value=7
+StringStore.put raw-value
+raw get=raw-value
+value=42
+ref=derived
+direct value=42
+direct ref=derived
+peek=ABC
+StringStore.put via-list
+list get=via-list
+done

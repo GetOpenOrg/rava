@@ -1,0 +1,5 @@
+固定 int 版: 01 00 00 00 05 68 65 6C 6C 6F 00 00 00 05 77 6F 72 6C 64 共 19 字节
+varint   版: 01 05 68 65 6C 6C 6F 05 77 6F 72 6C 64 共 13 字节
+节省: 6 字节（32%）
+
+读回: op=1 keyLen=5 key=hello valLen=5 value=world

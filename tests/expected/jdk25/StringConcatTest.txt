@@ -1,0 +1,5 @@
+Hello World
+Value: 42
+foobar
+pi=3.14 flag=true
+Result: 30

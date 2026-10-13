@@ -1,0 +1,16 @@
+spec==feature true
+vm spec==feature true
+class.version true
+version prefix true
+runtime.version prefix true
+version.date true
+spec name Java Platform API Specification / Oracle Corporation
+vm spec Java Virtual Machine Specification / Oracle Corporation
+runtime.name OpenJDK Runtime Environment
+present all
+file.encoding UTF-8 model 64 endian little jdk.debug release
+separators / : nl=true
+os.version nonempty true
+default charset UTF-8
+absent null dflt
+set v1 clear v1 after null

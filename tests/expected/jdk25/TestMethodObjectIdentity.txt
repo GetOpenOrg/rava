@@ -1,0 +1,9 @@
+method-not-same=true
+method-eq=true
+method-hash-eq=true
+method-to-string=public int TestMethodObjectIdentity$Widget.area(int)
+field-eq=true
+field-hash-eq=true
+field-to-string=public int TestMethodObjectIdentity$Widget.size
+declared-eq=true
+invoke-alt=42

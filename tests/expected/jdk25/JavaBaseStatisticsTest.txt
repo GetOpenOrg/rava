@@ -1,0 +1,16 @@
+int count: 3
+int sum: 60
+int min: 10
+int max: 30
+int avg: 20.0
+dbl count: 3
+dbl sum: 7.5
+dbl min: 1.5
+dbl max: 3.5
+dbl avg: 2.5
+empty count: 0
+empty sum: 0
+empty min: 2147483647
+empty max: -2147483648
+combined count: 4
+combined sum: 10

@@ -1,0 +1,6 @@
+private field get=7
+private field set=70
+pkg=8 prot=9
+private method=hidden3
+nestmate static=nestmate
+jdk private -> IllegalAccessException

@@ -1,0 +1,16 @@
+interface = [TestClassContextDispatch$Probe, TestClassContextDispatch$Named, TestClassContextDispatch]
+default = [TestClassContextDispatch$Probe, TestClassContextDispatch$WithDefault, TestClassContextDispatch]
+override default = [TestClassContextDispatch$Probe, TestClassContextDispatch$OverridesDefault, TestClassContextDispatch]
+abstract = [TestClassContextDispatch$Probe, TestClassContextDispatch$Derived, TestClassContextDispatch]
+template = [TestClassContextDispatch$Probe, TestClassContextDispatch$Derived, TestClassContextDispatch$Base, TestClassContextDispatch]
+super call = [TestClassContextDispatch$Probe, TestClassContextDispatch$Derived, TestClassContextDispatch$SuperCall, TestClassContextDispatch]
+inherited = [TestClassContextDispatch$Probe, TestClassContextDispatch$Derived, TestClassContextDispatch]
+inherited trace top = TestClassContextDispatch$Derived.whereAmI TestClassContextDispatch.java
+declared in subclass = 0
+concrete override = [TestClassContextDispatch$Probe, TestClassContextDispatch$Hooked, TestClassContextDispatch]
+delegation = [TestClassContextDispatch$Probe, TestClassContextDispatch$Hooked, TestClassContextDispatch$Delegator, TestClassContextDispatch]
+default via class = [TestClassContextDispatch$Probe, TestClassContextDispatch$WithDefault, TestClassContextDispatch]
+declared in implementor = 0
+default trace top = TestClassContextDispatch$WithDefault
+sub-interface = [TestClassContextDispatch$Probe, TestClassContextDispatch$Named, TestClassContextDispatch$ChainImpl, TestClassContextDispatch]
+lambda = [TestClassContextDispatch$Probe, TestClassContextDispatch, TestClassContextDispatch]

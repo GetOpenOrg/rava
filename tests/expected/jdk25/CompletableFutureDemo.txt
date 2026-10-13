@@ -1,0 +1,10 @@
+hello
+true
+true
+5
+result: 10
+42
+true
+accepted: accept
+-1
+done

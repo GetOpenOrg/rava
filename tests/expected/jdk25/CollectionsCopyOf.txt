@@ -1,0 +1,10 @@
+New
+Method
+To
+Copy
+Copy
+Method
+New
+To
+k1 = v1
+k2 = v2

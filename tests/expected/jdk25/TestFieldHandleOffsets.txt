@@ -1,0 +1,12 @@
+mh payload: sq
+bytecode payload: sq
+cas null->sq: true
+old: sq, now: tri
+static: hello / hello
+static cas: true
+static now: tri
+updater cas: true
+updater get: sq
+tags: [a, b]
+thread: worker-2
+loader: true parent: true

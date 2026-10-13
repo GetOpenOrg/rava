@@ -1,0 +1,14 @@
+caught=NoSuchFieldException,no_such_field_xyz
+hit=value,mods=18
+serialMods=26
+typeOf=[B
+arr=java.lang.String
+arrPrim=int
+arrNested=[I
+nonArr=true
+clsName=[Ljava.lang.String;
+same=true
+viaGetClass=java.lang.String
+iaeV=IllegalAccessException
+maxI=2147483647,type=int
+maxL=9223372036854775807

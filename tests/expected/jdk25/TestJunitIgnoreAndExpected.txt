@@ -1,0 +1,3 @@
+run=5 fail=2 ignore=2 ok=false
+failure wrongType :: Unexpected exception, expected<java.lang.IllegalStateException> but was<java.lang.IllegalArgumentException>
+failure notThrown :: Expected exception: java.lang.IllegalStateException

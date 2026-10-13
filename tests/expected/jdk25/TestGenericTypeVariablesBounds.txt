@@ -1,0 +1,12 @@
+tv-count=2
+tv=K bounds=2 decl=Class
+tv=V bounds=1 decl=Class
+k-bound0=java.lang.Number
+k-bound1=java.lang.Comparable<K>
+m-tv=T
+m-bound=java.util.List<? extends java.lang.Number> parameterized=true
+m-bound-arg=? extends java.lang.Number wildcard=true
+upper=java.lang.Number
+lower-count=0
+super-upper=java.lang.Object
+super-lower=java.lang.Integer

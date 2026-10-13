@@ -1,0 +1,11 @@
+Exception in thread "worker-a" java.lang.RuntimeException: worker failed
+	at TestUncaughtFrames$Worker.run(TestUncaughtFrames.java:19)
+Caused by: java.lang.IllegalStateException: inner failure
+	at TestUncaughtFrames.fail(TestUncaughtFrames.java:6)
+	at TestUncaughtFrames.fail(TestUncaughtFrames.java:8)
+	at TestUncaughtFrames.fail(TestUncaughtFrames.java:8)
+	at TestUncaughtFrames$Worker.run(TestUncaughtFrames.java:17)
+state after: TERMINATED
+handler: worker-b java.lang.UnsupportedOperationException: custom
+default handler: worker-c by default
+done

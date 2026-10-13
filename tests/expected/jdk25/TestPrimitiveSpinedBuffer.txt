@@ -1,0 +1,14 @@
+int.sorted=1 3 5 7 9
+int.builder.sum=2470
+int.toArray.len=14,last=39
+int.iter=2,4,8,
+int.empty=0
+long.sorted=10 20 30
+long.builder.sum=171000000000
+long.toArray.len=25,last=625
+long.iter=1,2,3,
+double.sorted=0.5 1.5 2.5
+double.builder.sum=140.25
+double.toArray=1.0,4.0,9.0
+double.iter=0.1,0.2,0.3,
+boxed=123

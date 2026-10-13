@@ -1,0 +1,9 @@
+x-IBM930 -> x-IBM930 bytes=c1c2c30e456245660f roundtrip=true
+IBM037 -> IBM037 bytes=c8859393966b40e6969993845a roundtrip=true
+cp037 -> IBM037 bytes=c5c2c3c4c9c340f0f3f7 roundtrip=true
+supported x-IBM930=true
+supported x-IBM939=true
+available x-IBM930=true
+available IBM037=true
+available x-MacRoman=true
+x-MacRoman via map=6361668e

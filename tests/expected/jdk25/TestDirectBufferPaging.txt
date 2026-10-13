@@ -1,0 +1,8 @@
+zeroed sum=0
+cross page 1: 1122334455667788 lo=17 hi=-120
+cross page 2: 22446688aaccef10 lo=34 hi=16
+BIG_ENDIAN roundtrip=true first byte=-98 last long=33cf8608d7485523
+BIG_ENDIAN ints=true b0=-104 chars=页边界-direct-swap
+LITTLE_ENDIAN roundtrip=true first byte=21 last long=33cf8608d7485523
+LITTLE_ENDIAN ints=true b0=117 chars=页边界-direct-swap
+bulk direct copy: remaining=8192 at100=94f82a00d0ba0645

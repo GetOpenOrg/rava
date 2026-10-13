@@ -1,0 +1,9 @@
+NativePRNG SUN
+nextBytes filled=true
+nextInt(10) inRange=true allValues=true
+nextDouble in [0,1)=true
+nextLong differ=true
+nextBoolean both=true
+nextGaussian finite=true
+seeded differ=true
+generateSeed len=24

@@ -1,0 +1,5 @@
+resolved-contains=true
+same-class=true
+fields=p/3
+blocked-ex=ClassNotFoundException msg-head=true
+alias-ok=true

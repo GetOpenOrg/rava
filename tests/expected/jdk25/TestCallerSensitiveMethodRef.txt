@@ -1,0 +1,14 @@
+ref: TestCallerSensitiveMethodRef$$Lambda
+lambda: TestCallerSensitiveMethodRef
+other ref: TestCallerSensitiveMethodRef$Other$$Lambda
+other lambda: TestCallerSensitiveMethodRef$Other
+invoke via lambda: secret
+other invoker on own private: hidden
+other invoker on host private: secret
+other invoker on outsider: IllegalAccessException
+helper ref: secret
+invoke ref on host private: secret
+invoke ref on nested private: hidden
+invoke ref on outsider: IllegalAccessException: class TestCallerSensitiveMethodRef$$Lambda/0x? cannot access a member of class Outsider with modifiers "private static"
+forName ref: Other
+forName lambda: Other

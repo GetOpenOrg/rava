@@ -1,0 +1,4 @@
+Volume of 1st cuboid: 210.0
+Volume of 2nd cuboid: 1560.0
+Volume of 3rd cuboid after adding: 5400.0
+Volume of 3rd cuboid after subtracting: -180.0

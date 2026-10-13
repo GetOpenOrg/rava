@@ -1,0 +1,11 @@
+xml-head=<?xml version="1.0" encoding="UTF-8"?>
+back app.count=42
+back app.name=rava
+back empty=
+back 中文键=中文值
+roundtrip=true
+fallback=from-parent
+override=child-val
+merged-count=3
+has-parent-key=true
+store-lines=false

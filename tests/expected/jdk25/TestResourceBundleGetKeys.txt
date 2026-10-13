@@ -1,0 +1,4 @@
+props-keys=a,b
+keys-eq-keyset=true
+merged=c.only,p.only,shared
+override-wins=from-child

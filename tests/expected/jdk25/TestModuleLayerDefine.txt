@@ -1,0 +1,13 @@
+modules = [demo.a, demo.b, demo.c]
+same loader = true
+a packages = [demo.a.api, demo.a.impl]
+b reads a = true, a reads b = false
+a exports api to b = true
+a exports impl to b = false
+c open = true, c opens to b = true
+after addReads: a reads b = true
+after addExports: impl to b = true, impl to c = false
+after addOpens: api open to c = true, api open to b = false
+foreign package: package demo.zzz not in contents
+null target: NPE
+layer parents = 1, boot has a = false

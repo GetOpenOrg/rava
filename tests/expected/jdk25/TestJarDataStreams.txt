@@ -1,0 +1,15 @@
+ubyte=255
+ushort=abcd
+uint=11223344
+utf=rava
+bool=true
+char=中
+float=1.5
+double=2.5
+long=123456789012345
+bytes=AB
+at-end=true
+fully=123
+entry=one.txt body-len=1
+entry=two.txt body-len=2
+jar-entries=2

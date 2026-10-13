@@ -1,0 +1,8 @@
+looking=true group=123 end=3
+full-miss=true
+no-prefix=true
+first-look=true
+after-reset-matches=true
+anchored-hit=true
+anchored-miss=true
+find-all=1;22;333;

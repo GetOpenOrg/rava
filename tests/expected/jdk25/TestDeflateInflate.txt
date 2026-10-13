@@ -1,0 +1,10 @@
+deflated 71 -> 61 finished=true
+789c0bc94855282ccd4cce56482aca2fcf5348cbaf50c82acd2d2856c82f4b2d5228014ae72456552aa4e4a7eb298460519c989e9899a708009fbf197c
+adler=9fbf197c in=71 out=61
+inflated 71 finished=true ok=true
+raw 55 0bc94855282ccd4cce56482aca2fcf53
+raw inflated 71
+chunked ok=true remaining=0
+gzip size=89 head=1f8b0800
+gunzip 1420
+DataFormatException: incorrect header check

@@ -1,0 +1,11 @@
+fmt=1,234,567.89
+pattern=#,##0.00
+reapplied=#0.### out=1.235
+prefixed="€"9.50""
+percent=45.67%
+no-group=9876543
+group=9,876,543
+neg=(1,234.50)
+time-short=10:13 PM
+date-medium=Nov 14, 2023
+datetime=Nov 14, 2023, 10:13:20 PM

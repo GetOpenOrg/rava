@@ -1,0 +1,20 @@
+25.000000 is an integer
+24.999999 is not an integer
+25.000100 is not an integer
+
+With a tolerance of 0.00001:
+25.000000 is an integer
+24.999999 is an integer
+25.000100 is not an integer
+
+-2.1E120 is an integer
+-0.05 is not an integer
+NaN is not an integer
+Infinity is not an integer
+
+5.0 + 0.0i is an integer
+5.0 - -5.0i is not an integer
+
+24/8 is an integer
+-5/1 is an integer
+17/2 is not an integer
