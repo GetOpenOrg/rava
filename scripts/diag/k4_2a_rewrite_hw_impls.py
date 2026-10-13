@@ -351,12 +351,12 @@ def fix_callers(src: str, check: bool) -> int:
                 pkg_of.setdefault(m.group(1), "crate::" + "::".join(segs) if segs else "crate")
                 break
     # 接收者形态只认白名单（`.m(` 单主匹配的误报率高——str / 迭代器 / 原子等常用名撞车，
-    # s7k4d-hw2 实测：`.bytes(`/`.count(`/`.pin(`/`.load(` 全是误报）。新增条目前先核实
-    # 接收者确为该 wrapper（文档注释不算）。
+    # s7k4d-hw2 实测：`.bytes(`/`.count(`/`.pin(`/`.load(` 全是误报；s7k4d-hw3 实测
+    # `MethodHandleImpl$BindCaller.makeInjectedInvoker(H)` 的文档注释同样命中）。新增条目
+    # 前先核实接收者确为该 wrapper（文档注释不算）。
     receiver_allow = {
         "isPrimitive": "Class",
         "getBoolean": "Array",
-        "makeInjectedInvoker": "MethodHandleImpl_BindCaller",
         "__declared_method_rows": "Class",
         "__method_from_meta": "Class",
         "__table_declared_methods": "Class",

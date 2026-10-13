@@ -15,7 +15,6 @@
 use crate::error::Result;
 use crate::java::lang::Object;
 use crate::JArray;
-use crate::java::lang::invoke::__MethodHandleImpl_BindCallerHw as _;
 
 /// VM 支持类 binary name（模板方法的字节码翻译实现）。
 pub const TEMPLATE: &str = "java/lang/invoke/InjectedInvokerDyn";
