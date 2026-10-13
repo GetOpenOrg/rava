@@ -1234,8 +1234,15 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
       故未暴露，swbase/swbase2 实证）。**峰值 ✅**（s7k4d-peak rc=0，kr1，逐 crate 固定
       切段重建对 a07fbb6f）：三例全部 crate 在 ±10% 内，最大涨幅 +3.7%（DeepCopy
       java_base_body_6），声明底段 +2.5%（4 855 → 4 979 MB）——hw 匿名导入行 + trait
-      声明文本的代价量级如预期。确定性 s7k4d-det3（sg2）在跑（closure_independent
-      两项；被挤占重派同 tag 幂等）。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
+      声明文本的代价量级如预期。确定性两项 `closure_independent_of_order` ✅ /
+      `closure_independent_of_hash_seed` ⛔——**二分定归属：非 K4-2a**（s7k4d-det4
+      终态与 s7k4d-detmid（**042465b7 = 阶段 2 尖，K4-2a 之前**）失败逐字相同：
+      TestSerialLookupPairing 种子 0 与 2 的类集合差 `ProtectionDomain$
+      JavaSecurityAccessImpl` + `JavaSecurityAccess` 两类；基线 a07fbb6f
+      （s7k4d-detbase，kr1 rc=0）过 → 阶段 1/2（e6edfa24/a867b085）引入，排队中的
+      s7k4-det 本应暴露）。K4-2a 的四例种子口径（s7k4d-seed2）不受影响（全同）；
+      两工具口径差异疑与闭包缓存指纹（是否计入 hash seed）有关，续作核查
+      `closure::cache` 指纹与阶段 2 输入变化的交互。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
       移动（trait 声明行口径），无类增删）与逐 crate 峰值（s7k6_peak.sh 对 a07fbb6f，
       ±10%）未派发。
   - **K4-2a 验收与交接（10-13）**：
