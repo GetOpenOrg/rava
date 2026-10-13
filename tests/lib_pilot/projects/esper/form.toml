@@ -1,5 +1,7 @@
 # Esper CEP 事件处理
-# 依赖锁与取包同 63_junit 形态（scripts/e2e_form.py 读）。
-deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
-cp    = ["esper"]
+# 双版本模块锁（deps-extra/esper）：esper 7.1.0 需 antlr4-runtime 4.7（esper-parent 属性钉值），
+# 主模块锁经 hibernate-core 传递调解为 4.13.2（ATN 版本失配）——方案 A 并存，见 projects/README.md。
+# 取包同 63_junit 形态（scripts/e2e_form.py 读；fetch 先跑主模块再循环 deps-extra）。
+deps  = "tests/lib_pilot/deps-extra/esper/target/deps.lock.toml"
+cp    = ["esper", "antlr4-runtime", "slf4j-api", "janino", "commons-compiler"]
 fetch = "scripts/fetch_pilot_deps.sh --no-scan"
