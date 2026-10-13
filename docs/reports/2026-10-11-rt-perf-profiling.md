@@ -400,3 +400,13 @@ TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
   fc68236d）、rtpp-dbg2（失败例差分 + A/B 基准，4b4ce416）、rtpp-verify4（收窄后 7 例
   复跑，57eda4ee）、rtpp-prof2（修复后剖析，视排队情况）。结果均在
   `cluster_results/job/rtpp-*/`。
+
+## 八、三测点计时刷新（2026-10-13，测试机线 A4）
+
+@22409c66（batch-1014）release 档、禁 sccache（计时口径同峰值口径）、参考构建 jdk-21.0.11+10：
+
+- jc1：run_s=3.510（JVM 0.258）；rs JC_BENCH gen 446 ms / parse 3028 ms / 11.1 MB/s（JVM 52/119/279.6），GOLDEN OK。
+  （§二 老台账 jc1 整例 8.95 s / JVM 0.71 s 为整例口径；本行 run_s 为运行段口径——batch-1013 的 invoke 分派键优化（段 −57.4%）与其后 unbox P-C 的累计兑现。）
+- CollectorsDemo：PASS，transpile 3.94 s / build 1m37.7 s / bin 12.3 M。
+- StockTrans：PASS，transpile 1m40.6 s / build 8m40.4 s / bin 69.7 M；dyn miss 19 全部经 Method.invoke 反射路径、归因零未归因。
+- m1/jc1 golden 复验（libgates4-01，dev，真 jar）：双 GOLDEN OK——batch-1013 内容与 lib-tests 语料无隐性交互。
