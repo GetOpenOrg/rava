@@ -182,6 +182,7 @@ impl<'a> Engine<'a> {
             indy_models: BTreeMap::new(),
             sigpoly_sites: BTreeSet::new(),
             cold_cut: false,
+            closure_level: Default::default(),
             img: None,
             ext_vm: None,
             level_ctxs: HashMap::default(),

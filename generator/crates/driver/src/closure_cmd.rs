@@ -38,6 +38,7 @@ const VALUE_OPTS: &[&str] = &[
     "--deps",
     "--cp", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
     "--hash-seed", "--lambda-prof", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
+    "--closure-level",
 ];
 /// 开关选项
 const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof", "--gates"];
@@ -189,6 +190,20 @@ pub fn run(args: &Args) -> Result<(), String> {
     man.release_bytecode(multi("--release-bytecode").into_iter().cloned());
     let hw = Handwritten::new(&rt, cp.release());
     let h = Hierarchy::new(&cp);
+    // 声明分析级别（CLAUDE.md #2 改写 / 优化方案 S11 骨架）：rta | 0cfa（缺省）| 0cfa-saturated；
+    // 骨架期非 0cfa 档显式拒绝（不静默换档——档案 = 级别输出），语义本体见优化方案 S9 / S6
+    let closure_level: closure::ClosureLevel = match args.opt("--closure-level") {
+        None => Default::default(),
+        Some(s) => s
+            .parse()
+            .map_err(|()| format!("未知 --closure-level {s:?}（rta | 0cfa | 0cfa-saturated）"))?,
+    };
+    if !closure_level.implemented() {
+        return Err(format!(
+            "closure-level {} 未实施（骨架：参数 / 档案元数据 / 缓存键已落，语义本体见优化方案 S9 RTA 地板层 / S6 饱和）",
+            closure_level.as_str()
+        ));
+    }
     let input_desc = closure::Input {
         cp: &cp,
         runtime_dir: &rt,
@@ -202,6 +217,7 @@ pub fn run(args: &Args) -> Result<(), String> {
             ..diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))? },
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
+        closure_level,
     };
     if let Some(out) = args.opt("--gates-child") {
         return crate::gates_cmd::child(&input_desc, &h, &man, &hw, &out);

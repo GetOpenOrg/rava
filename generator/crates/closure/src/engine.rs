@@ -459,6 +459,8 @@ pub struct Engine<'a> {
     pub sigpoly_sites: BTreeSet<String>,
     /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
     pub cold_cut: bool,
+    /// 声明分析级别（骨架期恒 0cfa；档案元数据 summary.closure_level 与缓存键据此，语义本体见优化方案 S6/S9）
+    pub closure_level: crate::ClosureLevel,
     /// 构建期引导映像起点（`install_image`）
     img: Option<Box<image_start::ImgState>>,
     /// 构建期初始化扩展的求值器（引导映像求值器在导出后保留，concrete/ext_init.rs）

@@ -38,7 +38,7 @@ pub fn key(input: &Input<'_>, man: &Manifest) -> Result<String, String> {
 
 /// [`key`] 的主体：分析器身份与命令行放行项由调用方给出（单测用）
 pub fn key_with(analyzer: &[u8], input: &Input<'_>, overrides: (&[String], &[String])) -> Result<String, String> {
-    let Input { cp, runtime_dir, roots, seed_roots, locales, diag, cold_cut, flow_batch } = input;
+    let Input { cp, runtime_dir, roots, seed_roots, locales, diag, cold_cut, flow_batch, closure_level } = input;
     let mut f = Fp::default();
     f.field("format", &store::FORMAT.to_le_bytes());
     f.field("folds_version", &crate::FOLDS_VERSION.to_le_bytes());
@@ -63,6 +63,8 @@ pub fn key_with(analyzer: &[u8], input: &Input<'_>, overrides: (&[String], &[Str
         f.field("cut", c.as_bytes());
     }
     f.field("cold_cut", &[*cold_cut as u8]);
+    // 声明分析级别入指纹（CLAUDE.md #2 改写：级别变化 = 摘要变化——同输入不同档不得共享缓存条目）
+    f.field("closure_level", closure_level.as_str().as_bytes());
     let batch = flow_batch.filter(|&n| n > 0).unwrap_or(crate::engine::FLOW_BATCH);
     f.field("flow_batch", &(batch as u64).to_le_bytes());
     f.field("hash_seed", &crate::engine::hash_seed().to_le_bytes());
