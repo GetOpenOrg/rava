@@ -1033,6 +1033,36 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     - **系统性缝（`#[jvm_native]` 注入 `Self::__class_init()?`，20 文件）**：`jvm_native` 宏对静态 native 注入类初始化触发点，而 `__class_init` 在方法 trait 上——每个伴生文件（`use super::x::X` 非 glob 形态）都缺本类导入。批量补：console、random_access_file、process_handle_impl(_info)、finalizer、accessor_utils、native_method/native_constructor/direct_method_handle_accessor 三件、continuation_support、linux/mac_osx_socket_options、e_poll、k_queue、net(_ext)、socket/unix_dispatcher、bsd_file_system、bsd/linux_native_dispatcher、perf（含 `ByteBuffer__Methods`/`ByteOrder__Methods`——allocate / order_byteorder / nativeOrder / BIG_ENDIAN）、default_proxy_selector（含 `Proxy`/`Proxy_Type`/`InetSocketAddress`）、net_impl（含 `Inet4/6Address`、`InetSocketAddress`）。**同包 glob 伴生（`use super::*`，system/thread/class/string_utf16/strict_math 等 13 文件）经包 mod.rs 的 `pub use X::*` 已覆盖，无需处理**（33 例抽查实证）。
   - **排查方法（复用）**：路径调用扫描（`X::m` 正则 × use 表交叉 × 留固有名单）＋ `jvm_native` 静态注入面枚举＋ 主侧 diff 的 camelCase 实例调用增量的三合一；残余风险＝伴生文件不在既有抽查闭包内的实例调用（需类型推断，静态不可判），下批抽查覆盖新伴生宿主时自然暴露。
   - **验收（全过，abdd523b）**：宏单测 plan 39 / 缺省 35 全过、generator `cargo check --tests` 过；服务器作业 `bfx-acc`（us1，rc=0）：ArraysStream / HelloWorld / TestJunitAssertFamily PASS，加验 TestDirectBuffer / TestDirectBufferPaging（覆盖 zip 伴生修复）共 5/5；`bfx-seed`（jp1，rc=0）：四例种子 0/1/2 闭包集合对 batch-1013 基线（adf4cc1f）逐项全同（HelloWorld 641/2108/61、CollectorsDemo 662/2206/62、DeepCopy 2660/15390/801、TestSerialLookupPairing 2662/15380/795，`seed-sets: ALL-IDENTICAL`——s7-k3 的集合性质不变）。
+- **用户 crate 方法 trait 导入路径统一（10-13，b1015-fix，修 batch-1015 批内 guava 项目 rs 编译回归）**：
+  - **症状与层数**：`guava/GuavaCollectionsDemo` 项目模式 golden 链 JVM 侧 11 行 ✅ → 转译 ✅ → rs 编译 E0432
+    （`unresolved import com::example::guava::GuavaCollectionsDemo__Methods`，连带 E0599 `main` 找不到——
+    `main` 在 trait 上，匿名导入失败即两错同报）。修复后**直达 GOLDEN OK**：用户验证轮（35263131）已知的
+    E0308 缺口没有再露出——被 j25-r2-fix 的 SAM vtable 桥接收掉，本层是最后一层。
+  - **根因（包路径形 vs 模块路径形）**：K3 给 main.rs 的主类方法 trait 匿名导入复用了类型导入的包路径
+    （`use <包>::<类>__Methods as _;`）。该形在 JDK / lib crate 成立（包 mod.rs glob 再导出
+    `pub use <模块>::*;`，trait 是模块内宏展开项被 glob 带上包路径），但**用户 crate 的包 mod.rs 是按名
+    再导出**（`pub use <模块>::<类>;`，P5a(a) 既有设计）——trait 不在包路径上。语料 e2e 全部无包声明
+    （主类模块即 main.rs 顶层模块，包路径形与模块路径形同路），多文件项目模式（projects/<库>/src、
+    com.example.* 包、独立 lib crate）从未验过 rs 编译，此缝潜伏至此。
+  - **修法（emit/project/entry.rs，不特判）**：主类与 `class_init_hooks` 的用户类路径统一走
+    `phase2::uses::class_use_path` 的用户类定向——模块路径 `crate::<包>::<模块>::<类>`，与
+    `imports/fill` 的同 crate 定向、钩子路径同一口径（顺带收编手拼路径：包段 `r#` 关键字转义同源）。
+    JDK / lib 类的包路径形不变（`jrt_path` 独立、那边有 glob 再导出）。类文件内的 trait 导入
+    （fill.rs `module_path`）本就正确，未动。用户 crate 包 mod.rs 保持按名再导出设计（glob 会引入
+    新导出面，按名面零变化）。
+  - **同族面排查结论**：`METHODS_SUFFIX` 全部发射点复核——fill.rs（类文件，模块路径 ✅）、
+    boot_image（JDK 类，包路径 + glob ✅）、entry.rs（本缺陷，已修）；esper / templates 项目模式同验。
+  - **验收**：guava GOLDEN OK（E0432 → 转绿，无 E0308 残留）；templates/ThymeleafDemo 同链验
+    在跑（32G 上限 systemd 单元 b1015-thymeleaf2，闭包 18 GiB 稳定；THY_RC 见
+    /tmp/b1015_thymeleaf.log）；**esper 段如实记录到已知层**：EsperPatternDemo /
+    EsperLengthWindowDemo（项目模式共用闭包输入）在 32G 上限内**闭包不收敛**（PatternDemo 转译
+    RSS 33.1G 被杀；LengthWindow 同症，按用户 10-13 裁决不重复消耗）——属新发现的病态闭包
+    （此前被双版本失配挡住，未入五库病理清单），**归引擎线**；阻断层在 E0432 之前（闭包期，
+    未到 rs 编译），与本修复无关。四例种子 0/1/2 闭包集合对 batch-1015（63617c4d）逐项全同
+    + seed_check 字节确定性 0 diff（HelloWorld / TestSerialLookupPairing）+ generator
+    `cargo check --tests` 与 emit 单测 99+2 过；确定性两项（closure_independent_of_order /
+    of_hash_seed，b1015-det 作业 32G 上限内在跑，DET_RC 见 /tmp/b1015_det_tests.log）。
+    failure_patterns 登记 `user-crate-methods-trait-package-path`。
 - **K6 本体（10-12，s7-k6 2e3e9c2f + 5e7b21b8，基于 batch-1013 31e4762d）**：`java_class!` 块拆出
   类型标记层（`#[rava_layer = "marker"]`）——类 struct 的声明承载从声明层分离。
   - **与文档分解的偏差（先行记录）**：K6 的文档前提是 K4（手写基础设施分层）与 K5（类初始化骨架
