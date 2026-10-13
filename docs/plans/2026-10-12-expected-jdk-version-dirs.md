@@ -64,8 +64,23 @@ run_tests 只用 JDK 选择面，不触期望路径）。
 
 - [x] 目录迁移 + 脚本适配 + 单测全绿（test_known_failures 的 failure_patterns 第 117 条缺 since
       为**基线既有失败**，主检出同败，与本改造无关）
-- [ ] jdk25 4 例生成入库
-- [ ] JDK21 5 例混合 PASS（读 jdk21/ 生效）
-- [ ] JDK25 4 例版本差异 + 3 例常规 PASS（读 jdk25 / 缺失补生成生效）
-- [ ] 期望重生成字节一致（两版本各一例）
-- [ ] distribute 抽查模式 2 例冒烟
+- [x] jdk25 4 例生成入库：作业 exd-gen（jp2，OpenJDK 25.0.4.1+1-1-22.04.4-Ubuntu 构建，
+      `--java-home /usr/lib/jvm/java-25-openjdk-amd64 --update-expected`），差异形态与 triage 报告
+      §3.7 逐一对应：ParseDoubleEdge `For input string` → `multiple points`；NativeFrameTrace
+      `Thread.sleep0` → `sleepNanos0`+`sleepNanos` 两帧；ObjectWaitFrames `Object.java:366/339` →
+      `389/351`；SimpleDateFormatRound `CST` → `GMT+08:00`。提交 5ddc62ed（双远端已核对）。
+- [x] 期望重生成字节一致（作业 exd-regen，jp2，rc=0）：删 `jdk21/HelloWorld.txt` 后参考构建
+      重生成 `cmp` 一致（JDK21-REGEN-BYTE-IDENTICAL）；删 `jdk25/TestParseDoubleEdge.txt` 后
+      JDK25 `--java-home` 重生成一致（JDK25-REGEN-BYTE-IDENTICAL）。
+- [x] JDK21 5 例混合全 PASS（读 jdk21/ 生效，spot exd-a-j21 @5ddc62ed）：HelloWorld 85.6s /
+      TestMemberModifiers（反射）400.9s / DeepCopy 484.6s / TestSerialLookupPairing 482.4s /
+      TestJunitIgnoreAndExpected（junit 形态）330.4s（transpile/build/run 分项见
+      `cluster_results/spot/exd-a-j21/timings_jdk21.tsv`；dev#2/#3/#6/#23）
+- [x] JDK25 7 例全 PASS（spot exd-b-j25 @5ddc62ed）：4 例版本差异读 jdk25/ 通过
+      （TestParseDoubleEdge 81.4s / TestNativeFrameTrace 85.8s / TestObjectWaitFrames 81.9s /
+      TestSimpleDateFormatRound 471.6s）；3 例常规（HelloWorld / TestMemberModifiers /
+      TestClassNaming）经**缺失补生成**路径通过——树中 jdk25/ 仅 4 个差异文件，三例无期望可读，
+      PASS 只能来自 `_ensure_expected` 的 golden JVM 生成（构造性证明），生成物随抽查检出删除不入库
+- [x] distribute 抽查模式冒烟：exd-a-j21（jdk=21 参考构建，5 例）与 exd-b-j25（--jdk 25 实验覆盖，
+      7 例）两次抽查全程正常（检出 → refjdk → run_tests → PASS 记账 → 归档 → 检出清理，
+      两 dispatcher rc=0；期间云服务器槽被并行会话占用，礼让排队与断线重连均按设计工作）
