@@ -8,6 +8,7 @@ use super::__ScopedMemoryAccessHw;
 impl __ScopedMemoryAccessHw for ScopedMemoryAccess {
     /// native `registerNatives()`：HotSpot 登记 closeScope0 的 JNI 入口；原生二进制按名链接 → no-op。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn registerNatives() -> Result<()> {
         Ok(())
     }

@@ -11,6 +11,7 @@ impl __ContinuationSupportHw for ContinuationSupport {
     /// Continuation 由有栈协程承载（`continuation_impl.rs`）→ true：`ThreadBuilders.newVirtualThread`
     /// 走 `VirtualThread` 分支（false 时退化为 `BoundVirtualThread`，每个虚拟线程一条 OS 线程）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isSupported0() -> Result<bool> {
         Ok(true)
     }

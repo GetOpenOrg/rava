@@ -22,6 +22,7 @@ fn create_proxy(ty: Proxy_Type, host: &str, port: i32) -> Result<Proxy> {
 impl __DefaultProxySelectorHw for DefaultProxySelector {
     /// native `init()`：探测平台系统代理设施，可用返回 true。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn init() -> Result<bool> {
         Ok(system::init())
     }
@@ -29,6 +30,7 @@ impl __DefaultProxySelectorHw for DefaultProxySelector {
     /// native `getSystemProxies(String proto, String host)`：按系统配置给出 `proto://host` 的代理列表；
     /// 无设施 / 查询失败 / 条目不完整时返回 null（由 Java 侧回落为 DIRECT）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSystemProxies(&self, proto: String, host: String) -> Result<JArray<Proxy>> {
         if proto.is_jvm_null() || host.is_jvm_null() {
             return Ok(JArray::default());

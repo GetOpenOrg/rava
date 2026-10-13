@@ -12,6 +12,7 @@ impl __SerializationConstructorAccessorDynHw for SerializationConstructorAccesso
     /// 在其上运行 initCl 的无参构造体——L3 分派闭包的 `<alloc>` / `<init_on>` 伪成员（N2），
     /// 即 JDK 生成访问器的 `new target` + `invokespecial initCl.<init>()V` 两步。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn allocateAndInit(target: Class, init_cl: Class) -> Result<Object> {
         let t = format!("{}", target.__get_name()).replace('.', "/");
         let i = format!("{}", init_cl.__get_name()).replace('.', "/");

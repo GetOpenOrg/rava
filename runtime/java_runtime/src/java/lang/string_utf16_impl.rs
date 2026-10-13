@@ -10,6 +10,7 @@ impl __StringUTF16Hw for StringUTF16 {
     /// HI/LO_BYTE_SHIFT（compact strings 的 UTF-16 通道字节序），值不进入
     /// 可观测输出；小端平台（x86-64 / aarch64 Linux 与 macOS）为 false。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isBigEndian() -> Result<bool> {
         Ok(cfg!(target_endian = "big"))
     }

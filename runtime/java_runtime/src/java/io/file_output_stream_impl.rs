@@ -31,6 +31,7 @@ fn io_err(e: std::io::Error) -> JvmError {
 impl __FileOutputStreamHw for FileOutputStream {
     /// native initIDs：HotSpot 缓存 JNI 字段 ID；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
@@ -39,6 +40,7 @@ impl __FileOutputStreamHw for FileOutputStream {
     /// `O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC)`，权限 0666（受 umask）。
     /// 失败抛 FileNotFoundException，消息 `path (strerror)`。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn open0(&self, name: String, append: bool) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         let path = format!("{}", name);
@@ -66,6 +68,7 @@ impl __FileOutputStreamHw for FileOutputStream {
     /// native write(int, boolean)：写单字节（取低 8 位）。重载改名形态 `write_i_z`（与生成侧
     /// mangle 一致，否则不覆盖 native 存根）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn write_i_z(&self, b: i32, _append: bool) -> Result<()> {
         self.write_all_fd(&[b as u8])
     }
@@ -74,6 +77,7 @@ impl __FileOutputStreamHw for FileOutputStream {
     /// 与 write(2) 一致不做用户态缓冲：写完立即 flush。越界按 io_util.c 抛
     /// ArrayIndexOutOfBoundsException（经 JArray::get）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn writeBytes(&self, b: JArray<i8>, off: i32, len: i32, _append: bool) -> Result<()> {
         let mut bytes: Vec<u8> = Vec::with_capacity(len.max(0) as usize);
         for i in off..off.saturating_add(len) {

@@ -76,6 +76,7 @@ impl __ThrowableHw for Throwable {
     /// native fillInStackTrace(int)：捕获构造点的 Java 栈帧，写 `backtrace`（载体）与
     /// `depth`（帧数）两字段后返回自身（`fillInStackTrace() == this` 的 Java 语义由 wrapper 保持）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn fillInStackTrace_i(&self, _dummy: i32) -> Result<Throwable> {
         let frames = capture_java_frames(Object::from(Clone::clone(self)).0.__class_name());
         self.__set_depth(frames.entries.len() as i32);
@@ -87,6 +88,7 @@ impl __ThrowableHw for Throwable {
     /// 按 `backtrace` 载体逐帧给出 `cls.method(File.java:N)`（`Native Method` / `Unknown Source` /
     /// 无行号三种退化同 StackTraceElement）。载体缺失（未填栈）时为空。引导失败出口专用。
     #[doc(hidden)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __vm_frame_lines(t: &Throwable) -> Vec<std::string::String> {
         let backtrace = t.__get_backtrace();
         let Some(frames) = backtrace.0.as_any().downcast_ref::<Rc<StackTraceFrames>>() else {

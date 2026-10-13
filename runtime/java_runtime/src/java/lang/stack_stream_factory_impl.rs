@@ -10,6 +10,7 @@ impl __StackStreamFactoryHw for StackStreamFactory {
     ///（DEFAULT_MODE / FILL_CLASS_REFS_ONLY / GET_CALLER_CLASS / SHOW_HIDDEN_FRAMES /
     /// FILL_LIVE_STACK_FRAMES）与本数据面（stack_stream_factory_abstract_stack_walker_impl.rs）同一编码，恒 true。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn checkStackWalkModes() -> Result<bool> {
         Ok(true)
     }

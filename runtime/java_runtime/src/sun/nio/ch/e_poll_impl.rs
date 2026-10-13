@@ -16,22 +16,26 @@ fn io_exception(default: &str) -> JvmError {
 
 impl __EPollHw for EPoll {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn eventSize() -> Result<i32> {
         Ok(std::mem::size_of::<libc::epoll_event>() as i32)
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn eventsOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::epoll_event, events) as i32)
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn dataOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::epoll_event, u64) as i32)
     }
 
     /// native `create()`：epoll_create1(EPOLL_CLOEXEC)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn create() -> Result<i32> {
         // SAFETY: 无指针参数
         let epfd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
@@ -43,6 +47,7 @@ impl __EPollHw for EPoll {
 
     /// native `ctl(int epfd, int opcode, int fd, int events)`：data 携带 fd；返回 0 或 errno。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn ctl(epfd: i32, opcode: i32, fd: i32, events: i32) -> Result<i32> {
         let mut event = libc::epoll_event { events: events as u32, u64: fd as u32 as u64 };
         // SAFETY: event 为栈上结构
@@ -52,6 +57,7 @@ impl __EPollHw for EPoll {
 
     /// native `wait(int epfd, long pollAddress, int numfds, int timeout)`：被信号打断返回 INTERRUPTED。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn wait_i_l_i_i(epfd: i32, address: i64, numfds: i32, timeout: i32) -> Result<i32> {
         // SAFETY: address 指向至少 numfds 个 epoll_event 的本地数组
         let res = crate::gil::blocking(|| unsafe { libc::epoll_wait(epfd, address as *mut libc::epoll_event, numfds, timeout) });

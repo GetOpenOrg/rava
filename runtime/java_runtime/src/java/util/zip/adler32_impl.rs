@@ -21,12 +21,14 @@ fn adler_update(adler: i32, bytes: impl Iterator<Item = u8>) -> i32 {
 impl __Adler32Hw for Adler32 {
     /// `update(int adler, int b)`：追加单字节（低 8 位）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn update_i_i(adler: i32, b: i32) -> Result<i32> {
         Ok(adler_update(adler, std::iter::once(b as u8)))
     }
 
     /// `updateBytes(int adler, byte[] b, int off, int len)`。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn updateBytes(adler: i32, b: JArray<i8>, off: i32, len: i32) -> Result<i32> {
         let mut buf = Vec::with_capacity(len.max(0) as usize);
         for i in off..off.saturating_add(len) {
@@ -37,6 +39,7 @@ impl __Adler32Hw for Adler32 {
 
     /// `updateByteBuffer(int, long addr, int off, int len)`：直接缓冲区（直接内存地址 addr + off 起 len 字节）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn updateByteBuffer(v: i32, addr: i64, off: i32, len: i32) -> Result<i32> {
         // SAFETY: addr 为 DirectByteBuffer 的直接内存地址，Java 侧已做 off / len 界检查
         let bytes = unsafe { std::slice::from_raw_parts((addr + off as i64) as *const u8, len.max(0) as usize) };

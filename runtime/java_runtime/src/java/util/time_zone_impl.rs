@@ -18,6 +18,7 @@ fn zoneinfo_suffix(path: &str) -> Option<std::string::String> {
 impl __TimeZoneHw for TimeZone {
     /// `getSystemTimeZoneID(String javaHome)`：平台时区 ID（取不到 → null）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSystemTimeZoneID(_java_home: String) -> Result<String> {
         if let Ok(tz) = std::env::var("TZ") {
             let tz = tz.trim_start_matches(':');
@@ -42,6 +43,7 @@ impl __TimeZoneHw for TimeZone {
     /// `getSystemGMTOffsetID()`：按本地 UTC 偏移构造 `GMT±hh:mm`（偏移为 0 → `GMT`）。
     /// 原生二进制不依赖 libc 的 localtime：偏移未知时取 0，与 TZ 未设置的容器环境一致。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSystemGMTOffsetID() -> Result<String> {
         Ok(String::from("GMT"))
     }

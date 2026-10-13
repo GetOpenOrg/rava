@@ -17,6 +17,7 @@ use super::__NativeImageBufferHw;
 impl __NativeImageBufferHw for NativeImageBuffer {
     /// native `getNativeMap(String)`：名为 `${java.home}/lib/modules` → 本程序 jimage 的直接缓冲区；否则 null
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getNativeMap(imagePath: String) -> Result<ByteBuffer> {
         if imagePath.is_jvm_null() {
             return Err(JvmError::null_pointer());

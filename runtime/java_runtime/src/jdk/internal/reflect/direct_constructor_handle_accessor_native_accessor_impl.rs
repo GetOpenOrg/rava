@@ -25,6 +25,7 @@ fn __wrap_target_exception(e: crate::error::JvmError) -> crate::error::JvmError 
 
 impl __DirectConstructorHandleAccessor_NativeAccessorHw for DirectConstructorHandleAccessor_NativeAccessor {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn newInstance0(c: Constructor<Object>, args: JArray<Object>) -> Result<Object> {
         let Some((cls, desc)) = c.__reflect_key() else {
             panic!("stub: NativeAccessor.newInstance0 无声明键（非表构造的 Constructor）");

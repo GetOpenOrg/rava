@@ -13,6 +13,7 @@ use super::__Proxy_ProxyBuilderHw;
 
 impl __Proxy_ProxyBuilderHw for Proxy_ProxyBuilder {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isProxyClass(c: Class) -> Result<bool> {
         Ok(format!("{}", c.__get_name()) == "java.lang.reflect.Proxy$Dyn")
     }

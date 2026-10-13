@@ -16,6 +16,7 @@ impl __SystemHw for System {
     /// System 在构建期引导映像中初始化（`[concrete.boot] init`），`System.props` 与 `VM.savedProps` 由构建期
     /// 执行的 initPhase1 写入映像，宿主相关键经 `SystemProps$Raw` 的启动重放取值（system_props_raw_impl.rs）
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn registerNatives() -> Result<()> {
         Ok(())
     }
@@ -26,6 +27,7 @@ impl __SystemHw for System {
     /// 全部校验通过才复制（目标不被部分写入），同一数组的重叠区间按 memmove 语义。
     /// 引用数组逐元素存储检查失败时，失败元素之前的已复制（HotSpot checkcast 复制同）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn arraycopy(src: Object, src_pos: i32, dest: Object, dest_pos: i32, length: i32) -> Result<()> {
         if src.0.is_jvm_null() || dest.0.is_jvm_null() {
             return Err(JvmError::null_pointer());
@@ -117,6 +119,7 @@ impl __SystemHw for System {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn currentTimeMillis() -> Result<i64> {
         // 挂钟（epoch 毫秒）
         Ok(std::time::SystemTime::now()
@@ -126,6 +129,7 @@ impl __SystemHw for System {
     /// native `nanoTime()`：单调时钟（起点任意，JVM 同语义）。以进程首次调用为基准、
     /// 叠加 epoch 纳秒起点，数值量级与 JVM 相近且严格单调不减。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn nanoTime() -> Result<i64> {
         static ORIGIN: std::sync::OnceLock<(std::time::Instant, i64)> = std::sync::OnceLock::new();
         let (base, epoch) = *ORIGIN.get_or_init(|| (
@@ -142,6 +146,7 @@ impl __SystemHw for System {
     /// 后截断到 32 位——与 JVM 的 32 位身份哈希同宽度（碰撞行为等价级）。
     /// null 载体 → 0（JDK 语义）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn identityHashCode(x: Object) -> Result<i32> {
         if x.0.is_jvm_null() {
             return Ok(0);
@@ -152,6 +157,7 @@ impl __SystemHw for System {
     /// static lineSeparator：JDK 在 initPhase1 中由 line.separator 属性赋值（不经 `<clinit>`）；
     /// 原生二进制直接给出宿主平台的行分隔符。签名与宏生成的 static 访问器一致（`Result<T>`）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn lineSeparator_field() -> Result<String> {
         Ok(if cfg!(windows) { String::from("\r\n") } else { String::from("\n") })
     }
@@ -161,17 +167,20 @@ impl __SystemHw for System {
     /// 对象图与 JDK 一致：PrintStream(BufferedOutputStream(FileOutputStream(fd), 128), autoFlush)，
     /// 三个类全部是字节码翻译版本；本函数只负责「native 写入静态字段」这一步。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn out() -> Result<PrintStream> {
         Ok(std_stream(&STDOUT, 1))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn err() -> Result<PrintStream> {
         Ok(std_stream(&STDERR, 2))
     }
 
     /// native `setOut0(PrintStream)`：System.setOut 的写入步（字段 final，JDK 经 native 改写）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setOut0(out: PrintStream) -> Result<()> {
         STDOUT.set(Some(out));
         Ok(())
@@ -179,6 +188,7 @@ impl __SystemHw for System {
 
     /// native `setErr0(PrintStream)`：System.setErr 的写入步。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setErr0(err: PrintStream) -> Result<()> {
         STDERR.set(Some(err));
         Ok(())
@@ -189,6 +199,7 @@ impl __SystemHw for System {
     /// `BufferedInputStream(FileInputStream(FileDescriptor.in))`，两个流类都是字节码翻译版本；
     /// 本函数只负责「native 写入静态字段」这一步（首次读取时建立，setIn0 改写）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn in_() -> Result<InputStream> {
         if let Some(s) = STDIN.with(|s| s.borrow().as_ref().map(Clone::clone)) {
             return Ok(s);
@@ -201,6 +212,7 @@ impl __SystemHw for System {
 
     /// native `setIn0(InputStream)`：System.setIn 的写入步（字段 final，JDK 经 native 改写）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setIn0(input: InputStream) -> Result<()> {
         STDIN.set(Some(input));
         Ok(())
@@ -209,6 +221,7 @@ impl __SystemHw for System {
     /// native `mapLibraryName(String)`：平台本地库文件名（Linux `lib<name>.so`，
     /// macOS `lib<name>.dylib`）；null → NPE（JDK 同）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn mapLibraryName(libname: String) -> Result<String> {
         if libname.is_jvm_null() {
             return Err(JvmError::null_pointer());

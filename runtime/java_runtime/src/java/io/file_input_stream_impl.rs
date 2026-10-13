@@ -43,6 +43,7 @@ fn io_err(e: std::io::Error) -> JvmError {
 impl __FileInputStreamHw for FileInputStream {
     /// native initIDs：HotSpot 缓存 JNI 字段 ID；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
@@ -51,6 +52,7 @@ impl __FileInputStreamHw for FileInputStream {
     /// 资源重定向决策点：嵌入 JDK 数据文件命中 → 虚拟 fd；否则宿主文件。
     /// 失败按 JDK 语义抛 FileNotFoundException（消息 `path (errno 文案)`）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn open0(&self, name: String) -> Result<()> {
         let path = format!("{}", name);
         match jdk_resources::open_embedded(&path) {
@@ -77,6 +79,7 @@ impl __FileInputStreamHw for FileInputStream {
 
     /// native read0()：读单字节，0-255；EOF 返回 -1。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn read0(&self) -> Result<i32> {
         let fd = self.__get_fd().__get_fd();
         if fd <= -2 {
@@ -94,6 +97,7 @@ impl __FileInputStreamHw for FileInputStream {
     /// native readBytes(byte[], off, len)：批量读，返回实读数；EOF 返回 -1；
     /// len == 0 返回 0。越界按 io_util.c 抛 ArrayIndexOutOfBoundsException。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn readBytes(&self, b: JArray<i8>, off: i32, len: i32) -> Result<i32> {
         let fd = self.__get_fd().__get_fd();
         let blen = b.len()?;
@@ -125,6 +129,7 @@ impl __FileInputStreamHw for FileInputStream {
 
     /// native skip0(long)：前跳至多 n 字节（夹取到 EOF），返回实跳数。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn skip0(&self, n: i64) -> Result<i64> {
         if n <= 0 {
             return Ok(0);
@@ -148,6 +153,7 @@ impl __FileInputStreamHw for FileInputStream {
     /// native available0()：不经阻塞可读字节数（JDK io_util_md.c handleAvailable）：字符设备 / FIFO /
     /// socket 取 `ioctl(FIONREAD)`（进程管道、标准输入），其余（常规文件）= 长度 − 当前偏移。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn available0(&self) -> Result<i32> {
         let fd = self.__get_fd().__get_fd();
         if fd <= -2 {
@@ -174,6 +180,7 @@ impl __FileInputStreamHw for FileInputStream {
 
     /// native length0()：文件总长（transferTo 快路径探测）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn length0(&self) -> Result<i64> {
         let fd = self.__get_fd().__get_fd();
         if fd <= -2 {
@@ -187,6 +194,7 @@ impl __FileInputStreamHw for FileInputStream {
 
     /// native position0()：当前文件偏移。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn position0(&self) -> Result<i64> {
         let fd = self.__get_fd().__get_fd();
         if fd <= -2 {

@@ -161,6 +161,7 @@ fn _field_cas(c: _Carrier, holder: &Object, off: i64, expected: &Object, new: &O
 
 impl __VarHandleHw for VarHandle {
     /// native `get(Object...)`：plain 读（单线程下与 volatile 同一存储单元）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn get(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_get(self, &args);
@@ -170,6 +171,7 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `set(Object...)`：plain 写。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn set(&self, args: JArray<Object>) -> Result<()> {
         if _is_array_flavor(self) {
             return _array_set(self, &args);
@@ -179,6 +181,7 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `getVolatile(Object...)`：volatile 读。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getVolatile(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_get(self, &args);
@@ -188,6 +191,7 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `setVolatile(Object...)`：volatile 写。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setVolatile(&self, args: JArray<Object>) -> Result<()> {
         if _is_array_flavor(self) {
             return _array_set(self, &args);
@@ -197,27 +201,32 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `getAcquire(Object...)`：acquire 读（单线程档位与 plain 同单元）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getVolatile(args)
     }
 
     /// native `setRelease(Object...)`：release 写。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setRelease(&self, args: JArray<Object>) -> Result<()> {
         self.setVolatile(args)
     }
 
     /// native `getOpaque(Object...)`：opaque 读。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getOpaque(&self, args: JArray<Object>) -> Result<Object> {
         self.getVolatile(args)
     }
 
     /// native `setOpaque(Object...)`：opaque 写。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setOpaque(&self, args: JArray<Object>) -> Result<()> {
         self.setVolatile(args)
     }
 
     /// native `compareAndSet(Object...)`：CAS（args = [holder, expected, new]），读-比-写在
     /// 存储单元内原子完成。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn compareAndSet(&self, args: JArray<Object>) -> Result<bool> {
         if _is_array_flavor(self) {
             return _array_cas(self, &args);
@@ -227,26 +236,31 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `weakCompareAndSet(Object...)`：weak CAS（无竞争下与非 weak 同义）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn weakCompareAndSet(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `weakCompareAndSetPlain(Object...)`：weak plain CAS。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn weakCompareAndSetPlain(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `weakCompareAndSetAcquire(Object...)`：weak acquire CAS。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn weakCompareAndSetAcquire(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `weakCompareAndSetRelease(Object...)`：weak release CAS。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn weakCompareAndSetRelease(&self, args: JArray<Object>) -> Result<bool> {
         self.compareAndSet(args)
     }
 
     /// native `compareAndExchange(Object...)`：交换并返回旧值（见证）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn compareAndExchange(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_exchange(self, &args, true);
@@ -256,16 +270,19 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `compareAndExchangeAcquire(Object...)`：acquire 交换。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn compareAndExchangeAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.compareAndExchange(args)
     }
 
     /// native `compareAndExchangeRelease(Object...)`：release 交换。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn compareAndExchangeRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.compareAndExchange(args)
     }
 
     /// native `getAndSet(Object...)`：原子交换（旧值返回）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndSet(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_exchange(self, &args, false);
@@ -275,11 +292,13 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `getAndSetAcquire(Object...)`：acquire 交换。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndSetAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndSet(args)
     }
 
     /// native `getAndSetRelease(Object...)`：release 交换。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndSetRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndSet(args)
     }
@@ -288,6 +307,7 @@ impl __VarHandleHw for VarHandle {
     /// 返回旧值。数组元素在存储写锁内一次读-改-写；字段经读-CAS 循环（无竞争下一轮完成，
     /// 有竞争时重读重试——与 Unsafe.getAndAddInt 的字节码语义同）。引用 / 布尔族
     /// 无此操作（UnsupportedOperationException）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndAdd(&self, args: JArray<Object>) -> Result<Object> {
         let c = _carrier(self);
         if matches!(c, _Carrier::Ref | _Carrier::Bool) {
@@ -308,59 +328,70 @@ impl __VarHandleHw for VarHandle {
     }
 
     /// native `getAndAddAcquire(Object...)`：acquire 档位（单元内同 getAndAdd）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndAddAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndAdd(args)
     }
 
     /// native `getAndAddRelease(Object...)`：release 档位。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndAddRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndAdd(args)
     }
 
     /// native `getAndBitwiseOr(Object...)`：原子按位或，返回旧值（布尔 / 整数族；
     /// 引用 / 浮点族 UnsupportedOperationException）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseOr(&self, args: JArray<Object>) -> Result<Object> {
         _get_and_bitwise(self, &args, _BitOp::Or)
     }
 
     /// native `getAndBitwiseOrAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseOr）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseOrAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseOr(args)
     }
 
     /// native `getAndBitwiseOrRelease(Object...)`：release 档位。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseOrRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseOr(args)
     }
 
     /// native `getAndBitwiseAnd(Object...)`：原子按位与，返回旧值（布尔 / 整数族；
     /// 引用 / 浮点族 UnsupportedOperationException）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseAnd(&self, args: JArray<Object>) -> Result<Object> {
         _get_and_bitwise(self, &args, _BitOp::And)
     }
 
     /// native `getAndBitwiseAndAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseAnd）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseAndAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseAnd(args)
     }
 
     /// native `getAndBitwiseAndRelease(Object...)`：release 档位。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseAndRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseAnd(args)
     }
 
     /// native `getAndBitwiseXor(Object...)`：原子按位异或，返回旧值（布尔 / 整数族；
     /// 引用 / 浮点族 UnsupportedOperationException）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseXor(&self, args: JArray<Object>) -> Result<Object> {
         _get_and_bitwise(self, &args, _BitOp::Xor)
     }
 
     /// native `getAndBitwiseXorAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseXor）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseXorAcquire(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseXor(args)
     }
 
     /// native `getAndBitwiseXorRelease(Object...)`：release 档位。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAndBitwiseXorRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndBitwiseXor(args)
     }

@@ -14,6 +14,7 @@ impl __CDSHw for CDS {
     /// 调用方（如 Integer$IntegerCache）随后检查归档字段仍为 null，
     /// 走常规初始化路径，与无归档启动的 JVM 行为一致。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initializeFromArchive(_arg0: Class) -> Result<()> {
         Ok(())
     }
@@ -24,6 +25,7 @@ impl __CDSHw for CDS {
     /// seed==0 时回落 System.nanoTime()——与无归档 JVM 的常规路径逐字一致，
     /// 该值不进入任何可观测输出（compact strings / SALT 散列种子均为内部状态）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getRandomSeedForDumping() -> Result<i64> {
         Ok(0)
     }
@@ -32,6 +34,7 @@ impl __CDSHw for CDS {
     /// 专用）；原生二进制无 CDS 归档——no-op。
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn logLambdaFormInvoker(_line: String) -> Result<()> {
         Ok(())
     }
@@ -39,6 +42,7 @@ impl __CDSHw for CDS {
     /// 同上（JDK 25 起与 4 参 Java 重载并存，Rust 名带重载后缀）
     #[cfg(jdk_ge_25)]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn logLambdaFormInvoker_str(_line: String) -> Result<()> {
         Ok(())
     }
@@ -47,24 +51,28 @@ impl __CDSHw for CDS {
     /// 原生二进制无归档 → false
     #[cfg(jdk_ge_25)]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn needsClassInitBarrier0(_cls: Class) -> Result<bool> {
         Ok(false)
     }
 
     /// native `isDumpingClassList0()`：-XX:DumpLoadedClassList 模式；原生二进制无 CDS → false。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isDumpingClassList0() -> Result<bool> {
         Ok(false)
     }
 
     /// native `isDumpingArchive0()`：-Xshare:dump / 动态归档转储期；原生二进制无 CDS → false。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isDumpingArchive0() -> Result<bool> {
         Ok(false)
     }
 
     /// native `isSharingEnabled0()`：是否映射了 CDS 归档；原生二进制无归档 → false。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isSharingEnabled0() -> Result<bool> {
         Ok(false)
     }

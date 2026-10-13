@@ -11,12 +11,14 @@ use super::__EmbeddedClassPathHw;
 impl __EmbeddedClassPathHw for EmbeddedClassPath {
     /// native `count(String)`：名为 name 的嵌入资源份数。name 为 null → NPE。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn count(name: String) -> Result<i32> {
         Ok(same_name(&name)?.len() as i32)
     }
 
     /// native `bytes(String, int)`：名为 name 的第 index 份资源的字节；越界 → null。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn bytes(name: String, index: i32) -> Result<JArray<i8>> {
         let rows = same_name(&name)?;
         let Some((_, bytes)) = usize::try_from(index).ok().and_then(|i| rows.get(i)) else {

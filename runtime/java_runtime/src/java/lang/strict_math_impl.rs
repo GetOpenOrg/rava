@@ -11,6 +11,7 @@ impl __StrictMathHw for StrictMath {
     /// `sqrt(double)`：IEEE 754 squareRoot（正确舍入）。`f64::sqrt` 同为正确舍入，
     /// NaN / ±0 / +∞ / 负数的特殊值与规范一致。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn sqrt(a: f64) -> Result<f64> {
         Ok(a.sqrt())
     }

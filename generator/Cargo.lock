@@ -72,6 +72,7 @@ dependencies = [
  "hashbrown",
  "indexmap",
  "proc-macro2",
+ "quote",
  "resolve",
  "serde_json",
  "syn 2.0.119",

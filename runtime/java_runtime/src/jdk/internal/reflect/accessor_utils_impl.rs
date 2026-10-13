@@ -12,6 +12,7 @@ use super::__AccessorUtilsHw;
 
 impl __AccessorUtilsHw for AccessorUtils {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isIllegalArgument(_accessor_type: Class, e: RuntimeException) -> Result<bool> {
         Ok(!crate::reflect_dispatch::thrown_by_target(&Object::from(e)))
     }

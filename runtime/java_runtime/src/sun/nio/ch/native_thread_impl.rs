@@ -35,6 +35,7 @@ fn io_exception(default: &str) -> JvmError {
 impl __NativeThreadHw for NativeThread {
     /// native `init()`：为中断信号安装空处理器（sa_flags = 0：被打断的系统调用返回 EINTR）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn init() -> Result<()> {
         // SAFETY: sigaction 结构按零初始化后填写处理器与空掩码
         let rc = unsafe {
@@ -52,6 +53,7 @@ impl __NativeThreadHw for NativeThread {
 
     /// native `current0()`：`pthread_self()`。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn current0() -> Result<i64> {
         // SAFETY: pthread_self 恒有效
         Ok(unsafe { libc::pthread_self() } as usize as i64)
@@ -59,6 +61,7 @@ impl __NativeThreadHw for NativeThread {
 
     /// native `signal0(long)`：向目标线程发中断信号；目标已结束（ESRCH）不报错（macOS JNI 同款）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn signal0(thread: i64) -> Result<()> {
         // SAFETY: thread 为 current0 返回的 pthread_t
         let ret = unsafe { libc::pthread_kill(thread as usize as libc::pthread_t, interrupt_signal()) };
@@ -71,6 +74,7 @@ impl __NativeThreadHw for NativeThread {
     /// native `supportPendingSignals0()`：Linux 上发给未处于阻塞调用中的线程的信号会挂起到其进入
     /// 阻塞调用时投递（libnio 同款：仅 Linux / AIX 为 true）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn supportPendingSignals0() -> Result<bool> {
         Ok(cfg!(target_os = "linux"))
     }

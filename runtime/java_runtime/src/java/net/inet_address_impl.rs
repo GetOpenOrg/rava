@@ -12,18 +12,21 @@ use super::__InetAddressHw;
 impl __InetAddressHw for InetAddress {
     /// native `init()`：缓存 JNI 类与字段 ID——无需。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn init() -> Result<()> {
         Ok(())
     }
 
     /// native `isIPv4Available()`：能创建 AF_INET 套接字。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isIPv4Available() -> Result<bool> {
         Ok(crate::net_posix::ipv4_supported())
     }
 
     /// native `isIPv6Supported()`：协议栈支持 IPv6（不看 preferIPv4Stack，Java 侧自行处理）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isIPv6Supported() -> Result<bool> {
         Ok(crate::net_posix::ipv6_supported())
     }

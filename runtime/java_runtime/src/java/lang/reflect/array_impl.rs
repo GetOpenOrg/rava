@@ -241,6 +241,7 @@ impl __ArrayHw for Array {
     /// 零初值）；`void` → IllegalArgumentException（JDK 同）。null componentType
     /// → NPE、负长度 → NegativeArraySizeException（与 VM 行为一致）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn newArray(componentType: Class, length: i32) -> Result<Object> {
         if Object::from(Clone::clone(&componentType)).0.is_jvm_null() {
             return Err(JvmError::null_pointer());
@@ -271,6 +272,7 @@ impl __ArrayHw for Array {
     /// 经 vtable 钩子 `__array_len`，与元素类型无关）。null → NPE；非数组 →
     /// IllegalArgumentException("Argument is not an array")（HotSpot Reflection::array_get_length 同）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getLength(array: Object) -> Result<i32> {
         if array.0.is_jvm_null() {
             return Err(JvmError::null_pointer());
@@ -286,6 +288,7 @@ impl __ArrayHw for Array {
     /// 最内一维按 newArray 建元素数组（基本类型载体或带组件标签的引用数组）。
     /// 维度为空 / 超过 255 → IllegalArgumentException，任一维为负 → NegativeArraySizeException。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn multiNewArray(componentType: Class, dimensions: JArray<i32>) -> Result<Object> {
         if Object::from(Clone::clone(&componentType)).0.is_jvm_null() || dimensions.is_jvm_null() {
             return Err(JvmError::null_pointer());
@@ -331,6 +334,7 @@ impl __ArrayHw for Array {
     /// native `Array.get(Object, int)`（JDK Reflection::array_get）：引用元素原样返回，基本元素装箱。
     /// null 数组 → NPE；非数组 → IllegalArgumentException；越界 → ArrayIndexOutOfBoundsException。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn get(array: Object, index: i32) -> Result<Object> {
         match elems_of(&array)? {
             Elems::Prim(k) => prim_get(&array, k, index)?.boxed(),
@@ -342,6 +346,7 @@ impl __ArrayHw for Array {
     /// 检查值（null 恒可存；不可赋值 → IllegalArgumentException("array element type mismatch")）；
     /// 基本元素数组先拆箱（null / 非包装类 → IllegalArgumentException）再按 JLS §5.1.2 拓宽写入。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn set(array: Object, index: i32, value: Object) -> Result<()> {
         match elems_of(&array)? {
             Elems::Prim(k) => {
@@ -366,81 +371,97 @@ impl __ArrayHw for Array {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getBoolean(array: Object, index: i32) -> Result<bool> {
         match get_as(&array, index, b'Z')? { Prim::Z(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getByte(array: Object, index: i32) -> Result<i8> {
         match get_as(&array, index, b'B')? { Prim::B(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getChar(array: Object, index: i32) -> Result<u16> {
         match get_as(&array, index, b'C')? { Prim::C(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getShort(array: Object, index: i32) -> Result<i16> {
         match get_as(&array, index, b'S')? { Prim::S(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getInt(array: Object, index: i32) -> Result<i32> {
         match get_as(&array, index, b'I')? { Prim::I(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getLong(array: Object, index: i32) -> Result<i64> {
         match get_as(&array, index, b'J')? { Prim::J(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getFloat(array: Object, index: i32) -> Result<f32> {
         match get_as(&array, index, b'F')? { Prim::F(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getDouble(array: Object, index: i32) -> Result<f64> {
         match get_as(&array, index, b'D')? { Prim::D(v) => Ok(v), _ => Err(type_mismatch()) }
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setBoolean(array: Object, index: i32, z: bool) -> Result<()> {
         set_as(&array, index, Prim::Z(z))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setByte(array: Object, index: i32, b: i8) -> Result<()> {
         set_as(&array, index, Prim::B(b))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setChar(array: Object, index: i32, c: u16) -> Result<()> {
         set_as(&array, index, Prim::C(c))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setShort(array: Object, index: i32, s: i16) -> Result<()> {
         set_as(&array, index, Prim::S(s))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setInt(array: Object, index: i32, i: i32) -> Result<()> {
         set_as(&array, index, Prim::I(i))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setLong(array: Object, index: i32, l: i64) -> Result<()> {
         set_as(&array, index, Prim::J(l))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setFloat(array: Object, index: i32, f: f32) -> Result<()> {
         set_as(&array, index, Prim::F(f))
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setDouble(array: Object, index: i32, d: f64) -> Result<()> {
         set_as(&array, index, Prim::D(d))
     }

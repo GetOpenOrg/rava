@@ -52,12 +52,14 @@ fn dont_frag_level(is_ipv6: bool) -> (i32, i32) {
 
 impl __MacOSXSocketOptionsHw for MacOSXSocketOptions {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn keepAliveOptionsSupported0() -> Result<bool> {
         Ok(tcp_option_supported(libc::TCP_KEEPALIVE) && tcp_option_supported(libc::TCP_KEEPINTVL) && tcp_option_supported(libc::TCP_KEEPCNT))
     }
 
     /// native `ipDontFragmentSupported0()`：IPv4 与 IPv6 数据报套接字上均可设 DONTFRAG。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn ipDontFragmentSupported0() -> Result<bool> {
         let v4 = net_posix::probe_option(libc::AF_INET, libc::SOCK_DGRAM, libc::IPPROTO_IP, libc::IP_DONTFRAG, Some(1));
         let v6 = || net_posix::probe_option(libc::AF_INET6, libc::SOCK_DGRAM, libc::IPPROTO_IPV6, IPV6_DONTFRAG, Some(1));
@@ -65,36 +67,43 @@ impl __MacOSXSocketOptionsHw for MacOSXSocketOptions {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setTcpKeepAliveProbes0(fd: i32, value: i32) -> Result<()> {
         set_tcp(fd, libc::TCP_KEEPCNT, value, "set option TCP_KEEPCNT failed")
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setTcpKeepAliveTime0(fd: i32, value: i32) -> Result<()> {
         set_tcp(fd, libc::TCP_KEEPALIVE, value, "set option TCP_KEEPALIVE failed")
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setTcpKeepAliveIntvl0(fd: i32, value: i32) -> Result<()> {
         set_tcp(fd, libc::TCP_KEEPINTVL, value, "set option TCP_KEEPINTVL failed")
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getTcpKeepAliveProbes0(fd: i32) -> Result<i32> {
         get_tcp(fd, libc::TCP_KEEPCNT, "get option TCP_KEEPCNT failed")
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getTcpKeepAliveTime0(fd: i32) -> Result<i32> {
         get_tcp(fd, libc::TCP_KEEPALIVE, "get option TCP_KEEPALIVE failed")
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getTcpKeepAliveIntvl0(fd: i32) -> Result<i32> {
         get_tcp(fd, libc::TCP_KEEPINTVL, "get option TCP_KEEPINTVL failed")
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setIpDontFragment0(fd: i32, value: bool, is_ipv6: bool) -> Result<()> {
         let (level, opt) = dont_frag_level(is_ipv6);
         if net_posix::set_int(fd, level, opt, value as i32) < 0 {
@@ -104,6 +113,7 @@ impl __MacOSXSocketOptionsHw for MacOSXSocketOptions {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getIpDontFragment0(fd: i32, is_ipv6: bool) -> Result<bool> {
         let (level, opt) = dont_frag_level(is_ipv6);
         let v = net_posix::get_int(fd, level, opt).map_err(|_| option_error("get option IP_DONTFRAGMENT failed"))?;
@@ -112,6 +122,7 @@ impl __MacOSXSocketOptionsHw for MacOSXSocketOptions {
 
     /// native `getSoPeerCred0(int fd)`：getpeereid，`(uid << 32) | gid`；失败抛异常。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSoPeerCred0(fd: i32) -> Result<i64> {
         let mut uid: libc::uid_t = 0;
         let mut gid: libc::gid_t = 0;

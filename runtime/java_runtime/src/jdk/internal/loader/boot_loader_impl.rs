@@ -11,6 +11,7 @@ impl __BootLoaderHw for BootLoader {
     /// .getPackages 的 boot 部分）。单二进制无模块层包登记——空数组（BootLoader.packages()
     /// 的其余部分由 Java 侧按已加载类补齐）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSystemPackageNames() -> Result<JArray<String>> {
         Ok(JArray::new(0))
     }
@@ -19,6 +20,7 @@ impl __BootLoaderHw for BootLoader {
     /// 模块的 location（引导层模块为 `jrt:/<模块名>`，`PackageHelper.definePackage` 据此按模块定义
     /// Package）。引导层模块登记于 VM 模块表（映像初值）；未登记的包 → null。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSystemPackageLocation(name: String) -> Result<String> {
         if name.is_jvm_null() {
             return Ok(Default::default());
@@ -35,6 +37,7 @@ impl __BootLoaderHw for BootLoader {
     /// （`hasClassPath` 恒 false），没有类归属该模块——无需登记，no-op。模块对象本身仍由字节码建立，
     /// `BootLoader.getUnnamedModule()` 照常返回它。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setBootLoaderUnnamedModule0(_module: crate::java::lang::Module) -> Result<()> {
         Ok(())
     }

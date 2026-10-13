@@ -14,6 +14,7 @@ impl __BuiltinClassLoaderHw for BuiltinClassLoader {
     /// `findClassOnClassPathOrNull(String)`：类全集构建期静态链接（闭包内的类已由 `findLoadedClass0` 命中），
     /// 类路径上无可定义的字节码 → null。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn findClassOnClassPathOrNull(&self, cn: String) -> Result<crate::java::lang::Class> {
         let _ = cn;
         Ok(Default::default())
@@ -21,6 +22,7 @@ impl __BuiltinClassLoaderHw for BuiltinClassLoader {
 
     /// `findResourceOnClassPath(String)`：带类路径的加载器 → 嵌入表首个同名资源的 URL；否则 null。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn findResourceOnClassPath(&self, name: String) -> Result<crate::java::net::URL> {
         if self.__get_ucp().is_jvm_null() {
             return Ok(Default::default());
@@ -30,6 +32,7 @@ impl __BuiltinClassLoaderHw for BuiltinClassLoader {
 
     /// `findResourcesOnClassPath(String)`：带类路径的加载器 → 嵌入表同名资源的 URL 枚举（类路径序）；否则空枚举。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn findResourcesOnClassPath(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
         if self.__get_ucp().is_jvm_null() {
             return crate::java::util::Collections::emptyEnumeration();

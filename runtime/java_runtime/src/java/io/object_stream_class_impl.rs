@@ -10,6 +10,7 @@ use super::__ObjectStreamClassHw;
 impl __ObjectStreamClassHw for ObjectStreamClass {
     /// `private static native void initNative()`：JDK 的原生占位（ObjectStreamClass.c
     /// 中为空实现，仅触发库加载）——无操作即 JVM 等价。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initNative() -> Result<()> {
         Ok(())
     }
@@ -20,6 +21,7 @@ impl __ObjectStreamClassHw for ObjectStreamClass {
     /// HotSpot 以 JNI `GetStaticMethodID` 查找，查找前初始化该类（及超类）：同样先按名初始化再答复
     /// （闭包按 `[facts.reflect] class_initializers` 登记的同一入口把目标类导出为初始化钩子）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn hasStaticInitializer(cl: crate::java::lang::Class) -> Result<bool> {
         let name = format!("{}", cl.__get_name());
         crate::ensure_class_initialized(&name)?;

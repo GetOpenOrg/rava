@@ -16,27 +16,32 @@ fn io_exception(default: &str) -> JvmError {
 
 impl __KQueueHw for KQueue {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn keventSize() -> Result<i32> {
         Ok(std::mem::size_of::<libc::kevent>() as i32)
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn identOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::kevent, ident) as i32)
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn filterOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::kevent, filter) as i32)
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn flagsOffset() -> Result<i32> {
         Ok(std::mem::offset_of!(libc::kevent, flags) as i32)
     }
 
     /// native `create()`：kqueue(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn create() -> Result<i32> {
         // SAFETY: kqueue 无参数
         let kq = unsafe { libc::kqueue() };
@@ -48,6 +53,7 @@ impl __KQueueHw for KQueue {
 
     /// native `register(int kqfd, int fd, int filter, int flags)`：提交单个变更，返回 errno 或 0。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn register(kqfd: i32, fd: i32, filter: i32, flags: i32) -> Result<i32> {
         let change = libc::kevent {
             ident: fd as libc::uintptr_t,
@@ -65,6 +71,7 @@ impl __KQueueHw for KQueue {
     /// native `poll(int kqfd, long pollAddress, int nevents, long timeout)`：timeout < 0 无限等待；
     /// 被信号打断返回 INTERRUPTED。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn poll(kqfd: i32, address: i64, nevents: i32, timeout: i64) -> Result<i32> {
         let ts = libc::timespec { tv_sec: (timeout / 1000) as libc::time_t, tv_nsec: ((timeout % 1000) * 1_000_000) as libc::c_long };
         let tsp: *const libc::timespec = if timeout >= 0 { &ts } else { std::ptr::null() };

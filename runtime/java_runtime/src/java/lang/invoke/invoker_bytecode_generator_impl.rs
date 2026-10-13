@@ -23,12 +23,14 @@ use super::__InvokerBytecodeGeneratorHw;
 impl __InvokerBytecodeGeneratorHw for InvokerBytecodeGenerator {
     /// `generateCustomizedCode(LambdaForm, MethodType)`：不生成字节码 → 解释入口 vmentry。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn generateCustomizedCode(_form: LambdaForm, invokerType: MethodType) -> Result<MemberName> {
         interpreter_entry(invokerType)
     }
 
     /// `generateLambdaFormInterpreterEntryPoint(MethodType)`：解释入口由原生解释器承载。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn generateLambdaFormInterpreterEntryPoint(mt: MethodType) -> Result<MemberName> {
         interpreter_entry(mt)
     }

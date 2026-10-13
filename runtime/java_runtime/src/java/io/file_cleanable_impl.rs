@@ -13,6 +13,7 @@ impl __FileCleanableHw for FileCleanable {
     /// FileDescriptor.close0 同一资源协议；本运行时无清理线程，此入口
     /// 仅供伴生语义完整。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn cleanupClose0(fd: i32, _handle: i64) -> Result<()> {
         if fd <= -2 {
             jdk_resources::virtual_close(fd);

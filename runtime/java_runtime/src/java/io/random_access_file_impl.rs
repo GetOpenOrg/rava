@@ -42,6 +42,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native initIDs：HotSpot 缓存 JNI 字段 ID；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
@@ -49,6 +50,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
     /// native open0(String, int)：只读或读写（不存在则创建）打开；O_SYNC / O_DSYNC 同步写。
     /// 失败抛 FileNotFoundException（消息 `path (strerror)`）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn open0(&self, name: String, mode: i32) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         let path = format!("{}", name);
@@ -75,6 +77,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native read0()：读单字节 0-255；EOF 返回 -1。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn read0(&self) -> Result<i32> {
         use std::io::Read;
         let mut f = borrow_file(self.__raw_fd()?);
@@ -89,6 +92,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
     /// native readBytes0(byte[], int, int)：越界抛 IndexOutOfBoundsException；len 为 0
     /// 返回 0；EOF 返回 -1；否则返回实读字节数（部分读语义）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn readBytes0(&self, b: JArray<i8>, off: i32, len: i32) -> Result<i32> {
         use std::io::Read;
         if off < 0 || len < 0 || off as i64 + len as i64 > b.len()? as i64 {
@@ -113,6 +117,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native write0(int)：写单字节（低 8 位）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn write0(&self, b: i32) -> Result<()> {
         use std::io::Write;
         let mut f = borrow_file(self.__raw_fd()?);
@@ -121,6 +126,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native writeBytes0(byte[], int, int)：越界抛 IndexOutOfBoundsException，全部写出。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn writeBytes0(&self, b: JArray<i8>, off: i32, len: i32) -> Result<()> {
         use std::io::Write;
         if off < 0 || len < 0 || off as i64 + len as i64 > b.len()? as i64 {
@@ -136,6 +142,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native getFilePointer()：当前偏移（lseek(fd, 0, SEEK_CUR)）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getFilePointer(&self) -> Result<i64> {
         use std::io::Seek;
         let mut f = borrow_file(self.__raw_fd()?);
@@ -144,6 +151,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native seek0(long)：定位到绝对偏移（负值已由 Java 侧 seek 拦截）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn seek0(&self, pos: i64) -> Result<()> {
         use std::io::{Seek, SeekFrom};
         let mut f = borrow_file(self.__raw_fd()?);
@@ -152,6 +160,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native length0()：文件长度（fstat）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn length0(&self) -> Result<i64> {
         let f = borrow_file(self.__raw_fd()?);
         f.metadata().map(|m| m.len() as i64).map_err(io_err)
@@ -159,6 +168,7 @@ impl __RandomAccessFileHw for RandomAccessFile {
 
     /// native setLength0(long)：ftruncate；原偏移超过新长度时移到新长度（JDK 同序）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setLength0(&self, new_length: i64) -> Result<()> {
         use std::io::{Seek, SeekFrom};
         let mut f = borrow_file(self.__raw_fd()?);

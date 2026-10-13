@@ -20,6 +20,7 @@ fn _internal_error(msg: &str) -> JvmError {
 impl __SecurityManagerHw for SecurityManager {
     /// native `getClassContext()`：调用栈上各帧的持有类（自调用者起）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getClassContext(&self) -> Result<JArray<Class>> {
         let frames = crate::vm_stack::capture_java_frames();
         // vframeStream 自 getClassContext 帧起（本 native 方法的手写帧；其上为数据面自身的 Rust 帧，不成 Java 帧）

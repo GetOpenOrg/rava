@@ -26,6 +26,7 @@ fn wrong(index: i32) -> JvmError {
 
 impl __ConstantPoolHw for ConstantPool {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getUTF8At0(&self, cp_oop: Object, index: i32) -> Result<String> {
         match entry(&cp_oop, index)? {
             CpVal::U(s) => Ok(String::from(*s)),
@@ -35,6 +36,7 @@ impl __ConstantPoolHw for ConstantPool {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getIntAt0(&self, cp_oop: Object, index: i32) -> Result<i32> {
         match entry(&cp_oop, index)? {
             CpVal::I(v) => Ok(*v),
@@ -43,6 +45,7 @@ impl __ConstantPoolHw for ConstantPool {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getLongAt0(&self, cp_oop: Object, index: i32) -> Result<i64> {
         match entry(&cp_oop, index)? {
             CpVal::J(v) => Ok(*v),
@@ -51,6 +54,7 @@ impl __ConstantPoolHw for ConstantPool {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getFloatAt0(&self, cp_oop: Object, index: i32) -> Result<f32> {
         match entry(&cp_oop, index)? {
             CpVal::F(v) => Ok(*v),
@@ -59,6 +63,7 @@ impl __ConstantPoolHw for ConstantPool {
     }
 
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getDoubleAt0(&self, cp_oop: Object, index: i32) -> Result<f64> {
         match entry(&cp_oop, index)? {
             CpVal::D(v) => Ok(*v),

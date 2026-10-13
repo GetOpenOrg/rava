@@ -83,6 +83,7 @@ fn virtual_buf<'a>(fdo: &FileDescriptor, address: i64, len: i32) -> Option<&'a m
 impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
     /// native `read0(FileDescriptor, long address, int len)`：read(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn read0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         if let Some(buf) = virtual_buf(&fdo, address, len) {
             let n = crate::jdk_resources::virtual_read(fd_of(&fdo), buf);
@@ -95,6 +96,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `pread0(FileDescriptor, long address, int len, long position)`：pread(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn pread0(fdo: FileDescriptor, address: i64, len: i32, position: i64) -> Result<i32> {
         if let Some(buf) = virtual_buf(&fdo, address, len) {
             let n = crate::jdk_resources::virtual_pread(fd_of(&fdo), buf, position);
@@ -107,6 +109,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `write0(FileDescriptor, long address, int len)`：write(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn write0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         // SAFETY: address 指向至少 len 字节的本地缓冲区
         let n = unsafe { libc::write(fd_of(&fdo), address as *const libc::c_void, len as usize) };
@@ -115,6 +118,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `pwrite0(FileDescriptor, long address, int len, long position)`：pwrite(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn pwrite0(fdo: FileDescriptor, address: i64, len: i32, position: i64) -> Result<i32> {
         // SAFETY: 同 write0
         let n = unsafe { libc::pwrite(fd_of(&fdo), address as *const libc::c_void, len as usize, position as libc::off_t) };
@@ -123,6 +127,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `seek0(FileDescriptor, long offset)`：offset < 0 取当前位置，否则定位到 offset。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn seek0(fdo: FileDescriptor, offset: i64) -> Result<i64> {
         let fd = fd_of(&fdo);
         if crate::jdk_resources::is_virtual(fd) {
@@ -145,6 +150,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `size0(FileDescriptor)`：fstat(2) 的 st_size。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn size0(fdo: FileDescriptor) -> Result<i64> {
         if let Some(st) = crate::jdk_resources::virtual_fstat(fd_of(&fdo)) {
             return Ok(st.st_size as i64);
@@ -159,6 +165,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `truncate0(FileDescriptor, long size)`：ftruncate(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn truncate0(fdo: FileDescriptor, size: i64) -> Result<i32> {
         // SAFETY: ftruncate 只作用于 fd
         let r = unsafe { libc::ftruncate(fd_of(&fdo), size as libc::off_t) };
@@ -167,6 +174,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `allocationGranularity0()`：页大小。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn allocationGranularity0() -> Result<i64> {
         // SAFETY: sysconf 无副作用
         Ok(unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as i64)
@@ -175,6 +183,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
     /// native `setDirect0(FileDescriptor)`：打开直接 I/O 并返回文件系统块大小。
     /// macOS：fcntl(F_NOCACHE)；Linux：追加 O_DIRECT。失败抛 IOException("DirectIO setup failed")。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setDirect0(fdo: FileDescriptor) -> Result<i32> {
         let fd = fd_of(&fdo);
         // SAFETY: fcntl / fstatvfs 只作用于 fd，vfs 为栈上结构
@@ -204,6 +213,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
     /// （JNI 为 InternalError「should never call …」，此处同文案报 IOException）。
     /// ENOMEM 抛 OutOfMemoryError("Map failed")，其余失败经 `handle`（"Map failed"）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn map0(fdo: FileDescriptor, prot: i32, position: i64, length: i64, is_sync: bool) -> Result<i64> {
         let (protections, flags) = match prot {
             MAP_RO => (libc::PROT_READ, libc::MAP_SHARED),
@@ -230,6 +240,7 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
 
     /// native `unmap0(long address, long length)`：munmap(2)，经 `handle`（"Unmap failed"）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn unmap0(address: i64, length: i64) -> Result<i32> {
         // SAFETY: address / length 为 map0 返回的映射（Unmapper 持有，只解除一次）
         let r = unsafe { libc::munmap(address as *mut libc::c_void, length as libc::size_t) };

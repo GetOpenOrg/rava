@@ -31,6 +31,7 @@ fn tty_encoding(is_tty: bool) -> String {
 impl __SystemProps_RawHw for SystemProps_Raw {
     /// native `platformProperties()`：平台属性原始表（下标为类文件常量 `_<名>_NDX`）
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn platformProperties() -> Result<JArray<String>> {
         use std::io::IsTerminal;
         let mut t: Vec<String> = (0..Self::FIXED_LENGTH()?).map(|_| String::default()).collect();
@@ -69,6 +70,7 @@ impl __SystemProps_RawHw for SystemProps_Raw {
 
     /// native `vmProperties()`：VM 属性（键值交替）。键序与构建期模型一致：宿主相关的两项在前
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn vmProperties() -> Result<JArray<String>> {
         let home = crate::jdk_resources::JAVA_RUNTIME_HOME;
         let feature = crate::jdk_feature().to_string();

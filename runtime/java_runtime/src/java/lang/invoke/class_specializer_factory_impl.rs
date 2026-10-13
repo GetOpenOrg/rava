@@ -21,6 +21,7 @@ impl<T, K, S> __ClassSpecializer_FactoryHw for ClassSpecializer_Factory<T, K, S>
 
     /// `generateConcreteSpeciesCode(String className, SpeciesData)`：登记动态物种，返回通用载体类。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __impl_generateConcreteSpeciesCode(
         &self,
         _className: String,

@@ -299,6 +299,7 @@ impl __MethodHandleHw for MethodHandle {
     /// native `invokeBasic(Object...)`：解释执行本句柄的 LambdaForm（无类型检查——
     /// 调用方保证基本类型形态一致，JDK 语义）。
     #[jvm_native(unpinned)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn invokeBasic(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
@@ -307,18 +308,21 @@ impl __MethodHandleHw for MethodHandle {
     /// 执行。用户调用点经 codegen 发 `invokeExact__site`（清单 vm_intrinsics.toml [sigpoly]）；
     /// 闭包分析把 `__site` 伴生体并入本成员（签名多态成员的调用点落地语义）。
     #[jvm_native(unpinned)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn invokeExact(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
 
     /// native `invoke(Object...)`：同上（用户调用点经 `invoke__site`）。
     #[jvm_native(unpinned)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn invoke(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
 
     /// 调用点带类型的 `invokeExact`：句柄类型必须与调用点 MethodType 完全相同
     ///（JVMS §5.4.3.4 / MethodHandle.invokeExact 规范），否则 WrongMethodTypeException。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn invokeExact__site(&self, site: &str, args: JArray<Object>) -> Result<Object> {
         let call_type = site_type(site)?;
         let own = self.type_()?;
@@ -331,6 +335,7 @@ impl __MethodHandleHw for MethodHandle {
 
     /// 调用点带类型的 `invoke`：类型不同 → `asType(调用点类型)` 的适配句柄（装拆箱 / 拓宽 /
     /// 变参收集等全部由 JDK asType 字节码构造）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn invoke__site(&self, site: &str, args: JArray<Object>) -> Result<Object> {
         let call_type = site_type(site)?;
         let own = self.type_()?;
@@ -342,21 +347,25 @@ impl __MethodHandleHw for MethodHandle {
     }
 
     #[jvm_native(unpinned)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn linkToStatic(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
     #[jvm_native(unpinned)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn linkToVirtual(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
     #[jvm_native(unpinned)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn linkToSpecial(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
     #[jvm_native(unpinned)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn linkToInterface(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }

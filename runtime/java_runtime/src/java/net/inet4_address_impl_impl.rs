@@ -29,6 +29,7 @@ pub(super) fn host_arg(host: &String) -> Result<std::string::String> {
 impl __Inet4AddressImplHw for Inet4AddressImpl {
     /// native `getLocalHostName()`：gethostname，失败为 "localhost"。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getLocalHostName(&self) -> Result<String> {
         Ok(String::from(net_posix::host_name()))
     }
@@ -36,6 +37,7 @@ impl __Inet4AddressImplHw for Inet4AddressImpl {
     /// native `lookupAllHostAddr(String)`：getaddrinfo(AF_INET)，结果的 hostName 为查询名；
     /// 失败抛 UnknownHostException（「host: gai_strerror」）。macOS 上本机名解析失败时取接口地址。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn lookupAllHostAddr_str(&self, host: String) -> Result<JArray<InetAddress>> {
         let name = host_arg(&host)?;
         let addrs = match net_posix::resolve(&name, libc::AF_INET) {
@@ -52,6 +54,7 @@ impl __Inet4AddressImplHw for Inet4AddressImpl {
 
     /// native `getHostByAddr(byte[])`：getnameinfo(NI_NAMEREQD)；无名字抛 UnknownHostException（消息为 null）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getHostByAddr(&self, addr: JArray<i8>) -> Result<String> {
         let bytes: Vec<u8> = addr.to_vec().into_iter().map(|b| b as u8).collect();
         net_posix::reverse(&bytes).map(String::from).ok_or_else(|| unknown_host(None))

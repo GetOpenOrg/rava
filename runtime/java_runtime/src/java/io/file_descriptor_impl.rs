@@ -8,18 +8,21 @@ use super::__FileDescriptorHw;
 impl __FileDescriptorHw for FileDescriptor {
     /// native initIDs：HotSpot 缓存 JNI 字段 ID；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
 
     /// native getHandle(int)：Unix 平台无 Windows HANDLE，恒为 -1。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getHandle(_fd: i32) -> Result<i64> {
         Ok(-1)
     }
 
     /// native getAppend(int)：标准流不以 O_APPEND 打开。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAppend(_fd: i32) -> Result<bool> {
         Ok(false)
     }
@@ -28,6 +31,7 @@ impl __FileDescriptorHw for FileDescriptor {
     /// 的资源协议）：负数虚拟句柄（≤ -2）注销嵌入资源光标；非负为 OS fd，
     /// 取回所有权并 drop（close(2)）。-1 为已关闭的无效值，幂等无操作。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn close0(&self) -> Result<()> {
         let fd = self.__get_fd();
         if fd <= -2 {
@@ -47,6 +51,7 @@ impl __FileDescriptorHw for FileDescriptor {
     /// native sync0()：强制落盘（fsync）。失败抛 `SyncFailedException("sync failed")`
     /// （FileDescriptor_md.c 同：无效 fd 的 fsync 同样失败，消息不带 errno 文本）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn sync0(&self) -> Result<()> {
         let fd = self.__get_fd();
         if fd <= -2 {

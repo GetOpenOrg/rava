@@ -19,6 +19,7 @@ use super::__ClassHw3;
 impl __ClassHw for Class {
     /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn registerNatives() -> Result<()> {
         Ok(())
     }
@@ -26,6 +27,7 @@ impl __ClassHw for Class {
     /// native getPrimitiveClass(String)：每个基本类型名对应唯一的 Class 对象
     /// （`Integer.TYPE == int.class` 的身份语义），首次请求时创建。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getPrimitiveClass(name: String) -> Result<Class> {
         crate::__process_static! {
             static PRIMITIVES: RefCell<HashMap<std::string::String, Class>> = RefCell::new(HashMap::new());
@@ -62,6 +64,7 @@ impl __ClassHw for Class {
     /// JVM 隐藏类命名），反向换回斜线即元数据表键。
     /// isAssignableFrom 的层次查询在运行时经 java_meta 生成的层次表进行，
     /// 此处不再携带/登记超类型数据。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn for_class(binary_name: &str) -> Class {
         crate::__process_static! {
             static CLASSES: RefCell<HashMap<std::string::String, Class>> =
@@ -109,6 +112,7 @@ impl __ClassHw for Class {
 
     /// 类镜像的身份哈希（`Object.hashCode` / `System.identityHashCode` 对类对象的落点）：
     /// `id` 为对象标识；非经 `for_class` / `getPrimitiveClass` 建立的类对象 → None（回落地址哈希）
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __mirror_hash(id: *const ()) -> Option<i32> {
         MIRROR_HASHES.with(|m| m.borrow().get(&(id as usize)).copied())
     }
@@ -117,6 +121,7 @@ impl __ClassHw for Class {
     /// `java_lang_Class::create_mirror` 建镜像时写入定义加载器；原生镜像在首次访问该字段前按定义加载器表
     /// （java_meta `CLASS_DEFINING_LOADER`，生成器按类所在模块求出）填充。数组类取元素类的加载器，基本类型、
     /// `void` 与引导加载器定义的类为 null。加载器对象取自 `ClassLoaders` 的字节码访问器（同一层级实例）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __vm_defining_loader(&self) -> Result<&Self> {
         if !Object::from(self.__get_classLoader()).0.is_jvm_null() {
             return Ok(self);
@@ -151,6 +156,7 @@ impl __ClassHw for Class {
     /// （`java_lang_Class::create_mirror`）按类的包条目写入所属模块。按「定义加载器 + 包」查 VM 模块表
     /// （映像中的引导层模块与运行期 defineModule0 登记的模块）；未登记的包归定义加载器的无名模块
     /// （引导加载器为 `BootLoader.getUnnamedModule()`）。数组类取元素类型的模块，基本类型与其数组属 java.base。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __vm_module(&self) -> Result<&Self> {
         if !Object::from(self.__get_module()).0.is_jvm_null() {
             return Ok(self);
@@ -179,6 +185,7 @@ impl __ClassHw for Class {
     /// 即数组（JLS：数组的运行时类是 JVM 创建的 Array 类型）。
     /// 消费方：MethodHandles 链的 checkSymbolicClass / findVarHandle 类型检查。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isArray(&self) -> Result<bool> {
         Ok(format!("{}", self.__get_name()).starts_with('['))
     }
@@ -189,6 +196,7 @@ impl __ClassHw for Class {
     /// isPrimitive()` 为 true），非基本类型（含数组）→ false。
     /// 消费方：VarHandles.makeFieldHandle 的字段类型分派链。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isPrimitive(&self) -> Result<bool> {
         let name = format!("{}", self.__get_name());
         Ok(matches!(name.as_str(),
@@ -198,6 +206,7 @@ impl __ClassHw for Class {
     /// 反射族内部：按字段名查本类声明元数据（描述符 / static 标志 / 修饰位 /
     /// ConstantValue 整数值）。getDeclaredField 与 Field.get/set（reflect 邻域
     /// 伴生 field_impl.rs）共用同一张 java_meta 字段表；未声明 → None。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __declared_field_meta(&self, name: &str) -> Option<(&'static str, bool, i32, Option<i64>)> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         crate::meta::class_fields().iter()
@@ -211,6 +220,7 @@ impl __ClassHw for Class {
     /// 名与描述符配对（JDK getDeclaredMethod 语义——参数类型还原成描述符后
     /// 比对）。消费方：MethodHandleNatives.resolve 的方法/构造器 kind
     /// （method_handle_natives_impl.rs，MemberName 解析内核）；未声明 → None。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __declared_method_meta(&self, name: &str, descriptor: &str) -> Option<(i32, bool, bool, bool)> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         crate::meta::row(crate::meta::class_methods(), &cls_key)
@@ -278,6 +288,7 @@ impl __ClassHw for Class {
     /// 反射族内部：描述符 → Class 对象（class_for_descriptor 的类型面）。
     /// MethodHandleNatives.resolve 的字段 kind 类型核对共用（描述符还原的
     /// Class 与 MemberName 携带的 Class 按名相等）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __class_for_descriptor(desc: &str) -> Class {
         class_for_descriptor(desc)
     }
@@ -287,6 +298,7 @@ impl __ClassHw for Class {
     /// 引用类型（含数组：元素引用类型协变、基本元素须相同、多维逐层、数组可赋给
     /// Object / Cloneable / Serializable）统一经 `__name_assignable` 判定（与 checkcast /
     /// 反射数组组件标签同一真源）。null 实参 → NPE（JDK 同）。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn isAssignableFrom(&self, cls: Class) -> Result<bool> {
         if Object::from(Clone::clone(&cls)).0.is_jvm_null() {
             return Err(JvmError::null_pointer());
@@ -307,6 +319,7 @@ impl __ClassHw for Class {
     /// 同名；数组对数组按组件递归（基本组件须相同）；数组可赋给 Object / Cloneable /
     /// Serializable；类经层次表（java_meta 生成的超类型闭包）。数组运行时类判定
     /// （反射创建数组的组件标签，FS-R6）与 `isAssignableFrom` 同一真源。
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __name_assignable(target: &str, source: &str) -> bool {
         if target == source || target == "java/lang/Object" {
             return true;
@@ -361,6 +374,7 @@ impl __ClassHw for Class {
     /// （与 isAssignableFrom 的层次表同源）。数组类 → Object（JLS §10.8）；
     /// Object 自身 / 接口 / 基本类型 / 未登记类（闭包外）→ null。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSuperclass(&self) -> Result<Class> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         if name.starts_with('[') {
@@ -383,6 +397,7 @@ impl __ClassHw for Class {
     /// 表；未登记形态按 JVM 语义：数组/基本类型类恒 PUBLIC|FINAL|ABSTRACT，
     /// 其余（闭包外类）同款位集（语料合法程序跨包引用必经 public）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getModifiers(&self) -> Result<i32> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         if name.starts_with('[') {
@@ -494,6 +509,7 @@ fn descriptor_params(descriptor: &str) -> Vec<std::string::String> {
 
 impl __ClassHw3 for Class {
     /// 方法描述符的逐参数描述符序列（见 [`descriptor_params`]；反射调用的实参校验共用）
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __descriptor_params(descriptor: &str) -> Vec<std::string::String> {
         let Some(open) = descriptor.find('(') else { return Vec::new() };
         let Some(close) = descriptor[open..].find(')').map(|i| i + open) else { return Vec::new() };

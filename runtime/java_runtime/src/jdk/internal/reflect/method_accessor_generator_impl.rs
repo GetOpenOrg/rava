@@ -17,6 +17,7 @@ impl __MethodAccessorGeneratorHw for MethodAccessorGenerator {
     /// targetConstructorClass)`：分配 declaringClass 实例、运行 targetConstructorClass 的
     /// 无参构造体的访问器（ReflectionFactory.generateConstructor 其余步骤走字节码）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __impl_generateSerializationConstructor(
         &self,
         declaring_class: Class,

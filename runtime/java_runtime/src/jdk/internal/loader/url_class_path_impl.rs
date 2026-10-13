@@ -10,6 +10,7 @@ impl __URLClassPathHw for URLClassPath {
     /// `toFileURL(String)`：类路径字符串元素 → 运行期加载源。无运行期类路径 → null（调用方 String 构造器 /
     /// `addFile` 跳过 null），应用 ucp 恒空。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn toFileURL(s: String) -> Result<crate::java::net::URL> {
         let _ = s;
         Ok(Default::default())

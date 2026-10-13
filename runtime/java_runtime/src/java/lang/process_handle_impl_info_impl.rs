@@ -22,12 +22,14 @@ fn user_name(uid: u32) -> std::string::String {
 impl __ProcessHandleImpl_InfoHw for ProcessHandleImpl_Info {
     /// native `initIDs()`：缓存 JNI 字段 ID——无需初始化。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
 
     /// native `info0(long pid)`：采集进程信息写入本对象字段。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn info0(&self, pid: i64) -> Result<()> {
         use std::os::unix::fs::MetadataExt;
         if let Some(st) = proc_stat(pid) {

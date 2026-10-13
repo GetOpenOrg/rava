@@ -131,6 +131,12 @@ DEF_ITEM = re.compile(
 )
 VIS_ITEM = re.compile(r'^(\s*)(pub(?:\s*\([^)]*\))?\s+)((?:unsafe\s+)?(?:const\s+)?(?:extern\s+"[^"]*"\s+)?(?:fn|const)\b)')
 
+## 原 `pub fn` / `pub unsafe fn` 条目的原位标记（trait impl 条目不允许可见性修饰）：
+## 闭包分析器（vm 钩子判定）与 impl_methods（成员由手写提供的判定）据此区分「原本就是
+## 公开成员」与「原本 pub(crate)/pub(super) 的私有辅助」——两类在改写前的语义不同，
+## 后者不是钩子 / 不进成员判定（CollectorsDemo 种子漂移的根因，S7 计划 §9.9 K4-2a）。
+HW_PUB_MARK = "#[cfg_attr(any(), rava_hw_pub)]"
+
 
 def walk_sorted(root: str):
     """与 Rust 侧 `walk` 同序：本目录文件（排序）→ 子目录（排序）递归。产出相对路径。"""
@@ -272,7 +278,11 @@ def rewrite_file(path: str, text: str, local_types: set[str], counters: dict[str
             if depth == 1:
                 m = VIS_ITEM.match(line)
                 if m:
-                    edits.append((ln, m.group(1) + m.group(3) + line[m.end():]))
+                    ind, vis, kw = m.group(1), m.group(2).strip(), m.group(3)
+                    if vis == "pub":
+                        edits.append((ln, f"{ind}{HW_PUB_MARK}\n{ind}{kw}{line[m.end():]}"))
+                    else:
+                        edits.append((ln, ind + kw + line[m.end():]))
             depth += line.count("{") - line.count("}")
     for ln, new in edits:
         lines[ln] = new

@@ -8,6 +8,7 @@ use super::__Inet4AddressHw;
 impl __Inet4AddressHw for Inet4Address {
     /// native `init()`：缓存 JNI 字段 ID——无需。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn init() -> Result<()> {
         Ok(())
     }

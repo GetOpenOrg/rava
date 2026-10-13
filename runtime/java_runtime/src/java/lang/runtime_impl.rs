@@ -11,6 +11,7 @@ impl __RuntimeHw for Runtime {
     /// 并行流拆分、ConcurrentHashMap / Striped64 的 NCPU 阈值。线程是真实 OS 线程
     /// （#42），公共池工作线程为 OS 线程真并行执行。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn availableProcessors(&self) -> Result<i32> {
         Ok(std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(1))
     }
@@ -18,12 +19,14 @@ impl __RuntimeHw for Runtime {
     /// native `maxMemory()`：原生二进制无 Java 堆上限——按 JVM 缺省 MaxHeapSize（物理内存 1/4）
     /// 报告；物理内存不可得时 Long.MAX_VALUE（JDK「无上限」约定）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn maxMemory(&self) -> Result<i64> {
         Ok(crate::posix::default_max_heap())
     }
 
     /// native `totalMemory()`：当前已向 OS 申请的内存（进程常驻集，按平台取值，见 `resident_bytes`）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn totalMemory(&self) -> Result<i64> {
         Ok(resident_bytes().unwrap_or(0) as i64)
     }
@@ -31,12 +34,14 @@ impl __RuntimeHw for Runtime {
     /// native `freeMemory()`：原生内存由分配器即时归还，已申请而空闲的部分不可观察，恒 0
     /// （`totalMemory() - freeMemory()` 即已用内存，与 JVM 的用法语义一致）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn freeMemory(&self) -> Result<i64> {
         Ok(0)
     }
 
     /// native `gc()`：引用计数即时回收，无可触发的收集周期——no-op。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn gc(&self) -> Result<()> {
         Ok(())
     }

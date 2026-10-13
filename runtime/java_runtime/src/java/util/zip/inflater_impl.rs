@@ -58,12 +58,14 @@ fn inflate_raw(addr: i64, input: *const u8, input_len: i32, output: *mut u8, out
 impl __InflaterHw for Inflater {
     /// native `initIDs()`：缓存 JNI 字段 ID——无需。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
 
     /// native `init(boolean nowrap)`：inflateInit2（nowrap → 原始 deflate，-MAX_WBITS）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn init(nowrap: bool) -> Result<i64> {
         let z = lib()?;
         let addr = zlib::alloc_stream();
@@ -85,6 +87,7 @@ impl __InflaterHw for Inflater {
     /// native `setDictionary(long, byte[], int, int)`：inflateSetDictionary；流状态不符 →
     /// IllegalArgumentException。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setDictionary_l_arr_b_i_i(addr: i64, b: JArray<i8>, off: i32, len: i32) -> Result<()> {
         let z = lib()?;
         let dict = copy_in(&b, off, len)?;
@@ -104,6 +107,7 @@ impl __InflaterHw for Inflater {
     /// checkInflateStatus）。Z_NEED_DICT / Z_DATA_ERROR 回写 inputConsumed / outputConsumed；
     /// Z_DATA_ERROR 抛 DataFormatException(strm->msg)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn inflateBytesBytes(&self, addr: i64, input: JArray<i8>, input_off: i32, input_len: i32,
                              output: JArray<i8>, output_off: i32, output_len: i32) -> Result<i64> {
         let inbuf = copy_in(&input, input_off, input_len)?;
@@ -116,6 +120,7 @@ impl __InflaterHw for Inflater {
 
     /// native `inflateBytesBuffer(addr, in, inOff, inLen, outAddr, outLen)`：输出为直接缓冲区。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn inflateBytesBuffer(&self, addr: i64, input: JArray<i8>, input_off: i32, input_len: i32,
                               output_addr: i64, output_len: i32) -> Result<i64> {
         let inbuf = copy_in(&input, input_off, input_len)?;
@@ -125,6 +130,7 @@ impl __InflaterHw for Inflater {
 
     /// native `inflateBufferBytes(addr, inAddr, inLen, out, outOff, outLen)`：输入为直接缓冲区。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn inflateBufferBytes(&self, addr: i64, input_addr: i64, input_len: i32,
                               output: JArray<i8>, output_off: i32, output_len: i32) -> Result<i64> {
         zlib::check_out(&output, output_off, output_len)?;
@@ -136,6 +142,7 @@ impl __InflaterHw for Inflater {
 
     /// native `inflateBufferBuffer(addr, inAddr, inLen, outAddr, outLen)`：输入输出均为直接缓冲区。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn inflateBufferBuffer(&self, addr: i64, input_addr: i64, input_len: i32,
                                output_addr: i64, output_len: i32) -> Result<i64> {
         let r = inflate_raw(addr, input_addr as *const u8, input_len, output_addr as *mut u8, output_len)?;
@@ -165,6 +172,7 @@ impl __InflaterHw for Inflater {
 
     /// native `setDictionaryBuffer(long addr, long bufAddress, int len)`：字典来自直接缓冲区。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setDictionaryBuffer(addr: i64, buf_addr: i64, len: i32) -> Result<()> {
         let z = lib()?;
         let len = zlib::avail(len)?;
@@ -181,6 +189,7 @@ impl __InflaterHw for Inflater {
 
     /// native `getAdler(long)`：当前 adler32 / crc32 校验值。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getAdler_l(addr: i64) -> Result<i32> {
         // SAFETY: addr 为活动流
         Ok(unsafe { (*zlib::stream(addr)).adler } as i32)
@@ -188,6 +197,7 @@ impl __InflaterHw for Inflater {
 
     /// native `reset(long)`：inflateReset。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn reset_l(addr: i64) -> Result<()> {
         let z = lib()?;
         // SAFETY: addr 为活动流
@@ -199,6 +209,7 @@ impl __InflaterHw for Inflater {
 
     /// native `end(long)`：inflateEnd 并释放流。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn end_l(addr: i64) -> Result<()> {
         let z = lib()?;
         // SAFETY: addr 为活动流，end 之后 Java 侧不再使用该地址

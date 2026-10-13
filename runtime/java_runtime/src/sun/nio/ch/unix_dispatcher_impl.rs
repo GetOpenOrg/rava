@@ -23,6 +23,7 @@ fn io_exception(default: &str) -> JvmError {
 impl __UnixDispatcherHw for UnixDispatcher {
     /// native `init()`：socketpair 后关闭 sp[1]，sp[0] 作预关闭 fd。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn init() -> Result<()> {
         let mut sp = [0 as libc::c_int; 2];
         // SAFETY: socketpair 写入两元素数组
@@ -37,6 +38,7 @@ impl __UnixDispatcherHw for UnixDispatcher {
 
     /// native `preClose0(FileDescriptor)`：dup2(预关闭 fd, fd)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn preClose0(fdo: FileDescriptor) -> Result<()> {
         let pre = PRE_CLOSE_FD.load(Ordering::SeqCst);
         // SAFETY: 两个 fd 均为进程内有效描述符
@@ -48,6 +50,7 @@ impl __UnixDispatcherHw for UnixDispatcher {
 
     /// native `close0(FileDescriptor)`：close(2)；EINTR 不报错。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn close0(fdo: FileDescriptor) -> Result<()> {
         let fd = fdo.__get_fd();
         // SAFETY: 关闭调用方持有的 fd

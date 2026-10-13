@@ -335,7 +335,8 @@ fn hw_trait_decl(sname: &str, ord: u32, blk: &input::handwritten::HwBlock) -> Ve
         format!("pub trait __{sname}Hw{suffix}{}: {sname}__Methods{}{where_part}{{", blk.generics, blk.self_args),
     ];
     for item in &blk.items {
-        out.extend(item.attrs.iter().map(|a| format!("    {a}")));
+        // `rava_hw_pub` 是改写脚本的原可见性标记（伴生侧专用），声明侧不镜像
+        out.extend(item.attrs.iter().filter(|a| !a.contains("rava_hw_pub")).map(|a| format!("    {a}")));
         out.push(format!("    {};", item.sig.trim_end().trim_end_matches(';')));
     }
     out.push("}".to_string());
@@ -358,8 +359,9 @@ mod tests {
                     name: "intern".into(),
                     attrs: vec!["#[cfg(jdk_ge_25)]".into()],
                     sig: "fn intern(&self) -> Result<String>".into(),
+                    is_pub: false,
                 },
-                input::handwritten::HwItem { name: "K".into(), attrs: vec![], sig: "const K: i32".into() },
+                input::handwritten::HwItem { name: "K".into(), attrs: vec![], sig: "const K: i32".into(), is_pub: false },
             ],
         };
         let out = hw_trait_decl("Reference", 2, &blk).join("\n");

@@ -188,6 +188,7 @@ impl<R, T> __StackStreamFactory_AbstractStackWalkerHw for StackStreamFactory_Abs
     ///（failure_patterns `hw-upcall-self-lost-in-helper`）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn callStackWalk(&self, mode: i64, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
         let limit = start_index + batch_size;
@@ -210,6 +211,7 @@ impl<R, T> __StackStreamFactory_AbstractStackWalkerHw for StackStreamFactory_Abs
     /// 填帧上界是 bufferSize 而非 startIndex + batchSize，HotSpot `StackWalk::walk` 同口径）
     #[cfg(jdk_ge_25)]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn callStackWalk(&self, mode: i32, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
         let mode = i64::from(mode);
@@ -255,6 +257,7 @@ impl<R, T> __StackStreamFactory_AbstractStackWalkerHw for StackStreamFactory_Abs
     /// 按锚点续取下一批，返回 endIndex（流已到底 → startIndex）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn fetchStackFrames_l_l_i_i_arr_obj(&self, mode: i64, anchor: i64, batch_size: i32, start_index: i32,
                                             frames: JArray<T>) -> Result<i32> {
         let limit = start_index + batch_size;
@@ -284,6 +287,7 @@ impl<R, T> __StackStreamFactory_AbstractStackWalkerHw for StackStreamFactory_Abs
     /// 已停在下一个待检视帧，无需再推；bufferSize 口径同 callStackWalk
     #[cfg(jdk_ge_25)]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn fetchStackFrames_i_l_i_i_i_arr_obj(&self, mode: i32, anchor: i64, _last_batch_frame_count: i32, batch_size: i32,
                                               start_index: i32, frames: JArray<T>) -> Result<i32> {
         let mode = i64::from(mode);

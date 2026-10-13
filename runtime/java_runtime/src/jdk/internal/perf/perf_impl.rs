@@ -15,6 +15,7 @@ use super::__PerfHw;
 impl __PerfHw for Perf {
     /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn registerNatives() -> Result<()> {
         Ok(())
     }
@@ -24,6 +25,7 @@ impl __PerfHw for Perf {
     /// BIG_ENDIAN 序，调用方 PerfCounter 自行改为 nativeOrder）。名字 / 可变性 / 单位只影响
     /// jvmstat 元数据，进程内不可观测。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn createLong(&self, _name: String, _variability: i32, _units: i32, value: i64) -> Result<ByteBuffer> {
         let bb = ByteBuffer::allocate(8)?;
         if value != 0 {

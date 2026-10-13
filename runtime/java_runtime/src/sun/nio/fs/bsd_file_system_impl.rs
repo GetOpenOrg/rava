@@ -13,6 +13,7 @@ use super::__BsdFileSystemHw;
 impl __BsdFileSystemHw for BsdFileSystem {
     /// native `directCopy0(int dst, int src, long cancelAddress)`：成功返回 0，失败抛 UnixException(errno)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn directCopy0(dst: i32, src: i32, cancel: i64) -> Result<i32> {
         direct_copy(dst, src, cancel)
     }

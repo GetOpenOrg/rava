@@ -44,6 +44,7 @@ fn read_result(n: i64) -> Result<i64> {
 impl __SocketDispatcherHw for SocketDispatcher {
     /// native `read0(FileDescriptor, long address, int len)`：read(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn read0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向至少 len 字节的本地缓冲区
@@ -53,6 +54,7 @@ impl __SocketDispatcherHw for SocketDispatcher {
 
     /// native `readv0(FileDescriptor, long address, int len)`：address 为 len 个 iovec。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn readv0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i64> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向 len 个有效 iovec
@@ -62,6 +64,7 @@ impl __SocketDispatcherHw for SocketDispatcher {
 
     /// native `write0(FileDescriptor, long address, int len)`：write(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn write0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向至少 len 字节的本地缓冲区
@@ -71,6 +74,7 @@ impl __SocketDispatcherHw for SocketDispatcher {
 
     /// native `writev0(FileDescriptor, long address, int len)`：address 为 len 个 iovec。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn writev0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i64> {
         let fd = fdo.__get_fd();
         // SAFETY: address 指向 len 个有效 iovec

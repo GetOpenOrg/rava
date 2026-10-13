@@ -17,6 +17,7 @@ impl __ProxyHw for Proxy {
     /// `newProxyInstance(ClassLoader, Class[], InvocationHandler)`：定义代理类并实例化 →
     /// `Proxy$Dyn.create`（接口校验、h 非空检查在其字节码体内）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn newProxyInstance_classloader_arr_class_invocationhandler(
         _loader: ClassLoader, interfaces: JArray<Class>, h: Object) -> Result<Object> {
         Proxy_Dyn::create(interfaces, h.into())

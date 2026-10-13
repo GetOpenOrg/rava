@@ -72,6 +72,7 @@ impl __StringHw2 for String {
     /// 的规范实例——表中已有则取同一实例（identity 相同），否则把 `self` 入表
     /// 成为规范实例。语义同 `intern()`。
     #[doc(hidden)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn __interned(self) -> String {
         let key = __intern_key(&self);
         __STRING_INTERN_TABLE.with(|table| {
@@ -89,6 +90,7 @@ impl __StringHw2 for String {
     /// `java/lang/String.intern:()Ljava/lang/String;`（S-6）：按内容返回常量池
     /// 规范实例——与相同内容的字面量是同一对象。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn intern(&self) -> Result<String> {
         Ok(Clone::clone(self).__interned())
     }

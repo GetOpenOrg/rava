@@ -16,24 +16,28 @@ use super::__AccessControllerHw;
 impl __AccessControllerHw for AccessController {
     /// 调用栈上的特权上下文：无 SM / 无 Java 栈帧 → null（JDK getContext 据此构造空上下文）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getStackAccessControlContext() -> Result<AccessControlContext> {
         Ok(AccessControlContext::default())
     }
 
     /// 线程继承的上下文：同上 → null。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getInheritedAccessControlContext() -> Result<AccessControlContext> {
         Ok(AccessControlContext::default())
     }
 
     /// 类的保护域：原生二进制不建模类加载器 / 代码源 → null（HotSpot 对启动类同此）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getProtectionDomain(_caller: Class) -> Result<ProtectionDomain> {
         Ok(ProtectionDomain::default())
     }
 
     /// 栈遍历物化（保证 JIT 不消去实参）：原生二进制无栈遍历 → 空操作。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn ensureMaterializedForStackWalk(_o: Object) -> Result<()> {
         Ok(())
     }

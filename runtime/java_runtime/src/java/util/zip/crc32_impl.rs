@@ -33,12 +33,14 @@ fn crc_update(crc: i32, bytes: impl Iterator<Item = u8>) -> i32 {
 impl __CRC32Hw for CRC32 {
     /// `update(int crc, int b)`：追加单字节（低 8 位）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn update_i_i(crc: i32, b: i32) -> Result<i32> {
         Ok(crc_update(crc, std::iter::once(b as u8)))
     }
 
     /// `updateBytes0(int crc, byte[] b, int off, int len)`。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn updateBytes0(crc: i32, b: JArray<i8>, off: i32, len: i32) -> Result<i32> {
         let mut buf = Vec::with_capacity(len.max(0) as usize);
         for i in off..off.saturating_add(len) {
@@ -49,6 +51,7 @@ impl __CRC32Hw for CRC32 {
 
     /// `updateByteBuffer0(int, long addr, int off, int len)`：直接缓冲区（直接内存地址 addr + off 起 len 字节）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn updateByteBuffer0(v: i32, addr: i64, off: i32, len: i32) -> Result<i32> {
         // SAFETY: addr 为 DirectByteBuffer 的直接内存地址，Java 侧已做 off / len 界检查
         let bytes = unsafe { std::slice::from_raw_parts((addr + off as i64) as *const u8, len.max(0) as usize) };

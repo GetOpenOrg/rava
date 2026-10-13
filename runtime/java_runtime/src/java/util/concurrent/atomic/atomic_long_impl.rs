@@ -9,6 +9,7 @@ impl __AtomicLongHw for AtomicLong {
     /// HotSpot 在 64 位平台恒为 true（VM_Version::supports_cx8）；
     /// 原生二进制同理——目标平台均为 64 位。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn VMSupportsCS8() -> Result<bool> {
         Ok(true)
     }

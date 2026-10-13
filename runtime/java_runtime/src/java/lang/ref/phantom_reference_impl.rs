@@ -13,6 +13,7 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_mo
     /// native `refersTo0(Object)`：referent 引用身份比较（acmp 语义，null 同样成立）。
     /// 消费方：Reference.refersTo 经 refersToImpl 虚分派到本覆盖（TestReferenceTypes）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn refersTo0(&self, obj: Object) -> Result<bool> {
         Ok(Into::<Object>::into(self.__get_referent()) == obj)
     }
@@ -21,6 +22,7 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_mo
     /// 同 `Reference.clear0`（无 GC，不入队）
     #[cfg(jdk_ge_25)]
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn clear0(&self) -> Result<()> {
         self.__set_referent(T::default());
         Ok(())

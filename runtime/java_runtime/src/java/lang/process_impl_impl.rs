@@ -161,6 +161,7 @@ impl __ProcessImplHw for ProcessImpl {
     /// 字段缓存；PATH 在 forkAndExec 落地时按调用时刻的环境解析（与 JDK 在 <clinit> 快照
     /// 的差异仅在运行期修改 PATH 时可观察，而 Java 无修改进程环境的 API）。无可观察状态。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn init() -> Result<()> {
         Ok(())
     }
@@ -173,6 +174,7 @@ impl __ProcessImplHw for ProcessImpl {
     /// redirectErrorStream 时子进程 stderr 复制 stdout，`fds[2]` 回写 -1（getErrorStream 为空流）。
     #[jvm_native]
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn forkAndExec(&self, _mode: i32, _helperpath: JArray<i8>, prog: JArray<i8>,
                        arg_block: JArray<i8>, argc: i32, env_block: JArray<i8>, envc: i32,
                        dir: JArray<i8>, fds: JArray<i32>, redirect_error_stream: bool) -> Result<i32> {

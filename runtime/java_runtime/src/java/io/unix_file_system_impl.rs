@@ -140,6 +140,7 @@ fn collapse(path: &str) -> std::string::String {
 impl __UnixFileSystemHw for UnixFileSystem {
     /// native initIDs：HotSpot 缓存 JNI 字段 ID；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
@@ -147,6 +148,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
     /// native getBooleanAttributes0(File)：BA_EXISTS(1) | BA_REGULAR(2) |
     /// BA_DIRECTORY(4)；不存在返回 0。JDK 用 stat（跟随符号链接）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getBooleanAttributes0(&self, f: File) -> Result<i32> {
         // `${java.home}` 虚拟树（U14，jdk_resources::tree）：文件 / 目录按嵌入树判定，树内不存在为 0
         let path = file_path(&f);
@@ -170,12 +172,14 @@ impl __UnixFileSystemHw for UnixFileSystem {
     /// native checkAccess0(File, access)：ACCESS_EXECUTE(1)/WRITE(2)/READ(4) 与 access(2) 的
     /// X_OK/W_OK/R_OK 同值——按有效用户权限精确判定（root 对只读文件可写等 JDK 同语义）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn checkAccess0(&self, f: File, access: i32) -> Result<bool> {
         Ok(crate::posix::access(std::path::Path::new(&file_path(&f)), access) == 0)
     }
 
     /// native getLastModifiedTime0(File)：epoch 毫秒；不存在返回 0。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getLastModifiedTime0(&self, f: File) -> Result<i64> {
         let Ok(md) = std::fs::metadata(file_path(&f)) else { return Ok(0) };
         let millis = md.modified()
@@ -188,6 +192,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
 
     /// native getLength0(File)：字节长度；不存在返回 0。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getLength0(&self, f: File) -> Result<i64> {
         let Ok(md) = std::fs::metadata(file_path(&f)) else { return Ok(0) };
         Ok(md.len() as i64)
@@ -198,6 +203,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
     /// 未解析的尾部，最后语法上消解 `.` / `..`；路径不必存在。失败抛 IOException，消息同
     /// `JNU_ThrowIOExceptionWithLastError(env, "Bad pathname")`（errno 文案优先）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn canonicalize0(&self, path: String) -> Result<String> {
         match jdk_canonicalize(&format!("{}", path)) {
             Ok(p) => Ok(String::from(p.as_str())),
@@ -212,6 +218,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
 
     /// native list0(File)：目录项名字数组；失败（不存在/非目录/IO 错）返回 null。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn list0(&self, f: File) -> Result<JArray<String>> {
         let names: Vec<std::string::String> = match std::fs::read_dir(file_path(&f)) {
             Ok(entries) => entries
@@ -233,6 +240,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
 
     /// native delete0(File)：remove(3) 语义——文件或空目录，失败返回 false。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn delete0(&self, f: File) -> Result<bool> {
         let path = file_path(&f);
         let Ok(md) = std::fs::symlink_metadata(&path) else { return Ok(false) };
@@ -246,18 +254,21 @@ impl __UnixFileSystemHw for UnixFileSystem {
 
     /// native rename0(File, File)：rename(2)（同文件系统内原子改名）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn rename0(&self, f1: File, f2: File) -> Result<bool> {
         Ok(std::fs::rename(file_path(&f1), file_path(&f2)).is_ok())
     }
 
     /// native createDirectory0(File)：mkdir(2)（单级，父须存在）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn createDirectory0(&self, f: File) -> Result<bool> {
         Ok(std::fs::create_dir(file_path(&f)).is_ok())
     }
 
     /// native createFileExclusively0(String)：O_CREAT|O_EXCL 原子建空文件。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn createFileExclusively0(&self, path: String) -> Result<bool> {
         use std::io::Write;
         let created = std::fs::OpenOptions::new()
@@ -274,6 +285,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
     /// native setPermission0(File, access, enable, owneronly)：按权限类
     /// （u/g/o）设 r/w/x 位。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setPermission0(&self, f: File, access: i32, enable: bool, owneronly: bool) -> Result<bool> {
         use std::os::unix::fs::PermissionsExt;
         let path = file_path(&f);
@@ -301,6 +313,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
 
     /// native setReadOnly0(File)：清除全部写位。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setReadOnly0(&self, f: File) -> Result<bool> {
         use std::os::unix::fs::PermissionsExt;
         let path = file_path(&f);
@@ -312,6 +325,7 @@ impl __UnixFileSystemHw for UnixFileSystem {
 
     /// native setLastModifiedTime0(File, time)：epoch 毫秒 → utimensat。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setLastModifiedTime0(&self, f: File, time: i64) -> Result<bool> {
         use std::fs::FileTimes;
         let Ok(file) = std::fs::File::options().read(true).open(file_path(&f)) else {
@@ -323,12 +337,14 @@ impl __UnixFileSystemHw for UnixFileSystem {
 
     /// native getNameMax0(String)：pathconf(_PC_NAME_MAX)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getNameMax0(&self, path: String) -> Result<i64> {
         Ok(crate::posix::name_max(std::path::Path::new(&format!("{}", path))))
     }
 
     /// native getSpace0(File, t)：statvfs——SPACE_TOTAL(0) / SPACE_FREE(1) / SPACE_USABLE(2)。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn getSpace0(&self, f: File, t: i32) -> Result<i64> {
         Ok(crate::posix::space(std::path::Path::new(&file_path(&f)), t))
     }

@@ -66,6 +66,10 @@ pub struct HwItem {
     pub attrs: Vec<String>,
     /// 声明签名（无可见性、无体；`fn f(&self, x: i32) -> R` 或 `const N: T`）
     pub sig: String,
+    /// 改写前是 `pub`（改写脚本以 `#[cfg_attr(any(), rava_hw_pub)]` 原位标记）：这类条目按
+    /// 「手写提供的成员 / vm 钩子」计；原 `pub(crate)` / `pub(super)` 的私有辅助不计
+    /// （CollectorsDemo 种子漂移的根因——S7 计划 §9.9 K4-2a）
+    pub is_pub: bool,
 }
 
 /// 类 binary name → 手写事实
@@ -362,6 +366,7 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
         // 体内顶层条目
         let mut items: Vec<HwItem> = Vec::new();
         let mut attrs: Vec<String> = Vec::new();
+        let mut hw_pub = false;
         let mut depth = 1i32;
         let mut k = j + 1;
         while k < lines.len() && depth > 0 {
@@ -376,6 +381,9 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
                 continue;
             }
             if t.starts_with('#') {
+                if t.contains("rava_hw_pub") {
+                    hw_pub = true;
+                }
                 attrs.push(t.to_string());
                 continue;
             }
@@ -412,10 +420,12 @@ fn hw_impl_blocks(content: &str) -> Vec<HwBlock> {
                     decl_sig(&sig)
                 };
                 if !name.is_empty() {
-                    items.push(HwItem { name, attrs: std::mem::take(&mut attrs), sig: decl });
+                    items.push(HwItem { name, attrs: std::mem::take(&mut attrs), sig: decl, is_pub: hw_pub });
                 }
+                hw_pub = false;
             }
             attrs.clear();
+            hw_pub = false;
         }
         out.push(HwBlock { generics, self_args, where_c, items });
         i = k;
@@ -649,9 +659,11 @@ impl HandwrittenMap {
         if !names.is_empty() || !hw_blocks.is_empty() {
             let e = self.classes.entry(class_binary.clone()).or_default();
             e.methods.extend(names);
-            // K4-2a：改写后的 hw 块条目（可见性已剥，`pub fn` 正则不再覆盖）并入 impl_methods——
-            // 名单语义 = 「wrapper 上由手写伴生提供的方法」，宏与判定层口径不变
-            e.methods.extend(hw_blocks.iter().flat_map(|b| b.items.iter().map(|i| i.name.clone())));
+            // K4-2a：改写后的 hw 块条目并入 impl_methods——只计改写前 `pub` 的条目
+            // （`rava_hw_pub` 标记），恢复改写前 `pub fn` 正则的名单口径；宏与判定层不变
+            e.methods.extend(
+                hw_blocks.iter().flat_map(|b| b.items.iter().filter(|i| i.is_pub).map(|i| i.name.clone())),
+            );
             e.hw_blocks.extend(hw_blocks);
         }
         for (name, core) in cores {
@@ -686,7 +698,10 @@ impl HandwrittenMap {
         ty::HwNames::build(self.classes.iter().map(|(b, e)| {
             (
                 b.clone(),
-                e.hw_blocks.iter().map(|blk| blk.items.iter().map(|i| i.name.clone()).collect()).collect(),
+                e.hw_blocks
+                    .iter()
+                    .map(|blk| blk.items.iter().filter(|i| i.is_pub).map(|i| i.name.clone()).collect())
+                    .collect(),
             )
         }))
     }
@@ -728,6 +743,7 @@ mod tests {
         assert_eq!(blocks[0].self_args, "");
         let names: Vec<&str> = blocks[0].items.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, vec!["intern", "fetch", "by_val"]);
+        assert!(!blocks[0].items.iter().any(|i| i.is_pub), "无标记条目不计 pub");
         assert_eq!(blocks[0].items[0].sig, "fn intern(&self) -> Result<String>");
         // 跨行签名 + cfg 属性随行
         assert_eq!(blocks[0].items[1].attrs, vec!["#[cfg(jdk_ge_25)]"]);

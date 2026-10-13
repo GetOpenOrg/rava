@@ -218,8 +218,10 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
                 self.supers.push((o.clone(), TypeRef(full)));
             }
         }
-        // K4-2a：`impl __XHw{N} for X` 是伴生固有 impl 的改写形态（条目可见性已剥），成员仍按
-        // 「手写提供」（is_pub）计——闭包 / 种子集合口径与改写前一致
+        // K4-2a：`impl __XHw{N} for X` 是伴生固有 impl 的改写形态（条目可见性已剥）。条目上的
+        // `#[cfg_attr(any(), rava_hw_pub)]` 标记 = 改写前 `pub`——只有这类条目按「手写提供 /
+        // vm 钩子」（is_pub）计；原 pub(crate)/pub(super) 的私有辅助不计（改写前不计，
+        // CollectorsDemo 种子漂移的根因——S7 计划 §9.9 K4-2a）
         let hw_impl = i.trait_.as_ref().is_some_and(|(_, tr, _)| {
             let last = tr.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
             let stem = last.strip_prefix("__").unwrap_or(&last);
@@ -240,7 +242,14 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
     }
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
-        let is_pub = matches!(f.vis, syn::Visibility::Public(_)) || self.in_hw_impl;
+        let is_pub = match (self.in_hw_impl, matches!(f.vis, syn::Visibility::Public(_))) {
+            (false, p) => p,
+            (true, _) => f.attrs.iter().any(|a| {
+                let path = a.path();
+                let last = path.segments.last().map(|s| s.ident == "cfg_attr").unwrap_or(false);
+                last && quote::ToTokens::to_token_stream(a).to_string().contains("rava_hw_pub")
+            }),
+        };
         self.add(&f.sig, is_pub, &f.block);
         syn::visit::visit_impl_item_fn(self, f);
     }

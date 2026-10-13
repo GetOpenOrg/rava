@@ -11,12 +11,14 @@ use super::__IOUtilHw;
 impl __IOUtilHw for IOUtil {
     /// native `initIDs()`：HotSpot 缓存 FileDescriptor.fd 的 JNI 字段 ID；原生二进制无此需要。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn initIDs() -> Result<()> {
         Ok(())
     }
 
     /// native `iovMax()`：`sysconf(_SC_IOV_MAX)`，不可得时 16（JNI 同款）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn iovMax() -> Result<i32> {
         // SAFETY: sysconf 无副作用
         let v = unsafe { libc::sysconf(libc::_SC_IOV_MAX) };
@@ -25,18 +27,21 @@ impl __IOUtilHw for IOUtil {
 
     /// native `writevMax()`：Linux / macOS 为 INT_MAX（JNI 同款）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn writevMax() -> Result<i64> {
         Ok(i32::MAX as i64)
     }
 
     /// native `fdVal(FileDescriptor)`：读取 fd 字段。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn fdVal(fdo: FileDescriptor) -> Result<i32> {
         Ok(fdo.__get_fd())
     }
 
     /// native `setfdVal(FileDescriptor, int)`：写入 fd 字段。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn setfdVal(fdo: FileDescriptor, value: i32) -> Result<()> {
         fdo.__set_fd(value);
         Ok(())
@@ -44,6 +49,7 @@ impl __IOUtilHw for IOUtil {
 
     /// native `configureBlocking(FileDescriptor, boolean blocking)`：切换 O_NONBLOCK（标志未变不调用 F_SETFL）。
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn configureBlocking(fdo: FileDescriptor, blocking: bool) -> Result<()> {
         let fd = fdo.__get_fd();
         // SAFETY: fcntl 只作用于 fd

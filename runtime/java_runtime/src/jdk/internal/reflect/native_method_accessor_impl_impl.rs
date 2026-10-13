@@ -27,6 +27,7 @@ fn __wrap_target_exception(e: crate::error::JvmError) -> crate::error::JvmError 
 
 impl __NativeMethodAccessorImplHw for NativeMethodAccessorImpl {
     #[jvm_native]
+    #[cfg_attr(any(), rava_hw_pub)]
     fn invoke0(m: Method, obj: Object, args: JArray<Object>) -> Result<Object> {
         let Some((cls, name, desc)) = m.__reflect_key() else {
             panic!("stub: NativeMethodAccessorImpl.invoke0 无声明键（非表构造的 Method）");
