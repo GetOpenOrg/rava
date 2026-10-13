@@ -201,6 +201,15 @@ jc1|jc2|jc3|jc4)
         LIB="${MODE%%/*}"
         MAIN="${MODE#*/}"
         SRCDIR="projects/$LIB/src"
+        # 入口给简单名时推导 FQCN（README：入口可 FQCN 或简单名；java 须带 package 全名）：
+        # SRCDIR 下找文件名 == <MAIN>.java 的源文件，读其 ^package 声明拼 FQCN；无包声明保持原值
+        if [[ "$MAIN" != *.* ]]; then
+            _src="$(find "$SRCDIR" -name "$MAIN.java" | sort | head -n 1)"
+            if [[ -n "$_src" ]]; then
+                _pkg="$(sed -n 's/^package[[:space:]]\+\([A-Za-z0-9_.]*\).*/\1/p' "$_src" | head -n 1)"
+                [[ -n "$_pkg" ]] && MAIN="$_pkg.$MAIN"
+            fi
+        fi
         GOLDEN_ID="${LIB}_${MAIN##*.}"
         CPN="$(form_cp "projects/$LIB/form.toml")"
         CP="$(resolve_cp "$CPN")" || exit 2
