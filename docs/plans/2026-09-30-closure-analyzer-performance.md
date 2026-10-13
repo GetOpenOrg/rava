@@ -1116,6 +1116,56 @@ S0 ≤20 万上下文 / ≤16 GiB 的目标未达成，20 万上下文量级在�
    S0 A 完整曲线（至 30 GB）本轮起有档。
 
 
+### 4.17 S0 闸门 G1：小分配 soup 逐表归因与结构压缩（`g1-ctx2`，2026-10-13，未解除）
+
+承 §4.16 结论 2(b)(c)（本任务书直接派发）。分支 `g1-ctx2`，提交 3ea4c544..4c46adeb。
+
+**归因设施——census deep3 / deep3b**（3ea4c544 + 093cdd28，`--lambda-prof` 门控只读）：逐表走**真实深堆**
+（capacity 口径，与计数分配器同口径）；`Rc` 内容（`Rc<str>` / `Rc<[i32]>` / `Srcs` / `Rc<Obj>` /
+`Rc<Analysis>` / `Rc<Cfg>` / `Rc<[u32]>` …）按**指针去重**——同一分配只记入首个到达的表，跨表共享
+（名字串 / 共享摘要 / 共享 `Rc<[u32]>`）不重复计数（uniq_ptrs 打印去重指针数，sb3 死前 ~223 万）；
+`String` 记 capacity+1、`Vec` 记 capacity×元素宽、`HashMap`/`IndexMap` 记 capacity×槽宽×9/7、
+B 树记 n×(键值宽+8)。覆盖：methods+analysis（事件 args 内层 `Vec<V>` 与 `MemberRef` 串、applied /
+共享摘要按 Rc 去重）、pstr / keyed 逐子表、dispatch 族逐子表（dispatch / hub_sites / open_* / g /
+g_sub / gathers / callers / mflows / eqm / concrete / spret）、Ctx 常量与事实缓存族 20 项
+（consts / calls / fields / fvals / ovals / cinits / fdeps / vdisp / cevals / img …）、输出 String 键
+B 树族、mrefs 族、名字表 / 分配点链、工作队列。
+
+**归因结果（g1c8-prof / g1c8-prof2，sb3 缺省档 16 GiB 短程，`--lambda-prof 30`；两锚点 =
+892 s / live 14934 MiB 与 1039 s / live 14655 MiB）**——§4.16 的「~6 GB 未逐项落名」落名如下：
+
+| 表（1039 s，除非注明） | 字节 | 说明 |
+|---|---|---|
+| **pstr_succ + pstr_pred** | **1484 MiB** | 形参字符串常量集的子集边与逆（B 树 24 B/条 ≈ 3200 万条边）——**小分配 soup 第一大项**，§4.16 未落名的主项 |
+| methods+an | 724 MiB | 方法列 + `Rc<Analysis>` 事件（按指针去重后的真实驻留：args 内层 `Vec<V>` + `MemberRef` 串 + 列） |
+| **gathers** | 654 MiB | 汇集节点表（对象集 `Rc<[u32]>` 与 gather_ids / gather_last） |
+| recv_fp（deep2） | 1515 MiB | 调用点接收者版本记忆（§4.16 已知，recv 对与 seen） |
+| hubs（deep2） | 1890 MiB | 枢纽深字节（结构 + `Rc<Link>` 实参 + B 树集合；本 tranche 前口径） |
+| **g_sub** | 381 MiB | G 的子类型索引（Vec<u32>/行） |
+| mirror_open + pvals_deep + sites_rcall + dispatch + eqm + callers + ctx_odeps + ctx_vdisp + shared … | 100–160 MiB 档 ×7 | 逐项见 deep3 行 |
+| uniq sets true + lcalls.done + fmemo（uniq 行） | ~300 MiB 档 | §4.16 已知（表征压缩后残余） |
+| recv_done / lcall_col / gcols / watch / largs / gedges / gseen / subrows（deep 行） | 2.5 GiB 合计 | §4.16 已知 |
+
+- 增长曲线（deep3 逐 dump）：pstr_succ/pred 与 gathers、g_sub 随方法数**线性增长**（pstr_succ 726 s 时
+  496 MiB → 1039 s 742 MiB），是 sb3 / S0 不收敛增长的第二引擎（第一是逐上下文相异类型集，§4.14）。
+- 对账：deep3（~3.4 GiB）+ deep2 + deep + uniq + 图列合计 ≈ live 的 ~65%；其余为值波瞬态（本 dump
+  raw sets 3929 MiB vs uniq true 41 MiB——排空间隙的差分拷贝）、`IdSet` 驻留表死条目与既有行口径的
+  重复计（methods 列在 deep/deep3 各计一次等）。soup 主体已逐项落名。
+
+**压缩实施（按性价比排序，每项独立提交）**：
+
+1. **枢纽站点集合 `BTreeSet`→`SortedSet`（有序数组）**（9608415c）：recvs / plain / ltargets / lhubs /
+   lbind 五张表，B 树节点摊还 6–14 B/条 → 数组 4–8 B/条；遍历仍升序（与 `BTreeSet` 同序）、插入去重
+   同口径（二分 + memmove，枢纽集合多为个位到千级条目）——行为与确定性不变。census deep2 的 hubs
+   计量同步改 capacity 口径。
+2. **pstr 六张内层 `BTreeSet`→`SortedSet`**（d7f4a321）：succ / pred 子集边（24 B/条 → 16 B/条）与
+   sites / inputs / demand / xdemand 读者表——归因第一大项的直接削减（估 −500 MiB @ sb3 同刻）。
+   pred 不可删除（按名求值要沿逆边上溯，`MAX_SLOTS`=256 截断）。
+3. **事件实参 `Vec` 收尾收紧**（4c46adeb）：分析常驻前对 Invoke / Indy 的 args `shrink_to_fit`
+   （`pop_args` 按形参数预留、`insert` 接收者翻倍带来 ~1/3 容量余量；事件驻留整个分析期）。
+
+**验收与实测**：见下（g1c8-reg / g1c8-det / g1c8-sb3 / g1c8-s0a，终提交 4c46adeb）。
+
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 
 - Linux：`ulimit -v`、`prlimit --as=`、`systemd-run --scope -p MemoryMax=4G`、容器 `--memory`；
