@@ -274,20 +274,21 @@ impl<'a> Engine<'a> {
         self.graph.fmemo.insert((rs, f), (n, out));
     }
 
-    /// 枢纽形参 HP(h, j) 的待推增量经惰性路由边扇出：按各中转目标形参的声明类型（= τ(P)，恒不破坏
-    /// 封闭类型）收窄后推给 P(t, 1+j)。同一过滤类型只收窄一次（同 `push_edge` 的 narrowed 复用）
+    /// 枢纽形参 HP(h, j) 的待推增量经惰性路由边扇出：按 `plain_seq` 接入序（= 存边设计的边表序）
+    /// 逐目标以被调形参声明类型（= τ(P)，恒不破坏封闭类型）收窄后推给 P(t, 1+j)。
+    /// 同一过滤类型只收窄一次（同 `push_edge` 的 narrowed 复用）；按下标重取引用，
+    /// 扇出中重入接入的新目标（已由 `push_now` 按当前集合推过）重复推送为无增量空操作
     fn hub_param_fan(&mut self, h: u32, j: u16, si: u32, s: &TypeSet) {
         let js = 1 + j as usize;
-        let targets: Vec<usize> = match self.hubs.get(h as usize) {
-            Some(hub) if !hub.plain.is_empty() => hub.plain.iter().copied().collect(),
-            _ => return,
-        };
+        let mut k = 0usize;
         let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
-        for t in targets {
+        loop {
+            let Some(t) = self.hubs.get(h as usize).and_then(|hub| hub.plain_seq.get(k).copied()) else { break };
+            k += 1;
             let Some(Some(pt)) = self.methods[t].ptypes.get(js).copied() else { continue };
-            self.graph.hub_fans[0] += 1;
+            self.graph.hub_fans += 1;
             let di = self.graph.id(Node::P(t, js as u16));
-            let k = match narrowed.iter().position(|x| x.0 == pt) {
+            let k2 = match narrowed.iter().position(|x| x.0 == pt) {
                 Some(k) => k,
                 None => {
                     let out = self.filter(s, pt);
@@ -295,36 +296,10 @@ impl<'a> Engine<'a> {
                     narrowed.len() - 1
                 }
             };
-            let out = std::mem::take(&mut narrowed[k].1);
+            let out = std::mem::take(&mut narrowed[k2].1);
             self.flow_src = si;
             self.add_to_id(di, &out);
-            narrowed[k].1 = out;
-        }
-    }
-
-    /// 方法返回 R(t) 的待推增量经惰性路由边扇出：按各路由枢纽的返回声明类型（= τ(HR)）收窄后推给 HR(h)
-    fn hub_ret_fan(&mut self, t: usize, si: u32, s: &TypeSet) {
-        let hubs: Vec<u32> = match self.plain_rev.get(t) {
-            Some(hs) if !hs.is_empty() => hs.clone(),
-            _ => return,
-        };
-        let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
-        for h in hubs {
-            let Some(rt) = self.hubs[h as usize].ret else { continue };
-            self.graph.hub_fans[1] += 1;
-            let di = self.graph.id(Node::HR(h));
-            let k = match narrowed.iter().position(|x| x.0 == rt) {
-                Some(k) => k,
-                None => {
-                    let out = self.filter(s, rt);
-                    narrowed.push((rt, out));
-                    narrowed.len() - 1
-                }
-            };
-            let out = std::mem::take(&mut narrowed[k].1);
-            self.flow_src = si;
-            self.add_to_id(di, &out);
-            narrowed[k].1 = out;
+            narrowed[k2].1 = out;
         }
     }
 
@@ -398,10 +373,8 @@ impl<'a> Engine<'a> {
             if self.graph.has_hub_route(i) {
                 let ms = self.graph.members.get(&i).cloned().unwrap_or_else(|| vec![i]);
                 for m in ms {
-                    match self.graph.node(m) {
-                        Node::HP(h, j) => self.hub_param_fan(h, j, m, &s),
-                        Node::R(t) => self.hub_ret_fan(t, m, &s),
-                        _ => {}
+                    if let Node::HP(h, j) = self.graph.node(m) {
+                        self.hub_param_fan(h, j, m, &s);
                     }
                 }
             }

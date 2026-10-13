@@ -322,13 +322,12 @@ impl Engine<'_> {
         let khp = stats::kind_ix(&Node::HP(0, 0));
         let (khr, kp, kr) = (stats::kind_ix(&Node::HR(0)), stats::kind_ix(&Node::P(0, 0)), stats::kind_ix(&Node::R(0)));
         eprintln!(
-            "{tag} census edges total={} hub_route(HP→P={} R→HR={} 路由MiB={:.0}) lazy_fan(HP→P={} R→HR={}) top: {}",
+            "{tag} census edges total={} hub_route(HP→P={} R→HR={} 路由MiB={:.0}) lazy_fan(HP→P={}) top: {}",
             edges,
             ek[khp * stats::KINDS + kp],
             ek[kr * stats::KINDS + khr],
             ((ek[khp * stats::KINDS + kp] + ek[kr * stats::KINDS + khr]) * 8) as f64 / 1048576.0,
-            self.graph.hub_fans[0],
-            self.graph.hub_fans[1],
+            self.graph.hub_fans,
             eks.join(" "),
         );
         let kinds: Vec<String> = by_kind
@@ -570,7 +569,7 @@ impl Engine<'_> {
         // 惰性化后边表路由行归零、plain 保留为唯一载体 + 逆表 Σ 同量）
         let hub_plain: usize = self.hubs.iter().map(|h| h.plain.len()).sum();
         eprintln!(
-            "{tag} census hubs n={} recvs={}MiB special={}MiB links={}MiB lambdas={} edged={} plain={}({:.0}MiB) rev={}({:.0}MiB) grow_max={} upgraded={}",
+            "{tag} census hubs n={} recvs={}MiB special={}MiB links={}MiB lambdas={} edged={} plain={}({:.0}MiB) seq={}({:.0}MiB) grow_max={} upgraded={}",
             self.hubs.len(),
             hub_recvs * 4 >> 20,
             hub_special * 4 >> 20,
@@ -579,8 +578,8 @@ impl Engine<'_> {
             hub_edged >> 20,
             hub_plain,
             (hub_plain * 4) as f64 / 1048576.0,
-            self.plain_rev.iter().map(|v| v.len()).sum::<usize>(),
-            self.plain_rev.iter().map(|v| v.capacity() * 4 + 24).sum::<usize>() as f64 / 1048576.0,
+            hub_plain,
+            (self.hubs.iter().map(|h| h.plain_seq.capacity() * 8 + 24).sum::<usize>()) as f64 / 1048576.0,
             self.grow_max,
             self.hub_upgraded,
         );

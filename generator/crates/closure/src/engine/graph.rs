@@ -61,8 +61,8 @@ pub(super) struct FlowGraph {
     pub(super) push_src: Vec<[u64; 3]>,
     /// 观测：收窄记忆命中 / 未命中 / 超预算清空次数
     pub(super) fmemo_stats: [u64; 3],
-    /// 观测（S4 惰性路由）：惰性路由扇出次数——HP→P（形参向）/ R→HR（返回向），取代路由边的推送
-    pub(super) hub_fans: [u64; 2],
+    /// 观测（S4 惰性路由）：HP→P 惰性扇出次数（R→HR 向保持存边，无扇出计数）
+    pub(super) hub_fans: u64,
 }
 
 /// 出度达到此数的源建去重索引；以下逐条比对出边表（多数源只有几条出边）

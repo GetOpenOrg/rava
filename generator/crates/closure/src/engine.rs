@@ -370,9 +370,6 @@ pub struct Engine<'a> {
     hub_upgraded: usize,
     /// 调用点 → 所连枢纽（输出分派结果用）
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
-    /// S4 惰性路由逆表：方法序号 → 中转它的枢纽（`hubs[h].plain` 的逆；R→HR 方向扇出用）。
-    /// HP→P 正向扇出直接读 `hubs[h].plain`，不另建正表
-    plain_rev: Vec<Vec<u32>>,
     /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象链)。
     /// 对象集经差分链内容驻留（§4.20：链中间步只存增量，站点累计集与汇集节点键共享节点）
     gathers: Vec<(gather::Slot, u32, bool)>,
