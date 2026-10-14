@@ -69,6 +69,25 @@ function layout() {
   VIEW.nodes.forEach(n => g.setNode(n.id, { width: W, height: H }));
   VIEW.edges.forEach(e => g.setEdge(e.from, e.to));
   dagre.layout(g);
+  // 列距随间隙边密度自适应：跨列边的竖直过渡都铺在列间隙里，最挤的间隙决定全局列距
+  // （间隙可用宽度 = ranksep − 40；保证相邻竖直段间距 ≥ 12px）
+  const xs0 = VIEW.nodes.map(n => g.node(n.id).x).sort((a, b) => a - b);
+  const cols0 = [];
+  xs0.forEach(x => { if (!cols0.length || x - cols0[cols0.length - 1] > 40) cols0.push(x); });
+  const ci0 = x => { let best = 0; cols0.forEach((c, i) => { if (Math.abs(c - x) < Math.abs(cols0[best] - x)) best = i; }); return best; };
+  const gapCount = {};
+  VIEW.edges.forEach(e => {
+    const a = g.node(e.from), b = g.node(e.to);
+    if (!a || !b) return;
+    const i = ci0(a.x), j = ci0(b.x);
+    if (j > i + 1) { const k = i + Math.floor((j - i) / 2); gapCount[k] = (gapCount[k] || 0) + 1; }
+  });
+  const densest = Math.max(0, ...Object.values(gapCount));
+  const ranksep = Math.min(260, Math.max(90, (densest - 1) * 12 + 40));
+  if (ranksep > 90) {
+    g.setGraph({ rankdir: "LR", nodesep: 22, ranksep, edgesep: 10 });
+    dagre.layout(g); // 拓扑不变，仅按新列距重排坐标
+  }
   // 纵向吸附到泳道带：同泳道内按 dagre 的 y 排序铺开（泳道内每节点独占一行）。
   // n.x/n.y 与 dagre 同语义=节点中心；边不取 dagre 折线，由 renderGraph 按列间隙平滑布线。
   const laneOrder = DATA.lanes.map(l => l.id);
