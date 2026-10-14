@@ -53,6 +53,10 @@ impl<'a> Engine<'a> {
         if let Some(xs) = self.xreaders.get(&m) {
             changed.extend(xs.iter().copied());
         }
+        // `pending_write` 暂缓并入的写站点一并重跑：事件值不变时（如被调返回常量升到 Top）也须按新格补并入
+        if let Some(ps) = self.pending_skips.remove(&m) {
+            changed.extend(ps);
+        }
         if changed.is_empty() {
             return;
         }
@@ -365,7 +369,16 @@ impl<'a> Engine<'a> {
             // static final 由 `<clinit>` 常量求值（Ctx::static_const），其余字段并入值集
             if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 {
                 let key = MemberRef { owner: decl.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
-                self.field_put(&key, super::static_init::write_pv(fd.is_static(), value));
+                // 写入值是被调方法返回、其返回常量格尚未建立（分析次序未定）时不并入：Top 一旦并入不可
+                // 撤回（格只升不降），返回常量随后出现并失效重写时已晚——值集随处理次序摆动
+                //（`pending_write`；次序无关的不动点口径，与 `noreturn.rs` 的「尚无返回」同一原理）
+                let pv = super::static_init::write_pv(fd.is_static(), value);
+                if pv == PV::Top && self.pending_write(m, value) {
+                    self.pending_skips.entry(m).or_default().insert(off);
+                    self.pending_write_note(&key, m, off);
+                } else {
+                    self.field_put(&key, pv);
+                }
                 self.field_strs_put(&key, value);
                 if key.desc == format!("L{};", absint::STRING) {
                     let fi = self.field_node(key);
@@ -417,9 +430,16 @@ impl<'a> Engine<'a> {
         };
         let other = other && (!fresh || self.recv_mark(m, off, FIELD_OTHER));
         if opcode == op::PUTFIELD {
-            // 按对象的字段写入值：新增抽象对象各自并入，其余接收者首次并入通配值（见 `obj_fields.rs`）
+            // 按对象的字段写入值：新增抽象对象各自并入，其余接收者首次并入通配值（见 `obj_fields.rs`）；
+            // 写入值是返回常量未定的被调返回时同样暂不并入（`pending_write`，同上）
             let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
-            self.obj_field_put(&key, &objs, other, &value.map_or(PV::Top, PV::of_ret));
+            let pv = value.map_or(PV::Top, PV::of_ret);
+            if pv == PV::Top && self.pending_write(m, value) {
+                self.pending_skips.entry(m).or_default().insert(off);
+                self.pending_write_note(&key, m, off);
+            } else {
+                self.obj_field_put(&key, &objs, other, &pv);
+            }
         }
         let nodes: Vec<Node> = objs.iter().map(|&o| self.obj_field(o, fi, tid)).collect();
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
@@ -464,6 +484,44 @@ impl<'a> Engine<'a> {
             }
             if first {
                 self.field_handwritten(&decl, &f.name, &f.desc, &via, Some((fi, tid)));
+            }
+        }
+    }
+
+    /// 写入值是否为「返回常量未定」的被调方法返回：值是无标签、来源只有产生它的调用点的引用，该调用点有
+    /// 唯一字节码目标（[`Ctx::call_info`]），且其返回常量格 `rvals` 尚未建立（被调方法还没分析到含返回点的
+    /// 那一轮）。此时并入 Top 不可撤回（格只升不降），而返回常量出现时调用方经 `Dep::Ret` 失效重写本站点
+    /// ——暂不并入即得不依赖处理次序的终态；真不返回的被调方使写入不可达，不并入同样正确
+    ///（`noreturn.rs` 只覆盖调用方返回常量格的同型污染，字段值集这面在
+    /// `docs/plans/2026-10-11-seed-regression-fix.md` §六登记为普遍现象）
+    fn pending_write(&self, m: usize, v: Option<&V>) -> bool {
+        use classfile::{op, Operand};
+        let Some(V::Ref { src, obj: None, .. }) = v else { return false };
+        let [Src::Site(soff)] = &**src else { return false };
+        let key = &self.methods[m].key;
+        let Some(cf) = self.h.class(&key.owner) else { return false };
+        let Some(x) = cf
+            .method(&key.name, &key.desc)
+            .and_then(|t| t.code.as_ref())
+            .and_then(|c| c.insns.iter().find(|x| x.offset == *soff))
+        else { return false };
+        if !matches!(x.opcode, op::INVOKEVIRTUAL | op::INVOKESPECIAL | op::INVOKESTATIC | op::INVOKEINTERFACE) {
+            return false;
+        }
+        let Operand::Method(t, iface) = &x.operand else { return false };
+        let Some(target) = self.ctx.call_info(x.opcode, t, *iface).target.clone() else { return false };
+        // 目标须已建节点（本 apply 先处理调用事件、后处理写入事件，同一次装入内调用边已接）：标记建模 /
+        // 闸门旁路了调用边的站点（`method_marks_site`）其被调方永不分析、返回常量不会出现，仍按 Top 并入
+        if !self.ctx.noreturn.borrow().created(&target) {
+            return false;
+        }
+        self.ctx.rvals.borrow().get(&target).is_none()
+    }
+    /// `pending_write` 暂缓并入的字段写入（临时诊断，RAVA_DBG_FIELD 同键口径）
+    fn pending_write_note(&self, key: &MemberRef, m: usize, off: u32) {
+        if let Ok(want) = std::env::var("RAVA_DBG_FIELD") {
+            if want.split(',').any(|k| k == key.to_string()) {
+                eprintln!("[field-pending] {key} @ {}@{off}（被调返回常量未定，暂不并入）", self.methods[m].key);
             }
         }
     }

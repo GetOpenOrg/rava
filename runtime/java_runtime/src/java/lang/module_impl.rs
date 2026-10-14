@@ -4,6 +4,8 @@ use crate::java::lang::NullPointerException__Methods as _;
 use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::prelude::*;
 use super::Module;
+use super::__ModuleHw;
+use super::__ModuleHw2;
 
 // java.lang.Module 伴生：VM 模块表（HotSpot `Modules` / `ModuleEntryTable` 的可观测部分）。
 //
@@ -19,7 +21,7 @@ use super::Module;
 // 由 javac 与闭包完成，这些边无运行期消费方——本表只承载可观测部分（模块与包的归属及其冲突检查），
 // 与 HotSpot 的异常行为逐条对应。
 
-struct VmModule {
+pub struct VmModule {
     module: Module,
     loader: usize,
     name: std::string::String,
@@ -51,10 +53,11 @@ fn _image_modules() -> Vec<VmModule> {
         .collect()
 }
 
-impl Module {
+impl __ModuleHw for Module {
     /// 引导加载器定义的包 `pkg`（内部形式）所属模块的位置（HotSpot `ClassLoader::get_system_package`
     /// 取包所在模块的 location）；未登记 → None
-    pub fn __vm_boot_package_location(pkg: &str) -> Option<std::string::String> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn __vm_boot_package_location(pkg: &str) -> Option<std::string::String> {
         _vm_modules(|t| {
             t.iter()
                 .find(|e| e.loader == 0 && e.packages.iter().any(|x| x == pkg))
@@ -63,7 +66,8 @@ impl Module {
     }
 
     /// 定义加载器为 `loader` 的包 `pkg`（内部形式）所属的已登记模块；`pkg` 为 None（基本类型）→ java.base
-    pub fn __vm_package_module(loader: Object, pkg: Option<&str>) -> Option<Module> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn __vm_package_module(loader: Object, pkg: Option<&str>) -> Option<Module> {
         let loader = _identity(loader);
         _vm_modules(|t| {
             t.iter()
@@ -137,11 +141,12 @@ fn _check_export(m: &Module, pn: &String, from_word: &str) -> Result<()> {
     }
 }
 
-impl Module {
+impl __ModuleHw2 for Module {
     /// native `defineModule0`：HotSpot `Modules::define_module`——校验名与包，按加载器登记模块及其包；
     /// 重名模块 / 包已属他模块 → IllegalStateException；java.base 已由引导定义。
     #[jvm_native]
-    pub fn defineModule0(module: Module, is_open: bool, _version: String, location: String,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn defineModule0(module: Module, is_open: bool, _version: String, location: String,
                          pns: JArray<Object>) -> Result<()> {
         if _is_null(Clone::clone(&module)) {
             return Err(_npe("Null module object"));
@@ -215,7 +220,8 @@ impl Module {
     /// native `addReads0(from, to)`：HotSpot `Modules::add_reads_module`——from 为 null → NPE；
     /// 读边只服务 VM 链接期访问检查（见本节说明），校验后无可观测状态。
     #[jvm_native]
-    pub fn addReads0(from: Module, _to: Module) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn addReads0(from: Module, _to: Module) -> Result<()> {
         if _is_null(from) {
             return Err(_npe("from_module is null"));
         }
@@ -224,20 +230,23 @@ impl Module {
 
     /// native `addExports0(from, pn, to)`：HotSpot `Modules::add_module_exports`（限定导出）。
     #[jvm_native]
-    pub fn addExports0(from: Module, pn: String, _to: Module) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn addExports0(from: Module, pn: String, _to: Module) -> Result<()> {
         Self::__add_exports(from, pn)
     }
 
     /// native `addExportsToAll0(from, pn)`：HotSpot `add_module_exports`（to 为 null，无限定导出）。
     #[jvm_native]
-    pub fn addExportsToAll0(from: Module, pn: String) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn addExportsToAll0(from: Module, pn: String) -> Result<()> {
         Self::__add_exports(from, pn)
     }
 
     /// native `addExportsToAllUnnamed0(from, pn)`：HotSpot `add_module_exports_to_all_unnamed`——
     /// 检查次序为 module、package（与 add_module_exports 相反）。
     #[jvm_native]
-    pub fn addExportsToAllUnnamed0(from: Module, pn: String) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn addExportsToAllUnnamed0(from: Module, pn: String) -> Result<()> {
         if _is_null(Clone::clone(&from)) {
             return Err(_npe("module is null"));
         }

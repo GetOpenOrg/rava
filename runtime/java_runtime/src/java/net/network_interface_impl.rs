@@ -14,6 +14,7 @@ use crate::java::net::NetworkInterface__Methods as _;
 use crate::prelude::*;
 use super::network_interface::NetworkInterface;
 use super::{Inet4Address, Inet6Address, InetAddress, InterfaceAddress};
+use super::__NetworkInterfaceHw;
 
 /// getifaddrs 的一条地址记录。
 struct IfAddr {
@@ -202,16 +203,18 @@ fn address_bytes(addr: &InetAddress) -> Result<Vec<u8>> {
     Ok(addr.getAddress()?.to_vec().into_iter().map(|b| b as u8).collect())
 }
 
-impl NetworkInterface {
+impl __NetworkInterfaceHw for NetworkInterface {
     /// native `init()`：缓存 JNI 类 / 字段 ID——无需。
     #[jvm_native]
-    pub fn init() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn init() -> Result<()> {
         Ok(())
     }
 
     /// native `getAll()`：全部接口。
     #[jvm_native]
-    pub fn getAll() -> Result<JArray<NetworkInterface>> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getAll() -> Result<JArray<NetworkInterface>> {
         let mut out = Vec::new();
         for info in enumerate() {
             out.push(build(&info)?);
@@ -221,7 +224,8 @@ impl NetworkInterface {
 
     /// native `getByName0(String)`：按名查找；不存在返回 null。
     #[jvm_native]
-    pub fn getByName0(name: String) -> Result<NetworkInterface> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getByName0(name: String) -> Result<NetworkInterface> {
         match find(&name.to_string()) {
             Some(info) => build(&info),
             None => Ok(NetworkInterface::default()),
@@ -230,7 +234,8 @@ impl NetworkInterface {
 
     /// native `getByIndex0(int)`：按 index 查找；不存在返回 null。
     #[jvm_native]
-    pub fn getByIndex0(index: i32) -> Result<NetworkInterface> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getByIndex0(index: i32) -> Result<NetworkInterface> {
         match enumerate().into_iter().find(|i| if_index(&i.name) == index) {
             Some(info) => build(&info),
             None => Ok(NetworkInterface::default()),
@@ -239,14 +244,16 @@ impl NetworkInterface {
 
     /// native `boundInetAddress0(InetAddress)`：地址是否绑定在某个接口上。
     #[jvm_native]
-    pub fn boundInetAddress0(addr: InetAddress) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn boundInetAddress0(addr: InetAddress) -> Result<bool> {
         let bytes = address_bytes(&addr)?;
         Ok(enumerate().iter().any(|i| i.addrs.iter().any(|a| a.addr == bytes)))
     }
 
     /// native `getByInetAddress0(InetAddress)`：绑定该地址的接口；无则 null。
     #[jvm_native]
-    pub fn getByInetAddress0(addr: InetAddress) -> Result<NetworkInterface> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getByInetAddress0(addr: InetAddress) -> Result<NetworkInterface> {
         let bytes = address_bytes(&addr)?;
         match enumerate().into_iter().find(|i| i.addrs.iter().any(|a| a.addr == bytes)) {
             Some(info) => build(&info),
@@ -255,30 +262,35 @@ impl NetworkInterface {
     }
 
     #[jvm_native]
-    pub fn isUp0(name: String, _index: i32) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isUp0(name: String, _index: i32) -> Result<bool> {
         let f = flags_of(&name);
         Ok(f & libc::IFF_UP as u32 != 0 && f & libc::IFF_RUNNING as u32 != 0)
     }
 
     #[jvm_native]
-    pub fn isLoopback0(name: String, _index: i32) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isLoopback0(name: String, _index: i32) -> Result<bool> {
         Ok(flags_of(&name) & libc::IFF_LOOPBACK as u32 != 0)
     }
 
     #[jvm_native]
-    pub fn supportsMulticast0(name: String, _index: i32) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn supportsMulticast0(name: String, _index: i32) -> Result<bool> {
         Ok(flags_of(&name) & libc::IFF_MULTICAST as u32 != 0)
     }
 
     #[jvm_native]
-    pub fn isP2P0(name: String, _index: i32) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isP2P0(name: String, _index: i32) -> Result<bool> {
         Ok(flags_of(&name) & libc::IFF_POINTOPOINT as u32 != 0)
     }
 
     /// native `getMacAddr0(byte[] inAddr, String name, int index)`：硬件地址；无硬件地址或全零
     /// （loopback 等）返回 null（JDK getMacAddress 同）。
     #[jvm_native]
-    pub fn getMacAddr0(_in_addr: JArray<i8>, name: String, _index: i32) -> Result<JArray<i8>> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getMacAddr0(_in_addr: JArray<i8>, name: String, _index: i32) -> Result<JArray<i8>> {
         let mac: Option<Vec<u8>> = sysfs(&name.to_string(), "address").map(|s| {
             s.split(':').filter_map(|h| u8::from_str_radix(h, 16).ok()).collect()
         });
@@ -291,7 +303,8 @@ impl NetworkInterface {
     /// native `getMTU0(String name, int index)`：与 JDK `NetworkInterface.c` 同取法——数据报套接字上
     /// `ioctl(SIOCGIFMTU)`；不可得返回 -1。
     #[jvm_native]
-    pub fn getMTU0(name: String, _index: i32) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getMTU0(name: String, _index: i32) -> Result<i32> {
         Ok(ioctl_mtu(&name.to_string()).unwrap_or(-1))
     }
 }

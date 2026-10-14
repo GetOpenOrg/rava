@@ -1,7 +1,8 @@
 use crate::prelude::*;
 use super::*;
+use super::__RuntimeHw;
 
-impl Runtime {
+impl __RuntimeHw for Runtime {
     /// native availableProcessors()：可用处理器数（FS-T3 最终态）。
     ///
     /// 如实报告宿主可用并行度（`std::thread::available_parallelism`，与 HotSpot
@@ -10,33 +11,38 @@ impl Runtime {
     /// 并行流拆分、ConcurrentHashMap / Striped64 的 NCPU 阈值。线程是真实 OS 线程
     /// （#42），公共池工作线程为 OS 线程真并行执行。
     #[jvm_native]
-    pub fn availableProcessors(&self) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn availableProcessors(&self) -> Result<i32> {
         Ok(std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(1))
     }
 
     /// native `maxMemory()`：原生二进制无 Java 堆上限——按 JVM 缺省 MaxHeapSize（物理内存 1/4）
     /// 报告；物理内存不可得时 Long.MAX_VALUE（JDK「无上限」约定）。
     #[jvm_native]
-    pub fn maxMemory(&self) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn maxMemory(&self) -> Result<i64> {
         Ok(crate::posix::default_max_heap())
     }
 
     /// native `totalMemory()`：当前已向 OS 申请的内存（进程常驻集，按平台取值，见 `resident_bytes`）。
     #[jvm_native]
-    pub fn totalMemory(&self) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn totalMemory(&self) -> Result<i64> {
         Ok(resident_bytes().unwrap_or(0) as i64)
     }
 
     /// native `freeMemory()`：原生内存由分配器即时归还，已申请而空闲的部分不可观察，恒 0
     /// （`totalMemory() - freeMemory()` 即已用内存，与 JVM 的用法语义一致）。
     #[jvm_native]
-    pub fn freeMemory(&self) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn freeMemory(&self) -> Result<i64> {
         Ok(0)
     }
 
     /// native `gc()`：引用计数即时回收，无可触发的收集周期——no-op。
     #[jvm_native]
-    pub fn gc(&self) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn gc(&self) -> Result<()> {
         Ok(())
     }
 }

@@ -95,6 +95,8 @@ impl Engine<'_> {
             hist[i].1 += cs.len() as u64;
         }
         eprintln!("{tag} ctxhist (members/nodes) <=8:{:?} <=64:{:?} <=256:{:?} <=1024:{:?} >1024:{:?}", hist[0], hist[1], hist[2], hist[3], hist[4]);
+        // S7 硬上限水位：阈值 / 已封顶成员数 / 折叠次数（语料零触发时应 capped=0 widened=0）
+        eprintln!("{tag} ctxcap cap={} capped={} widened={}", self.ctx_cap, self.ctx_capped.len(), self.ctx_widened);
         let mut ms: Vec<(&usize, &Vec<u32>)> = per_m.iter().collect();
         ms.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
         for (&b, cs) in ms.into_iter().take(TOP) {

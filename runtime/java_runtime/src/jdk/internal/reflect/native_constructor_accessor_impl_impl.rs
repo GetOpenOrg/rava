@@ -10,6 +10,9 @@ use crate::prelude::*;
 use super::native_constructor_accessor_impl::NativeConstructorAccessorImpl;
 use crate::java::lang::reflect::Constructor;
 use crate::java::lang::reflect::InvocationTargetException;
+use super::__NativeConstructorAccessorImplHw;
+use crate::java::lang::reflect::__MethodHw as _;
+use crate::java::lang::reflect::__ConstructorHw as _;
 
 /// 目标抛出的异常包装为 InvocationTargetException（JVM 同）；实参拆箱失败的
 /// IllegalArgumentException 直抛。
@@ -24,9 +27,10 @@ fn __wrap_target_exception(e: crate::error::JvmError) -> crate::error::JvmError 
     }
 }
 
-impl NativeConstructorAccessorImpl {
+impl __NativeConstructorAccessorImplHw for NativeConstructorAccessorImpl {
     #[jvm_native]
-    pub fn newInstance0(c: Constructor<Object>, args: JArray<Object>) -> Result<Object> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn newInstance0(c: Constructor<Object>, args: JArray<Object>) -> Result<Object> {
         let Some((cls, desc)) = c.__reflect_key() else {
             panic!("stub: NativeConstructorAccessorImpl.newInstance0 无声明键（非表构造的 Constructor）");
         };

@@ -54,6 +54,8 @@ pub struct ScopeState {
     derived: BTreeSet<(String, String)>,
     /// 用到方法 trait（`X__Methods`，宏生成）的类：匿名导入 `use …::X__Methods as _;`，不认领名字
     methods: BTreeSet<String>,
+    /// 用到手写扩展 trait（§9.9 K4-2a，`__XHw{N}`）的类 → 块序号：匿名导入，不认领名字
+    hw: BTreeMap<String, BTreeSet<u32>>,
 }
 
 impl ScopeState {
@@ -70,6 +72,11 @@ impl ScopeState {
     /// 方法 trait 记录（binary 序）
     pub fn methods_traits(&self) -> impl Iterator<Item = &str> {
         self.methods.iter().map(String::as_str)
+    }
+
+    /// 手写扩展 trait 记录（binary 序）：(binary, 块序号)
+    pub fn hw_traits(&self) -> impl Iterator<Item = (&str, u32)> {
+        self.hw.iter().flat_map(|(b, ords)| ords.iter().map(move |o| (b.as_str(), *o)))
     }
 
     /// 方法 trait 记录快照（按方法体前后差分出「该方法体所需的方法 trait」，§9.9 K3 收尾：
@@ -172,6 +179,11 @@ impl NameScope {
         if !st.methods.contains(binary) {
             st.methods.insert(binary.to_string());
         }
+    }
+
+    /// 登记手写扩展 trait（§9.9 K4-2a）某块的使用（匿名导入，不认领名字）
+    pub fn hw_trait(&self, binary: &str, ord: u32) {
+        self.lock().hw.entry(binary.to_string()).or_default().insert(ord);
     }
 
     /// 显示名 → binary（仅本作用域）

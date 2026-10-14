@@ -13,6 +13,7 @@ use super::unix_mount_entry::UnixMountEntry;
 #[cfg(target_os = "macos")]
 use super::unix_native_dispatcher_impl::errno;
 use super::unix_native_dispatcher_impl::unix_exception;
+use super::__BsdNativeDispatcherHw;
 
 /// commonattr 所选时间属性 → timespec 缓冲（创建、修改、访问的位序）。
 #[cfg(target_os = "macos")]
@@ -33,7 +34,7 @@ fn attr_times(commonattr: i32, modify: i64, access: i64, create: i64) -> Vec<lib
 }
 
 /// setattrlist 的作用对象。
-enum Target {
+pub enum Target {
     Path(i64),
     Fd(i32),
 }
@@ -73,55 +74,63 @@ fn set_times(_target: Target, _commonattr: i32, _modify: i64, _access: i64, _cre
     Err(unix_exception(libc::ENOTSUP))
 }
 
-impl BsdNativeDispatcher {
+impl __BsdNativeDispatcherHw for BsdNativeDispatcher {
     /// native `initIDs()`：本模型按名访问字段，无字段 ID 需缓存。
     #[jvm_native]
-    pub fn initIDs() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn initIDs() -> Result<()> {
         Ok(())
     }
 
     /// native `setattrlist0(long path, int commonattr, long modTime, long accTime, long createTime, long options)`。
     #[jvm_native]
-    pub fn setattrlist0(path: i64, commonattr: i32, modify: i64, access: i64, create: i64, options: i64) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn setattrlist0(path: i64, commonattr: i32, modify: i64, access: i64, create: i64, options: i64) -> Result<()> {
         set_times(Target::Path(path), commonattr, modify, access, create, options)
     }
 
     /// native `fsetattrlist0(int fd, int commonattr, long modTime, long accTime, long createTime, long options)`。
     #[jvm_native]
-    pub fn fsetattrlist0(fd: i32, commonattr: i32, modify: i64, access: i64, create: i64, options: i64) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn fsetattrlist0(fd: i32, commonattr: i32, modify: i64, access: i64, create: i64, options: i64) -> Result<()> {
         set_times(Target::Fd(fd), commonattr, modify, access, create, options)
     }
 
     /// native `getmntonname0(long pathAddress)`：statfs(2) 取所在文件系统挂载点 `f_mntonname`。
     #[jvm_native]
-    pub fn getmntonname0(path: i64) -> Result<JArray<i8>> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getmntonname0(path: i64) -> Result<JArray<i8>> {
         mount_point(path)
     }
 
     /// native `getfsstat()`：getfsstat(2) 快照全部挂载项，返回迭代器句柄。先计数再取（多留 16 项，
     /// 防两次调用之间新挂载），任一次结果 ≤ 0 抛 UnixException(errno)。
     #[jvm_native]
-    pub fn getfsstat() -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getfsstat() -> Result<i64> {
         fs_stat_open()
     }
 
     /// native `fsstatEntry(long iter, UnixMountEntry entry)`：取下一挂载项填 name（f_mntfromname）/
     /// dir（f_mntonname）/ fstype（f_fstypename）/ opts（MNT_RDONLY ? "ro" : "rw"），返回 0；取尽返回 -1。
     #[jvm_native]
-    pub fn fsstatEntry(iter: i64, entry: UnixMountEntry) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn fsstatEntry(iter: i64, entry: UnixMountEntry) -> Result<i32> {
         fs_stat_next(iter, &entry)
     }
 
     /// native `endfsstat(long iter)`：释放迭代器。
     #[jvm_native]
-    pub fn endfsstat(iter: i64) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn endfsstat(iter: i64) -> Result<()> {
         fs_stat_close(iter);
         Ok(())
     }
 
     /// native `clonefile0(long src, long dst, int flags)`：clonefile(2)，返回 errno（0 = 成功）。
     #[jvm_native]
-    pub fn clonefile0(src: i64, dst: i64, flags: i32) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn clonefile0(src: i64, dst: i64, flags: i32) -> Result<i32> {
         Ok(clone_file(src, dst, flags))
     }
 }

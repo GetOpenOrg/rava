@@ -1745,6 +1745,7 @@ status = "pending"
 owner = "fix-iface-obj-overload"
 diagnose = "看报错方法是否为根类公开方法（equals / hashCode / toString）且接收者为接口；查 instr/src/naming.rs mangle_uncached 与 input/src/plan.rs root_keyed 是否同口径"
 doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md C 节；翻译对照 §13.4"
+since = "2026-10-11"
 
 [[pattern]]
 id = "inherited-covariant-bridge-slot-unfilled"
@@ -1759,6 +1760,7 @@ status = "pending"
 owner = "pilot-jackson-core（框架矩阵 #3）"
 diagnose = "对照存根所在类与接收者生成文件：接收者有 inherited_from 的真实方法成员、缺 virtual_in=<祖先> 的 *_super_<m> 桥成员即本条"
 doc = "docs/plans/2026-10-03-framework-pilot-test-matrix.md #3 交付记录"
+since = "2026-10-10"
 
 [[pattern]]
 id = "region-escape-after-group-free"
@@ -1823,137 +1825,16 @@ doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「协议面保
 since = "2026-10-12"
 
 [[pattern]]
-id = "user-crate-methods-trait-package-path"
-stage = "compile"
-symptom = "多文件用户项目（com.example.* 包）rs 编译 E0432：unresolved import `com::example::<pkg>::<Main>__Methods`（main.rs 的匿名导入行），连带 E0599（no associated function named `main`）"
-match = [["unresolved import", "com::example", "__Methods"],
-         ["unresolved import", "__Methods", "main.rs"]]
-tests = ["guava/GuavaCollectionsDemo（GOLDEN OK）", "templates/ThymeleafDemo（同链验）", "esper/EsperPatternDemo、EsperLengthWindowDemo（闭包病理层阻断，未达本层——见 cause 尾注）"]
-cause = "K3 给 main.rs 的主类方法 trait 匿名导入复用了类型导入的包路径形（`<包>::<类>__Methods as _`）：JDK / lib crate 的包 mod.rs 有 glob 再导出（`pub use <模块>::*;`）所以包路径成立，而用户 crate 的包 mod.rs 只按名再导出类型本体（P5a(a) 既有设计），方法 trait 是宏在类模块内的展开项、不在包路径上。语料 e2e 全部无包声明（主类模块即顶层模块，两形同路），该缝只在多文件项目模式暴露。修法（entry.rs）：主类与钩子类的 trait 导入统一走 phase2::uses::class_use_path 的用户类定向——模块路径 `crate::<包>::<模块>::<类>`（与 imports/fill 同 crate 定向、钩子路径同一口径），并顺带收编 class_init_hooks 的手拼路径（包段关键字转义同源）。尾注：esper 两入口（PatternDemo / LengthWindowDemo，项目模式共用闭包输入）在 32G 硬上限内闭包不收敛（RSS 33.1G 被杀，转译阶段），属新发现的病态闭包（此前被双版本失配挡住，未入五库清单），归引擎线——阻断层在 E0432 之前（闭包期，未到 rs 编译），与本条无关"
-introduced = "430f6bd8（s7-k3 K3：main.rs 钩子类与主类导入方法 trait；合入 batch-1013，多文件项目模式当时未验收 rs 编译）"
-fixed = ["494f3d90（b1015-fix；验收：guava/GuavaCollectionsDemo GOLDEN OK——E0432 修后直达转绿，未见预言的 E0308 残留（j25-r2-fix SAM 桥接已收）；templates/ThymeleafDemo 同链验；四例种子 0/1/2 闭包集合对 batch-1015（63617c4d）全同 + 确定性两项 + generator cargo check --tests 过）"]
+id = "field-write-pending-ret-lattice"
+stage = "unit"
+symptom = "closure_independent_of_hash_seed 失败：TestSerialLookupPairing 种子间类集合差 ProtectionDomain$JavaSecurityAccessImpl + JavaSecurityAccess 两类（差集随扰动翻面）"
+match = []
+tests = ["closure_independent_of_hash_seed"]
+cause = "字段写入值是被调方法的返回、被调返回常量格 rvals 尚未建立时（调用方先于被调方含返回点的轮次分析），oracle 答 Unknown 经 putfield 以 Top 并入全局字段值集后不可撤回（格只升不降）；rvals 随后出现经 Dep::Ret 失效重写已晚——写入是否污染依赖分析次序。清单返回事实（getSecurityManager 恒 null）只消除被调体内部的不确定，消除不了这个「写先于读常量」次序窗口；任何手写层 / 输入扰动（阶段 1/2 的 obj_ref/sync_model 挪移等）都会翻出面。修法（cc2cfc3e）：pending_write——写入值恰是无标签、单来源（产生它的调用点）的引用且调用点有唯一字节码目标、目标已建节点、rvals 缺席时暂不并入（fvals/ovals/owild），pending_skips 登记的偏移在方法失效重算时并入 changed 强制重跑（事件值不变也重跑，返回常量升到 Top 时按新格补并入）；真不返回的被调方使写入不可达，不并入同样正确；标记建模旁路调用边的站点（无节点）不属暂态、仍按 Top 并入"
+introduced = "潜伏于闭包分析器返回常量机制自始；e6edfa24/a867b085（S7 K4 阶段 1/2 手写层挪移）扰动次序翻出"
+fixed = ["cc2cfc3e（验收 s7k4s-det1：hash_seed + order 2 过 0 失；s7k4s-tslp1/seed1 四例种子 0/1/2 对 e9597fef ALL-IDENTICAL；s7k4s-link1 HelloWorld+TestStackWalkerFrames 链接级 PASS）"]
 status = "fixed"
-owner = "b1015-fix"
-diagnose = "E0432 指向 user crate 的 `use <包路径>::X__Methods as _;`：X 是用户类（com.example.* 等）即本条；对照 scratch 里 user/src/<包>/mod.rs 的再导出形态（按名 vs glob）与类模块内 trait 展开位置。JDK / lib 类的包路径形不受影响（那边有 glob 再导出）"
-doc = "docs/plans/2026-10-04-s7-object-handle-descriptor.md §9.9「用户 crate 方法 trait 导入路径统一」"
-since = "2026-10-13"
-
-[[pattern]]
-id = "escape-lambda-virtual-cycle"
-stage = "transpile"
-symptom = "JDK 25：转译在闭包完成后 abort——thread '<unknown>' has overflowed its stack（fatal runtime error: stack overflow），RUST_MIN_STACK=128M 仍溢出（非深而有限）"
-match = [["has overflowed its stack", "closure-cache"], ["fatal runtime error: stack overflow, aborting"]]
-tests = ["FunctionalCompositionTest"]  # rA/rB 复跑将继续认领同簇（见 docs/reports/2026-10-12-jdk25-sem-triage.md §2.3）
-cause = "逃逸分析 escape::analysis 的 call_virtual ↔ call_lambda 纯 Rust 互递归不经 call_summary 工作列表：OLD/FRESH_UNKNOWN 接收者上的 call_virtual 按 SAM 名遍历全部 lambda 站点（analysis.rs:485），call_lambda 对 5|9（invokeVirtual/Interface）实现句柄又直呼 call_virtual、接收者回落 cap=OLD（analysis.rs:549）。SAM 名与实现名互为对方（或单站点 sam==实现名，如 compare/compare、apply/apply 方法引用）即成无限环。JDK 21 档案无此形态，JDK 25 档案首次触达（gdb 栈作业 j25s-rB/sg1）。与 transpile-stack-overflow（consteval 环，b4da5107）不同根因。修法：在途 lambda 站点键 (owner,name,desc) 判环——站点有限，重复键必为环；命中按未知被调保守返回（同 call_target 的 Callee::Native 口径），无环链结果不变"
-introduced = ""
-fixed = ["304edfb1（j25-sem）"]
-status = "pending"
-owner = "j25-sem（JDK25 语义分诊线）"
-diagnose = "转译日志闭包阶段完成后栈溢出即疑本条；gdb -batch -ex run -ex 'bt 30' 看是否 call_virtual(analysis.rs:485) ↔ call_lambda(analysis.rs:549) 交替帧。注意与 consteval 环（b4da5107，穿分派转发方法）区分：本条发生在 emit 阶段的逃逸分析"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md"
-since = "2026-10-12"
-
-[[pattern]]
-id = "sam-entry-erased-mismatch"
-stage = "compile"
-symptom = "JDK 25：java_base_decl 全类 E0308 mismatched types 于 java/lang/foreign/symbol_lookup.rs（I__Lambda 的 vtable 条目）——expected `Result<Optional<MemorySegment>, _>`, found `Result<Optional<Object>, JvmError>`（或同头泛型类不同实例化的对应形态）"
-match = [["error[E0308]", "symbol_lookup.rs"], ["expected `Result<Optional<"], ["__Lambda"]]
-tests = ["JDK25 复跑 65 例编译失败族（TestXmlDomParse、DeepCopy、StockTrans、TestSerialDefaultSuid 等一切含 java_base_decl 构建的用例）"]
-cause = "SAM 合成对象（sam_objects.rs）的 vtable 条目签名取自接口发射的擦除声明（erased_declaration——具体参数化类型按 Signature 属性恢复，如 JDK25 SymbolLookup.find 的 Optional<MemorySegment>），闭包 fn 类型取自 SAM 描述符擦除视图（Optional<Object>）：接口描述符只到裸 Optional，泛型实参两视图分歧，`(self.0)(args)` 直呼即 E0308。JDK21 无以具体参数化类型为 SAM 返回的函数式接口，JDK25 首触（java.lang.foreign.SymbolLookup 并入闭包档案）。修法：条目签名与擦除签名逐位置比对，分歧位置经 Object 边界桥接（装箱再按目标类型 From<Object> 擦除重建，与宏 result=\"checkcast\" 同口径）——参数与返回两向同规则"
-introduced = "JDK 25 档案首次触达（e44f78d6 主会话复跑 65 例）"
-fixed = ["e05dcd0a（j25-r2）"]
-status = "fixed"
-owner = "j25-r2（JDK25 语义第二轮）"
-diagnose = "E0308 指到某接口 I__Lambda 的 vtable 条目、期望/实参为同头不同实参的泛型实例化即本条；无泛型分歧的 E0308 另查"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
-since = "2026-10-13"
-
-[[pattern]]
-id = "mh-resolve-handwritten-meta-pruned"
-stage = "run"
-symptom = "JDK 25：java.lang.InternalError 包裹 NoSuchMethodException: no such method: jdk.internal.misc.Unsafe.get{Int,Double,Reference,...}(Object,long).../invokeVirtual，栈顶 DirectMethodHandle.makePreparedFieldLambdaForm → MethodHandleNatives.resolve(Native Method)；一切经 Field.get / VarHandle / 方法句柄字段访问的用例首访即挂"
-match = [["no such method: jdk.internal.misc.Unsafe.get"], ["DirectMethodHandle.makePreparedFieldLambdaForm", "MethodHandleNatives.resolve"]]
-tests = ["JDK25 复跑 ~25 例（TestGetFields、FieldDemo、TestReflectProbe、TestBoxedValueSemantics、TestMethodHandleDirect、TestHeapArrayAtomicView、TestAnnotationDrivenRunner 等）"]
-cause = "JDK25 DirectMethodHandle 改经 unsafeMethodName 辅助取 Unsafe 访问器名（switch-map 数组 + StringBuilder 拼接，参数含运行期 Wrapper），分析器推不出按名反射事实（JDK21 为 LambdaForm$Kind.methodName 枚举常量字段读，可折叠）→ Unsafe 不入 meta_method_classes → 档案侧成员表 Keep 裁剪把手写边界类的方法行清零 → 运行期 resolve_method 查 __declared_method_meta 落空抛 NoSuchMethodError。修法：手写边界类（壳带 #[impl_methods] 标记，约 76 类）的方法表行不随反射事实裁剪——成员由手写层维护，MemberName 可在运行期以计算名触达是这类类的固有形态（JDK21 侧这些类并非全在事实集：此前 0 行属裁剪伪影，修复后按真实声明应答，方向贴近 JVM 语义）"
-introduced = "JDK 25 档案首次触达"
-fixed = ["979b759a（j25-r2）"]
-status = "pending"
-owner = "j25-r2（JDK25 语义第二轮）"
-diagnose = "NoSuchMethodError 出自 MethodHandleNatives.resolve 且目标类为手写边界类（runtime/java_runtime/src 有其 *_impl.rs）即本条；查该类在 meta_tables.rs 的行是否被 Keep 裁空"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
-since = "2026-10-13"
-
-[[pattern]]
-id = "folds-live-call-dead-fallthrough"
-stage = "transpile"
-symptom = "转译失败：折叠点不一致：X.main:([Ljava/lang/String;)V: 活指令 pc=N invokeinterface 顺序落入 dead_pcs（前置 [closure] folds 自检违约同 pcs）"
-match = [["活指令 pc=", "顺序落入 dead_pcs"], ["folds 自检违约"]]
-tests = ["TestCollectionsFactories（pc=122,300）", "TestListOf（pc=635）"]
-cause = "调用点在每个到达克隆里都不正常返回（如 JDK25 Set.of() 不可变集合 add 恒抛 UnsupportedOperationException——后续 pop/goto 不可达），但方法组无具体求值克隆时 report.rs 只把违约原样导出，发射层 apply_fold 拒绝。顺序后继在全部克隆不可达而调用点活：常量折叠的分支指令本身可达，造不出该形态，语义上必为不返回调用。修法：调用点形态（Operand::Method）的违约一律按不返回导出（noreturn_calls），撤 is_concrete 门控"
-introduced = "JDK 25 语料首触（javac 25 对不可变集合 add 的调用形态）"
-fixed = ["e05dcd0a（j25-r2）"]
-status = "fixed"
-owner = "j25-r2（JDK25 语义第二轮）"
-diagnose = "转译错误带「活指令 … 顺序落入 dead_pcs」即本条；javap 看 pc 处是否调用指令、后继是否 try 内恒抛路径"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
-since = "2026-10-13"
-
-[[pattern]]
-id = "typeswitch-primitive-class-label"
-stage = "transpile"
-symptom = "转译失败：超出 javac 产出范围的字节码形态：switch 标签形态 Dynamic(N, \"I\", \"Ljava/lang/Class;\")（N 为 ConstantBootstraps.primitiveClass 引导方法索引）"
-match = [["switch 标签形态 Dynamic("]]
-tests = ["TestPatternSlotReuse"]
-cause = "对象 switch 的基本类型无条件模式（case int 等）以 ConstantBootstraps.primitiveClass 的 condy 装载类字面量（JDK21+ javac 同形态，语料首触）；labels() 未识别该 condy。typeSwitch 语义：基本类型标签匹配对应包装类实例。修法：bsm 为 primitiveClass 且描述符 Ljava/lang/Class; 的 Dynamic 标签按名（基本类型描述符）经 wrapper_of 归一为装箱类 Label::Class"
-introduced = "语料首触（模式匹配 switch 基本类型 case）"
-fixed = ["e05dcd0a（j25-r2）"]
-status = "fixed"
-owner = "j25-r2（JDK25 语义第二轮）"
-diagnose = "switch 标签形态 Dynamic 报错即查引导方法是否 primitiveClass"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
-since = "2026-10-13"
-
-[[pattern]]
-id = "console-clinit-stream-encoding-null"
-stage = "run"
-symptom = "JDK 25：ExceptionInInitializerError 源于 Console.<clinit> → Charset.forName 抛 IllegalArgumentException: Null charset name（栈经 System.console → SharedSecrets.getJavaIOAccess → Unsafe.ensureClassInitialized0）"
-match = [["Null charset name", "java.io.Console"], ["ensureClassInitialized0", "Console.<clinit>"]]
-tests = ["CheckOutputDeviceIsATerminal"]
-cause = "system_props_raw_impl 的 tty_encoding 只在流为终端时给值，重定向（e2e 管道）下 stdout/stdin.encoding 为 null；JDK25 Console.<clinit> 以其为 Charset.forName 实参（JDK21 Console 不读）。实测 JDK21/25 管道下 stdout.encoding=UTF-8、JDK25 stdin.encoding 亦非 null（JEP 400 缺省字符集）。修法：非终端流按 UTF-8 而非 null"
-introduced = "JDK 25 首触"
-fixed = ["e05dcd0a（j25-r2）"]
-status = "fixed"
-owner = "j25-r2（JDK25 语义第二轮）"
-diagnose = "Null charset name + Console.<clinit> 即查标准流编码属性"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
-since = "2026-10-13"
-
-[[pattern]]
-id = "jdk25-getclasscontext-extra-frame"
-stage = "run"
-symptom = "JDK 25：SecurityManager.getClassContext()（StackWalker 实现，JDK25 起非 native）结果比 JVM 多一个 java.lang.SecurityManager 帧——TestClassContextDispatch / TestSecurityManagerContext 输出行首多 [java.lang.SecurityManager, ...]"
-match = [["java.lang.SecurityManager, Test"], ["getClassContext"]]
-tests = ["TestClassContextDispatch", "TestSecurityManagerContext"]
-cause = "JDK25 getClassContext = STACK_WALKER.walk(s -> s.map(declaringClass).skip(1).toArray())；实测真机 JDK25 流头恰为 SecurityManager.getClassContext（skip(1) 吃掉）。我们的帧枚举在 walk 头部多一帧（疑 walk 回调帧 lambda$getClassContext$0——声明类同为 SecurityManager——或 walker 机制帧过滤口径差一）。JDK21 该方法是手写 native（帧过滤自洽），故 JDK21 过、JDK25 首触。候选修法：__anchor_stream 的 walker 实现帧过滤口径对齐 HotSpot（从 walk 调用者帧起取），或在 _is_walker_impl 集合补 JDK25 新增的机制帧持有类"
-introduced = "JDK 25 首触（getClassContext 改 StackWalker 实现）"
-fixed = []
-status = "open"
-owner = "待认领（需运行期帧列表取证：j25r 复跑产物或 gdb）"
-diagnose = "getClassContext 输出首帧 java.lang.SecurityManager 且长度比 expected 多 1 即本条"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
-since = "2026-10-13"
-
-[[pattern]]
-id = "jdk25-version-output-diff"
-stage = "output"
-symptom = "JDK 25 转译体输出与 expected（参考构建 21.0.11 生成）差在 JDK 行为本身：hex 浮点解析错误消息（multiple points vs For input string）、Thread.sleep 帧链（sleepNanos0/sleepNanos vs sleep0）、Object.wait 行号（389/351 vs 366/339）、时区短名（GMT+08:00 vs CST）"
-match = [["NFE multiple points", "0x1"], ["sleepNanos0", "native=true"], ["Object.wait Object.java:389"], ["zone=", "GMT+08:00"]]
-tests = ["TestParseDoubleEdge", "TestNativeFrameTrace", "TestObjectWaitFrames", "TestSimpleDateFormatRound"]
-cause = "expected 由参考构建 JDK 21.0.11 生成、被测为 JDK 25 转译体：两版 JDK 自身行为差异（FloatingDecimal 错误分类、Thread.sleep→sleepNanos 链、Object.java 行号、时区显示名策略）。转译体输出与真机 JDK25 逐字一致（本机 /usr/lib/jvm/java-25 实测核对），非转译缺陷。处置属口径：JDK25 档 expected 重新生成（refjdk 25）或按 JDK 版本分档 expected，归主会话裁决"
-introduced = "JDK 25 扫描口径（expected=21 生成）"
-fixed = []
-status = "open"
-owner = "主会话裁决（expected 口径）；非转译缺陷"
-diagnose = "输出差异行先在本机真机 JDK21/25 双跑对照：两侧各与哪个版本一致即定归因"
-doc = "docs/reports/2026-10-12-jdk25-sem-triage.md 第二轮"
-since = "2026-10-13"
+owner = "s7-k4（K4-2a 交接的确定性遗留）"
+diagnose = "cargo test closure_cli closure_independent 或 scripts/diag/s7k6_seed_sets.sh 多种子对照；RAVA_DBG_FIELD=<字段键> 看 [field-put] 是否先 Top 后常量（先写后立返回常量的次序窗口铁证）；--why 差异类看引入链是否经某 ifnull 守卫的字段读"
+doc = "docs/plans/2026-10-11-seed-regression-fix.md §七、S7 计划 §9.9 K4 节确定性遗留闭环"
+since = "2026-10-14"

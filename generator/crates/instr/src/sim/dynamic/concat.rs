@@ -234,6 +234,8 @@ pub(super) fn concat_from_stack(
         Some(parts) => parts,
         None => args.into_iter().map(ConcatPart::Arg).collect(),
     };
+    // K4-2a：拼接首段走手写 `String::of`（`__StringHw`），按锚点名登记
+    env.ctx.ty.use_hw(ty::consts::STRING, "of");
     sim.push(Expr::Lit(Lit::JStringConcat(parts)), string_t);
     Ok(())
 }

@@ -27,6 +27,10 @@ use crate::text::scratch_pkg_version;
 /// overlay 清单文件（scratch 根下）：上轮落盘的手写文件路径（相对 scratch 根，`/` 分隔，每行一条）
 pub const LEDGER: &str = ".rava_overlay";
 
+/// 标记层基础 crate 目录名（§9.9 K4）：真源 runtime/java_marker，镜像进 scratch 同名目录，
+/// 由声明层 crate 依赖（置于声明链之下）
+pub const MARKER_CRATE: &str = "java_marker";
+
 const EMPTY_PKG_MOD: &str = "// 空包模块（overlay）：本包无生成类时 lib.rs 的\n\
 // `pub mod` 声明仍需可解析；有生成类时被 codegen 覆写。\n";
 
@@ -138,6 +142,13 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, dirs: &JdkDirs, clean
     let vendored = super::vendor::vendor_siblings(out_dir, runtime_dir)?;
     let cargo = super::vendor::redirect_siblings(&rename_package(&cargo, &dirs.decl), &vendored)
         .replace("version = \"0.1.0\"", &format!("version = \"{}\"", scratch_pkg_version(out_dir)));
+    // 标记层基础（§9.9 K4）：声明层 crate 依赖 scratch 内的 java_marker（真源 Cargo.toml 的
+    // path = "../java_marker" 在 scratch 目录结构下恰好同名同形，此处只补缺失时注入）
+    let cargo = if cargo.contains("java_marker") {
+        cargo
+    } else {
+        cargo.replace("[dependencies]\n", "[dependencies]\n# 标记层基础（§9.9 K4）\njava_marker = { path = \"../java_marker\" }\n")
+    };
     write_if_changed(&decl.join("Cargo.toml"), &cargo)?;
     for pkg in ["java", "jdk", "sun"] {
         let d = decl_src.join(pkg);
@@ -148,7 +159,58 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, dirs: &JdkDirs, clean
         }
     }
     let meta_src = runtime_dir.parent().unwrap_or(Path::new("")).join("java_meta");
-    mirror_meta_crate(&meta_src, &out_dir.join("java_meta"), &scratch_pkg_version(out_dir), &dirs.decl)
+    mirror_meta_crate(&meta_src, &out_dir.join("java_meta"), &scratch_pkg_version(out_dir), &dirs.decl)?;
+    // 标记层基础（§9.9 K4）：runtime/java_marker → <scratch>/java_marker（逐文件复制，
+    // 版本唯一化；crate 无 path 依赖，无需重定向）。真源已无的文件删除。
+    let marker_src = runtime_dir.parent().unwrap_or(Path::new("")).join("java_marker");
+    mirror_marker_crate(&marker_src, &out_dir.join("java_marker"), &scratch_pkg_version(out_dir))
+}
+
+/// `runtime/java_marker` → `<scratch>/java_marker`：逐文件复制（内容相同跳过），`Cargo.toml`
+/// 版本唯一化；目标侧真源已无的文件删除（本 crate 的类标记文件由 `marker_side` 另行发射，
+/// 不在此镜像范围内——镜像只落手写真源，生成文件带生成标记，不受删除影响）
+fn mirror_marker_crate(src: &Path, dst: &Path, version: &str) -> Result<()> {
+    if !src.join("Cargo.toml").is_file() {
+        return Err(io_err(
+            &src.display().to_string(),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "java_marker crate 缺失"),
+        ));
+    }
+    let mut kept = BTreeSet::new();
+    for (dir, _, files) in walk(src) {
+        let rel = dir.strip_prefix(src).unwrap_or(Path::new(""));
+        for f in files {
+            let (from, to) = (dir.join(&f), dst.join(rel).join(&f));
+            if rel.as_os_str().is_empty() && f == "Cargo.toml" {
+                let text = std::fs::read_to_string(&from).map_err(|e| io_err(&from.display().to_string(), e))?;
+                std::fs::create_dir_all(dst).map_err(|e| io_err(&dst.display().to_string(), e))?;
+                write_if_changed(
+                    &to,
+                    &text.replace("version = \"0.1.0\"", &format!("version = \"{version}\"")),
+                )?;
+            } else if f != "Cargo.lock" {
+                copy_if_changed(&from, &to)?;
+            }
+            kept.insert(to);
+        }
+    }
+    for (dir, _, files) in walk(dst) {
+        for f in files {
+            let p = dir.join(&f);
+            if !kept.contains(&p) && has_marker(&p) != Some(true) {
+                std::fs::remove_file(&p).map_err(|e| io_err(&p.display().to_string(), e))?;
+            }
+        }
+    }
+    let mut dirs: Vec<_> = walk(dst).into_iter().map(|(d, _, _)| d).filter(|d| d != dst).collect();
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    for d in dirs {
+        let empty = std::fs::read_dir(&d).is_ok_and(|mut rd| rd.next().is_none());
+        if empty {
+            std::fs::remove_dir(&d).map_err(|e| io_err(&d.display().to_string(), e))?;
+        }
+    }
+    Ok(())
 }
 
 /// 按 overlay 清单与 runtime/ 同步：上轮清单中本轮未落盘、且无生成标记的文件删除（其后空目录自底向上

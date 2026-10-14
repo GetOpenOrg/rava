@@ -1063,6 +1063,44 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     `cargo check --tests` 与 emit 单测 99+2 过；确定性两项（closure_independent_of_order /
     of_hash_seed，b1015-det 作业 32G 上限内在跑，DET_RC 见 /tmp/b1015_det_tests.log）。
     failure_patterns 登记 `user-crate-methods-trait-package-path`。
+- **构造器留固有（10-13，mark-ctor-fix，修 batch-1015 放量首跑 Log4j2ApiMain E0599 构造器族）——
+  生成侧改形 × 手写层直调互为盲区同构第三例**：
+  - **症状与分诊更正**：`88_log4j2/Log4j2ApiMain` e2e 首跑 rs 编译 **E0599 ×21**（19 处构造器
+    `IOException/FileNotFoundException/IndexOutOfBoundsException/ProtocolException/ConnectException/
+    NoRouteToHostException/BindException/SocketException/ConnectionResetException` 的 `new_str`/`new`
+    + `System::getProperty_str` + `InetAddress::getAddress`），分布于 random_access_file / net /
+    e_poll / unix_dispatcher / socket_dispatcher / process_impl 六个伴生手写文件。放量登记时的怀疑
+    「IOException 落 K6 标记层无构造器」**不成立**：标记层本就只含身份面（构造器属声明层方法面），
+    且声明文件块文本内 `new_str` 在场——手写扫描器 `ctors` 路径已按伴生需要登记构造器入闭包
+    （`engine/hw.rs apply_hw`）。真因＝**构造器在 `X__Methods` trait 上而伴生手写文件未导入**。
+  - **为何 1014 过、1015 爆**：K3 把构造器移入 trait 时，b1013-fix 的 25 文件对齐只覆盖当轮验证
+    闭包内声明的伴生（random_access_file/net 等文件的**异常类构造器直调**不在其中——这些文件的
+    宿主类此前从未与 IOException 构造器同闭包出现）；batch-1014 golden 轮的 Log4j2ApiMain 闭包
+    未拉入 RandomAccessFile 宿主（伴生不声明、文件不编译），batch-1015 e2e 首跑闭包（5251 类）
+    首次同时拉入六文件宿主 → 集中爆出。与前两例（method-trait-handwritten-seam /
+    user-crate-methods-trait-package-path）同构：**伴生声明的发生条件由闭包决定，哪个闭包首次
+    拉入宿主事先不可知，per-file 方法 trait 导入无法穷举对齐**。
+  - **修法（宏，`moves_to_trait` 留固有名单再扩充，不类名特判）**：构造器按名字 `new` /
+    `new_<描述符后缀>`（与 `classify_method` 的 Constructor 分支同一名义口径，`main` 除外——入口
+    钩子按 b1015-fix 走 trait 导入）留固有 impl——手写 native 层按 errno / IO 错误构造异常类族是
+    协议面，与 `valueOf_*` / 访问器同级；同 crate 固有 impl 任意模块路径直调可解析，不再依赖
+    调用方导入。误报面：Java 方法名不可能叫 `new`（关键字）；碰巧叫 `new_<x>` 的真方法留固有
+    无语义差（固有优先解析，生成侧调用点两种形态都可解析、匿名导入冗余无害）。宏单测
+    `constructors_stay_inherent` 守护（trait_mirrors_wrapper_generics / std_named_method_stays_
+    inherent 两测的 `fn new` 断言随新口径改为固有侧）。伴生 statics / 实例方法仍走导入：
+    net_impl.rs 补 `System__Methods`（getProperty_str）与 `InetAddress__Methods`（getAddress）。
+  - **同族扫描（两手）**：路径调用 `X::m(` × use 表 × 留固有名单——java_runtime / java_meta /
+    java_support 全量，除上述两静态位外零残余（其余命中均为 std / rava_coro / 泛型形参误报）；
+    camelCase 实例调用全量清点（55 名 / 24 文件）——具实调用点的文件导入均已对齐（本闭包整个
+    java_base_decl 解析轮仅上述 21 错即全量见证），残余风险＝未编译过的伴生文件内的实例直调
+    （静态不可判，同 b1013-fix 排查方法节的既有口径）。
+  - **K6 性质**：本修复只动宏展开与手写 use 行——emit 块文本、D8 分段输入、标记层内容零变化
+    （切段逐类一致由构造保证）；声明层展开体量**方向性收窄**（每构造器少一份 trait 签名双份中的
+    声明份，实现份从 trait impl 挪固有 impl、同 crate 同文件），K4 搬 crate 时构造器与
+    `valueOf_*` 同列「固有跨 crate 失效」遗留名单，届时并入标记层机制或方法 trait。
+  - **验收**：见 tasks.md「10-13 batch-1015 放量首跑 E0599 构造器族」行（Log4j2ApiMain PASS、
+    宏单测 36/42、generator check、种子 / 确定性、抽查）；failure_patterns 登记
+    `ctor-trait-handwritten-seam`（fixed），known_failures 条目随修删除。
 - **K6 本体（10-12，s7-k6 2e3e9c2f + 5e7b21b8，基于 batch-1013 31e4762d）**：`java_class!` 块拆出
   类型标记层（`#[rava_layer = "marker"]`）——类 struct 的声明承载从声明层分离。
   - **与文档分解的偏差（先行记录）**：K6 的文档前提是 K4（手写基础设施分层）与 K5（类初始化骨架
@@ -1171,16 +1209,245 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
   - **K7 / K8 衔接**：K7（共置手写随宿主）独立可并行——标记文件按类同段落盘，宿主判定不受影响；
     K4 落地后标记文件整体挪入 `java_marker` crate，届时 D8 图只剩 inherit / hidden 边（⑤ 口径）
     的验证归 K8 档案验收（连同标记 crate 自身体量——本轮已随 `s7k6b-seg` 产出逐例统计）。
+- **K4 实施（10-12，分支 s7-k4，基于 s7-k6 a07fbb6f）**：目标 = 解开声明链前提——标记部分依赖的
+  `__Handle` / `Object` / `__ClassDesc` 等全在手写 INFRA（overlay 进声明底段 crate），无 K4 则不存在
+  可置于声明链之下的独立 `java_marker` crate（标记 crate 依赖底段、底段又要标记类型 → 环）。分阶段
+  落地，每阶段链接级验证（K6 教训：check 不覆盖 extern 声明 / 导出定义的配对）。
+  - **阶段 1（e6edfa24，已推 origin/github）**：`runtime/java_marker` 独立 crate 建立真源——
+    `obj_ref`（`__Obj`；`group::Ops` / `Header` 转公开供行为层引用）与 `sync_model`（持锁登记
+    `HoldSlot` / `hold_slot` 自 exec_context 移入 `held::slot`；`__process_static!` / `__DynFn!`
+    宏随 crate 根，java_runtime 再导出保持 `crate::__process_static!` 旧路径）搬入。**行为经
+    `unsafe extern "Rust"` 链接期声明转交**（与 `rava_layer` 拆层同一机制）：分配路径的区域登记
+    （`region::__on_alloc` → `__rava_marker_region_on_alloc`）与释放路径的监视器摘表
+    （`monitor::forget` → `__rava_marker_monitor_forget`），定义在 java_runtime `marker_hooks.rs`
+    （`#[export_name]`，签名取自同一类型 → 漂移即链接失败）。`java_runtime` 依赖它并按原模块路径
+    整体再导出（`pub use java_marker::{obj_ref, sync_model}`——`crate::obj_ref::*` 等既有引用零变化）；
+    `object.rs` 的 `impl __Obj<dyn ObjectVTable>::is_jvm_null` 随 `__Obj` 改泛型入 obj_ref（orphan），
+    `ObjectVTable` 特化形态（含 debug 断言）待其移入后恢复。发射侧：overlay 镜像 java_marker 进
+    scratch（版本唯一化、真源已无删除、生成文件保留）；vendor 兄弟闭包排除之（生成类标记文件后续
+    要进该 crate，静态 vendor 拷贝不可承载）；声明层 Cargo.toml 注入依赖；workspace 成员与 archive
+    版本戳补齐；**D8 把 java_marker 真源字节计入底段（foundation）体量**——INFRA 换 crate 不换切段
+    输入，切段逐类与之前一致由构造保证。
+    验证：generator `cargo check --release --tests` 过；宏单测 plan 41/41；**HelloWorld emit→编译→
+    rava-link→运行输出与 JVM 逐字一致**（extern 钩子链接级验证——符号未配对即链接失败，此跑证明
+    声明/定义闭环）。
+  - **阶段 2（a867b085，已推 origin/github）**：K6 偏差注记的「剩余项清单」全量落地（宏侧，过渡
+    形态仍同 crate）：`moves_to_trait` 放开——字段访问器（`__get_*` / `__set_*`）、`_init_not_null`、
+    `__init_on`、装箱工厂族 `valueOf_*`、接口载体 `__default_*` 移入方法 trait（K3 收尾为压峰值
+    留固有的名单；K4 搬 wrapper struct 进标记 crate 后固有 impl 必须与 struct 同 crate，只能经声明
+    crate 的方法 trait 承载）；`__vt()` 自独立固有 impl 改入方法 trait 成员（调用点与访问器同经
+    `X__Methods` 解析；invokespecial 的 `(obj).__vt()` 由 owner 登记覆盖；字段指令与 invoke 指令
+    同经 `record_member`，生成侧导入登记无需改动）。**接口载体拆层**（`expand_interface` 按
+    `meta.layer` 分段）：标记段 = 载体身份面（struct、Default / From 两向 / PartialEq / Debug /
+    Deref、`__from_image` / `__IMAGE_NULL`、`BINARY_NAME`、`is_jvm_null`）；声明段 = `I__VTable` +
+    statics + 初始化状态机 + `I__Methods` 及其实现（孤儿规则允许：trait 本地、载体类型外来）；
+    Full 拼回项序不变；mod.rs 标记层不再对接口早退为空。手写层（b1013-fix 清单口径）：
+    `reflect_dispatch` / `reflect/array_impl` / `proxy_dyn_impl` 补七个包装类 `__Methods` 匿名导入。
+    验证：宏单测 plan 41/41、缺省 35/35（守护测试随新形态更新：装箱工厂 / 访问器 / `__vt` /
+    `__default_*` 应在 trait 声明）；**HelloWorld、CollectorsDemo、DeepCopy 三例 emit→编译→
+    rava-link→运行输出与 JVM 逐字一致**（覆盖装箱协议面 / 访问器 / 虚分派 / lambda-sam / 接口
+    default / 反射 clone 链）。
+  - **K4-2a（✅ 10-13 落地，阶段 3 的前置首步——交接节「可行出路」的实现）——手写伴生
+    固有 impl 迁移到 `__XHw{N}` 扩展 trait**：wrapper struct 挪入 java_marker 后伴生文件的
+    `impl X {` 全部 E0390（阶段 3 受阻根因）；本步把声明层的这一固有依赖转成本地 trait：
+    - **形态**：生成器对每个有 hw 块的类在其声明文件 `java_class!` 块后发射
+      `pub trait __XHw{N}<泛型组>: X__Methods<自类型实参> [where …] { 条目; }`——泛型组 /
+      实参 / where / 条目签名（模式规范化：`mut self`→`self`、`mut x`→`x`、复合模式→`_`）/
+      cfg 属性全部机械镜像自伴生 `impl __XHw{N} for X` 头（`input::handwritten::hw_impl_blocks`
+      文本级扫描）。**多块逐块成 trait**（一 trait 一 impl：`class_impl.rs` 三块 →
+      `__ClassHw` / `__ClassHw2` / `__ClassHw3`；跨文件同理 `string_ext` → `__StringHw`、
+      `string_impl` → `__StringHw2`——块序 = 文件遍历序 × 位置序，与改写脚本同一口径；
+      Rust 不允许同 (trait, 类型) 双 impl，合并块则动体，故逐块）。**块后追加**：拆层后
+      只在声明层（宏块尾文本不进 body crate），标记文件也不含（marker_text 只取宏块）。
+    - **改写**（`scripts/diag/k4_2a_rewrite_hw_impls.py`，幂等）：104 份 `*_impl.rs`/`*_ext.rs`
+      第 0 列固有 impl 块 → `impl __XHw{N} for X {`（体不动；本地辅助类型 `Prim` / `Instance` /
+      `_BitOp` 与手写根类 `Object` 不改——按「名字在本树有定义」判定；fn 体内缩进 impl 不碰）；
+      块内顶层条目剥 `pub` / `pub(crate)` / `pub(super)`（trait impl 条目不允许可见性修饰）；
+      文件头补 `use super::__XHw{N};`（本类全部块——跨块 / 跨文件互调都在作用域）。
+      `--fix-callers`：非伴生手写文件的 hw 调用面（UFCS `X::m(` 与单主接收者 `.m(`）
+      补 `use crate::<包>::__XHw{N} as _;`（16 份；多主 / 常用泛型名跳过，编译错误兜底）。
+    - **调用点导入**：`ty::HwNames`（binary → 各块条目名集）经 `EmitShared` 注入 `TyCtx`，
+      `NameScope` 登记 (binary, 块序号)，`imports::fill` 发射 `use …::__XHw{N} as _;`
+      （与 `X__Methods` 同机制；`prune_uses` 对 `__` 前缀名单恒保留——留体 fn 无需账本）。
+      登记点（按 Java 成员名匹配块：名 / `名_` 重载后缀 / `__impl_` 前缀，双向匹配）：
+      `record_member`（指令链上声明类与接口 owner）、`resolve_static_field`（字段名 + `set_`
+      前缀——手写静态访问器）、phase2 继承转发（手写成员 `__impl_` 体 / 接口载体 target
+      直调——宏合成转发体的调用点所在文件）、字面量锚点（ldc UTF-16 串
+      `String::from_utf16_lit`、类字面量 `Class::for_class`、拼接 `String::of`、静态字段
+      UTF-16 初值）。
+    - **口径保持**：`impl_methods` 名单 = `pub fn` 文本正则 ∪ hw 块内带 `rava_hw_pub`
+      标记的条目（**标记 = 改写前 `pub`**。`pub(crate)`/`pub(super)` 的私有辅助不计——
+      s7k4d-seed 首轮实测 CollectorsDemo 三种子各多 `TypeNotPresentException.<init>`：
+      根因 = class_impl 的 pub(crate) 辅助 `__from_descriptor_checked` 被闭包分析器当
+      is_pub 非成员 fn 计成 vm 钩子、Class 分配时其体被拉入闭包；修法 = 改写脚本对原
+      `pub fn` 条目剥可见性时加原位惰性标记 `#[cfg_attr(any(), rava_hw_pub)]`，只认标记
+      ——Class 名单核对 = 改写前 `pub fn` 集精确恢复）；闭包分析器对 hw 块条目的
+      `is_pub` 同只认标记（`closure/scan.rs`）；行表 `companion_fns` 收集 hw trait impl 块（栈帧行表不丢，
+      TestStackWalkerFrames 关键）；`java_runtime/build.rs` `scan_impls` 块态识别 hw
+      trait impl（native_status 实现集不漂移）；D8 体量权重不计 hw 匿名导入行（同接口
+      方法 trait 口径——纯名字解析行，`decl_side::hw_trait_import_bytes`）；trait 声明文本
+      本体（约 110 文件 × 0.3–2 KB）照常计权（段边界允许的「trait 声明行」漂移口径）。
+    - **验证（tag 前缀 s7k4d-）**：宏单测 **36（缺省）/ 42（plan）✅**（jp2 首轮 + sg2
+      终态 s7k4d-macro2）；input 25 / ty 67 / closure 252 / emit 101（含 hw 真文件回归
+      scans_real_class_loader_impl / phantom_reference） / instr / driver build_cli 17
+      全绿（本机；emit 测试夹具补 java_marker crate——阶段 1 起 9 个 project 测试未运行
+      到的既有破损，本步修复）。**链接级五例全 PASS（逐字对 JVM）**：HelloWorld +
+      CollectorsDemo（s7k4d-hw13，jp1）、DeepCopy + TestAnnoReflect +
+      TestStackWalkerFrames（s7k4d-5case7，jp1；bin 322.0M / 245.3M / 222.4M）。
+      **种子四例 × 0/1/2 集合全同**（s7k4d-seed2 rc=0，`seed-sets: ALL-IDENTICAL`，
+      对 a07fbb6f）。**切段三例逐类一致**（s7k4d-seg rc=0，HelloWorld 787 /
+      CollectorsDemo 808 / DeepCopy 2680 类文件——hw 导入行不计权 + trait 文本未触
+      段边界）。迭代中发现并修复的十六个缺口（各批提交信息详录）：rava_hw_pub 原可见
+      性标记（种子漂移）、fix-callers 误报两批（接收者形态 UFCS+白名单化）、hw 扫描
+      块深 / 泛型实参两处、无槽继承 / 伴生跨类 / boot_image / 签名多态 `__site` /
+      SAM 装箱 valueOf 五路登记面、伴生私有类型 pub 化 + 签名词导入行（hw_sig_uses）；
+      其中 SAM 装箱 valueOf 一项是**阶段 2 的潜在缺口**（基线 a07fbb6f valueOf 仍固有
+      故未暴露，swbase/swbase2 实证）。**峰值 ✅**（s7k4d-peak rc=0，kr1，逐 crate 固定
+      切段重建对 a07fbb6f）：三例全部 crate 在 ±10% 内，最大涨幅 +3.7%（DeepCopy
+      java_base_body_6），声明底段 +2.5%（4 855 → 4 979 MB）——hw 匿名导入行 + trait
+      声明文本的代价量级如预期。确定性两项 `closure_independent_of_order` ✅ /
+      `closure_independent_of_hash_seed` ⛔→**✅ 10-14 闭环（cc2cfc3e，s7-k4）**——
+      二分定归属：非 K4-2a（s7k4d-det4 终态与 s7k4d-detmid（**042465b7 = 阶段 2 尖，
+      K4-2a 之前**）失败逐字相同：TestSerialLookupPairing 种子 0 与 2 的类集合差
+      `ProtectionDomain$JavaSecurityAccessImpl` + `JavaSecurityAccess` 两类；基线
+      a07fbb6f（s7k4d-detbase，kr1 rc=0）过 → 阶段 1/2（e6edfa24/a867b085）引入，
+      排队中的 s7k4-det 本应暴露）。**根因（s7k4s-why1 取证）非缓存指纹**：阶段 1/2
+      只扰动分析次序，翻出闭包分析器的潜伏次序敏感——`ObjectStreamClass$2.run@336`
+      写 `domains` 先于 `@333 getProtectionDomains` 返回常量格建立时以 Top 并入
+      全局字段值集（格只升不降，不可撤回），返回常量（恒 Null，`getSecurityManager`
+      清单事实生效、未被旁路）随后出现重写已晚；种子 0/2 只差这次序窗口的落面
+      （s7k4d-seed2 在 19802647 的「全同」是三种子恰好同落过近似面的侥幸）。修法
+      `pending_write`（cc2cfc3e，与 `noreturn.rs`「尚无返回」同一乐观-重算口径）：
+      写入值是无标签单来源（产生调用点）的引用、调用点有唯一字节码目标且目标已建
+      节点、返回常量缺席时暂不并入，`pending_skips` 偏移在失效重算时强制重跑（事件
+      值不变也重跑，防返回常量升 Top 漏并入）；标记建模旁路调用边的站点无节点、
+      不属暂态仍按 Top 并入。机理与验收详录 `docs/plans/2026-10-11-seed-regression-fix.md`
+      §七；failure_patterns 登记 `field-write-pending-ret-lattice`。验收全绿：s7k4s-det1
+      （jp2 rc=0，hash_seed + order **2 过 0 失**，6612s 较修复前慢约三成——暂缓写入
+      多出的失效重算轮）；s7k4s-tslp1 / s7k4s-seed1（rc=0 ×2，`ALL-IDENTICAL`，四例
+      种子 0/1/2 集合对 e9597fef 逐项全同：TSLP 2662×3 / HelloWorld 641×3 /
+      CollectorsDemo 662×3 / DeepCopy 2660×3——修复只影响确定性不影响集合）；
+      s7k4s-link1（kr1 rc=0，HelloWorld + TestStackWalkerFrames 链接级逐字对 JVM
+      PASS）。「两工具口径差异」非缓存指纹（指纹本计入 seed、两口径都不开缓存）：
+      `--jdk 21` 发现与 `--java-home` 参考 21.0.11 解析到不同 JDK、闭包宇宙差 47 类，
+      回归只在发现侧宇宙复现。切段（s7k6b_segments.sh 对 a867b085——预期差全部为段边界
+      移动（trait 声明行口径），无类增删）与逐 crate 峰值（s7k6_peak.sh 对 a07fbb6f，
+      ±10%）未派发。
+  - **K4-2a 验收与交接（10-13）**：
+    - **在跑作业回收**：`cat cluster_results/job/s7k4d-hw1|s7k4d-seed|s7k4d-det/summary.json`
+      看 status/rc；日志 `tail …/01_*.log`；分发器（本机 setsid nohup，日志
+      `/tmp/s7k4d-*-dispatch.log`）被杀时同 tag 重派即可（脚本幂等，闭包 json 已在即跳过）。
+      hw1 失败（rc=1）时先看编译错误清单——预期形态为漏登记的 hw 调用点 E0599（补登记点
+      或 fix-callers 名单）与个别签名镜像偏差（hw_trait_decl 对应条目），逐个修后重派。
+    - **未派发作业**：切段 `bash scripts/diag/s7k6b_segments.sh <基线 042465b7（阶段 2 尖）
+      或 a867b085>`（新侧忽略标记文件；差异应全为段边界移动——trait 声明文本 ~110 文件
+      ×0.3–2 KB 计权 + hw 导入行不计权（decl_side::hw_trait_import_bytes））；峰值
+      `bash scripts/diag/s7k6_peak.sh a07fbb6f`（±10% 判据，hw 导入行是纯解析开销）；
+      链接级五例 = HelloWorld / CollectorsDemo / DeepCopy / TestStackWalkerFrames /
+      TestAnnoReflect（`run_tests.py --filter` 多过滤项一次跑）。
+    - **阶段 3 重放（下一步）**：本步落地后 `git cherry-pick c66f7814`（或按「阶段 3」节
+      清单重做）应可过 E0390 面；已知将再撞两处：①`prune_marker_header` 剪 `__VTable` /
+      `__Methods` 后缀单名导入（E0432，交接节已记修法——`prune_uses` 对标记文件头加剪
+      后缀名）；②伴生文件里的 **std trait impl**（`impl From<&str> for String` /
+      `impl Add<…> for String` / `impl Display for String` 等）在 wrapper 挪入 java_marker
+      后是孤儿规则 E0210（非 E0390——固有 impl 之外的另一面，c66f7814 只钩走了 String
+      构造两枚）。处置需设计（搬 java_marker 需行为面 / 留声明层违孤儿规则 / 经
+      `__XHw` 承载 std trait 不可能）——建议先 cherry-pick 看实际错误清单再定。
+      另注意 object_ext.rs 等随迁文件的 `use crate::…::__ClassHw as _;` 在 java_marker
+      侧不可解析（`crate::` 变指 java_marker）——c66f7814 的钩子化会替换这些调用点，
+      重放时按冲突逐个处理。
+    - **机械改写的可重复性**：`scripts/diag/k4_2a_rewrite_hw_impls.py`（幂等；新增伴生
+      固有 impl 后重跑 + `--fix-callers` + 生成器扫描自动跟上；ordinal 随遍历序稳定）。
+  - **阶段 3（⛔ 10-12 原子落地受阻，已回退到可编译状态——续作入口）——INFRA 主体搬移 +
+    标记文件挪入 java_marker**：
+    - **受阻根因（原清单外的结构性缺口，续作必须先解）**：伴生手写文件（`<x>_impl.rs` /
+      `_ext.rs`，约 100 份：`class_impl` / `string_impl`+`string_ext` / `thread_impl` /
+      `throwable_impl` / `double_impl` / `shutdown_impl` …）对**生成类 wrapper 的固有
+      impl**（`impl Class {`、`impl String {` 等；native/边界成员的真实定义，生成侧以
+      `#[impl_methods = "..."]` 名单引用它们，调用点（含生成的方法体）按固有方法解析）。
+      wrapper struct 随标记文件挪入 java_marker 后，定义 crate 变为 java_marker，这些
+      固有 impl 在声明层 crate 全部 **E0390**（固有 impl 必须与 struct 同 crate，§9.2
+      的硬约束——K3/K6 只把**宏生成**的可读层成员移入了方法 trait，手写面未动）。服务器
+      实测（s7k4c-cddp，c66f7814）：DeepCopy 编译失败；另一处独立小缺口同场暴露——标记
+      文件头的 `use crate::…::X__VTable;` 单名导入（`prune_uses` 的词规则：块内出现
+      `X` 即保 `X__VTable`）在 java_marker 侧不可解析（vtable trait 留声明层），E0432
+      （`standard_charsets_m.rs` 的 `CharsetProvider__VTable`）。
+    - **不可行的绕行（本轮论证排除，续作勿再走）**：
+      - 伴生整体挪入 java_marker：其方法体大量调用声明层方法 trait（`__get_*` /
+        `Class__Methods` 等），且违反「标记层不含 `__Methods`」的用户要求（10-12 两项
+        之一）；
+      - 只挪部分类的标记文件：标记文件的引用闭包（祖先 ∪ 接口 ∪ 字段类型）在
+        java.base 上不可截断（与手写最小 Class 占位同一级联），部分挪 = 全量挪；
+      - wrapper struct 双定义（两 crate 各一份）：不同名义类型，From/identity 全断。
+    - **可行出路（建议的续作首步，工作量以文件数计）**：手写面从固有 impl 迁到**声明层
+      扩展 trait**——生成器对每个有 `impl_methods` 的类发射 `pub trait __XHw<..>:
+      X__Methods<..> { /* 与 impl_methods 同形的签名（生成侧已有全部签名——今天的
+      `// [meta]` 注释）*/ }`（声明层 crate，trait 本地 + 类型本地，孤儿规则允许），
+      伴生文件把 `impl X {` 机械改写为 `impl __XHw for X {`（体不动），调用点由生成器
+      的导入机制补 `use …::__XHw as _;`（与 b1013-fix 的方法 trait 导入同一机制；手写
+      调用点按既有排查法补 use 行）。**落地后 wrapper struct 不再有声明层固有依赖**，
+      阶段 3 的搬移清单即可原样执行。改写约 100 份伴生文件（模式机械：impl 头替换 +
+      `Self::__class_init` 一类注入点核对 `#[jvm_native]` 语义不变），建议单独成步
+      （K4-2a）并先在 3–5 份文件上走通宏 / 生成器配合面。
+    - **已落地并保留的部分（854dc7f3，零操作安全件）**：接口宏拆层修正——`expand_interface`
+      的 `Layer::Decl` 不再包含载体身份面（iface_marker；原 `_` 臂同时给了 Full 与
+      Decl，标记文件独立成 crate 后会重复定义）；当前无接口文件带层属性，零操作；宏守护
+      单测 `interface_layers_split_carrier_face`（宏单测 36（缺省）/42（plan）过，
+      s7k4c-macro，jp2 rc=0）。
+    - **完整实现已做并在分支历史（c66f7814，revert 6f9ac2a0 保留可 cherry-pick）**：
+      运行时搬移与 39 枚 `__rava_marker_*` 钩子（error 拆分 / object 三件 / array 系统 /
+      handle / desc / java_fmt / _is_jnull 族 + java_runtime 按原路径再导出）、
+      marker_side v2（标记文件落 java_marker、接口拆层、不透明类文件双发、宿主再导出
+      改 `pub use java_marker::<pkg>::<m>::<Name>;`）、java_marker 包 mod 树 / lib.rs
+      补全 / prelude / vendor 重定向、闭包分析器双根扫描（种子集合构造性不变）+ 缓存
+      指纹、InstrFacts / root_api / handwritten_vtable_impls 扫两处。**续作两处修补**：
+      （a）`prune_marker_header` 加剪 `__VTable` / `__Methods` 后缀的单名导入（E0432 的
+      修法，一处小改）；（b）上述 __XHw 扩展 trait 落地后重放。generator `cargo check
+      --release --tests` 在 c66f7814 即过（0 警告），宏单测 42/36 过——受阻仅在
+      scratch 链接级。
+    - **standalone 口径变化（回退后不生效，续作落地时再记）**：java_marker / java_runtime
+      真源 standalone `cargo check` 非绿（getClass 签名引用的 Class 只在 scratch）；
+      以「scratch 全构建 + 宏单测 + generator check」为口径。
+    - **阶段 3 验证作业（tag 前缀 s7k4c-）回收状态**：`s7k4c-macro` ✅（jp2，rc=0，
+      36/42——含新守护）；`s7k4c-hw`（口径误用系统 python，作废）/ `s7k4c-hw2`
+      （c66f7814，rc=1 编译失败——证据如上）/ `s7k4c-cddp`（同，DeepCopy compile
+      error 3m56.6s）/ `s7k4c-hw3`（kill，证据已足够）；回退后 `s7k4c-hw4` ✅
+      （854dc7f3，jp2 rc=0）：分支尖 = 阶段 2 形态 + 宏修正，HelloWorld
+      emit→编译→rava-link→运行对比 PASS——交接状态可编译可运行。阶段 2 基线验收
+      `s7k4-seed`（jp1）/ `s7k4-det`（us1）/ `s7k4-seg`（kr2）/ `s7k4-peak`（sg1）
+      交回时仍在排队（批闸门），回收法见上「阶段 2 服务器验收」节，收数后归阶段 2 记录。
+  - **阶段 2 服务器验收（tag 前缀 s7k4-，基线 s7-k6 a07fbb6f，交回时在跑）**：
+    - `s7k4-macro` ✅（jp2，rc=0）：宏单测 **plan 41/41、缺省 35/35**。
+    - `s7k4-seed`（jp1）：`s7k6_seed_sets.sh a07fbb6f` 四例 × 种子 0/1/2 闭包集合对照——日志尾
+      `seed-sets: ALL-IDENTICAL` 即过（`--fetch` 声明 build/s7k6-seed/summary.txt）。
+    - `s7k4-det`（us1）：`cargo test -p driver --test closure_cli closure_independent
+      -- --include-ignored` 确定性两项。
+    - `s7k4-seg`（kr2）：`s7k6b_segments.sh a07fbb6f` 三例切段逐类对照——**预期有差**（阶段 2
+      声明文件含 trait 声明行，体量增 → D8 重切），差异应全部为段边界移动（无类增删）；绝对值
+      记入本节。
+    - `s7k4-peak`（sg1）：`s7k6_peak.sh a07fbb6f` 三例逐 crate 固定切段重建峰值，判定口径 =
+      声明 crate 峰值对 s7-k6 不超 +10%（阶段 2 估 +0.5–1.5 pp，s7-k6 基线 HW 底段 +8.5%——
+      临界，若破线归因 trait 项回涨，阶段 3 收回后复测）。
+    - 回收：`cat cluster_results/job/<tag>/summary.json`（status/rc）+ `tail …/01_*.log`；脚本
+      已幂等可重派。
+  - **K5 / K7 / K8 衔接**：K5（类初始化骨架去按类展开）与本阶段无依赖，可并行派发；K7（共置手写
+    随宿主）在阶段 3 落地后钉底 = 行为层 INFRA 直连类；K8 档案验收在阶段 3 后做（⑤ 口径的 D8 图
+    验证 + 标记 crate 自身体量随 `s7k4-seg` 口径统计）。
 - **K4 及后续方案**（10-11 用户暂停派发新代理，K4 未派，以下为续作入口）：
   - **K3 收尾**：10-11 晚已完成分解归因与两轮修复（15276d82，见上「K3 收尾」节）：切段漂移全部收回（与基线逐类一致）、底段峰值 +24–31% 收窄到 +8%（本机口径）、body crate 达标、DeepCopy 工作区复测与全量单测已发服务器作业。**剩余决策**：~~须用户裁决后合入~~ **已裁决（2026-10-12 用户）：阈值放宽至 ±10%，K3 随下一批合入**（batch-1012 未等 K3；固有 impl 保留 / 选择性 trait 的进一步压缩并入 K6 取舍；s7k3-fix2 三例同机复测 +7.1–9.5% 见上表）。
-  - **K4** 运行时基础设施分层：按上表实施。新增两项要求：
-    - 标记层基础只含类型与句柄，不含任何 `use …__Methods`；
-    - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层。
+  - **K4** 运行时基础设施分层：**10-12 已开工（分支 s7-k4，见上「K4 实施」节）**——阶段 1
+    （obj_ref / sync_model 入 java_marker + extern Rust 钩子，e6edfa24）与阶段 2（K6 剩余项清单
+    入方法 trait + 接口载体拆层，a867b085）已推双远端并过链接级验证；阶段 3（INFRA 主体搬移 +
+    标记文件挪入，原子）为续作入口，设计与不可行方案排除见该节。新增两项要求的落实：
+    - 标记层基础只含类型与句柄，不含任何 `use …__Methods`——阶段 1/2 的 java_marker 真源
+      零方法 trait 引用（宏单测 `marker_layer_is_signature_free` 守护标记展开面）；
+    - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层——阶段 2 已按 b1013-fix 清单补齐
+      装箱协议面三文件；阶段 3 的行为层钩子清单见「K4 实施」节。
   - **K5** 类初始化骨架去按类展开：与 K3、K4 无依赖，可与 K3 收尾并行。
   - **K6** 标记 crate 生成：前提是 K3（含第 5 项改名——✅ 已随 K6 前置项完成，std 同名与接口载体成员均已在方法 trait 上）、K4、K5。**机制已随 10-12 K6 本体落地（同 crate 标记文件过渡形态，见上「K6 本体」节）**；独立 `java_marker` crate 待 K4（标记文件搬移 + 路径前缀 + 访问器/`__vt` 并入方法 trait）。方法 trait 与其 impl 留声明 crate；标记层展开文本不含 `__Methods`（✅ 宏单测守护）。
   - **K7** D8 共置手写随宿主：独立。注意 K3 增加的 `use` 行改变了按体量切段的结果，模拟器（`decl_scc_sim.py`）的体量口径需同步计入导入行，或改为不计 `use` 行。
   - **K8** 档案验收：按上表；连同 K2 留下的 §4.3 热循环用例、StockTrans 计时一并补测。
 - 下一步：
-  - K3 收口：服务器作业（s7k3-fix1-*）数字回填 + 用户裁决 ±5%/±10% 阈值后合入；
-  - 然后 K4（运行时基础设施分层）；
-  - K5（类初始化骨架）与 K1–K4 互不依赖，可并行派发。
+  - K4 阶段 3（INFRA 主体搬移 + 标记文件挪入 java_marker，原子——见「K4 实施」节）；阶段 2 的
+    服务器验收（s7k4-*）回收后视峰值结论决定是否先做峰值归因；
+  - K5（类初始化骨架）与 K4 剩余互不依赖，可并行派发。

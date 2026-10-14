@@ -31,6 +31,7 @@ regex-syntax = "0.8"
 crc32fast = "1"
 toml = "1"
 proc-macro2 = "1"
+quote = "1"
 syn = { version = "2", features = ["full", "visit", "visit-mut", "parsing"] }
 mimalloc = { version = "0.1", default-features = false }
 

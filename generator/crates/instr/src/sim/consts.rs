@@ -41,10 +41,14 @@ fn string_lit(c: &Const) -> Option<Lit> {
     }
 }
 
-fn ldc(_env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, c: &Const) -> InstrResult<()> {
+fn ldc(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, c: &Const) -> InstrResult<()> {
     match c {
         Const::String(_) | Const::StringUtf16(_) => {
             let lit = string_lit(c).ok_or_else(|| InstrError::BadInsn("ldc 字符串常量".into()))?;
+            // K4-2a：UTF-16 码元形态走手写 `String::from_utf16_lit`（`__StringHw`），按锚点名登记
+            if matches!(lit, Lit::JStringUtf16(_)) {
+                env.ctx.ty.use_hw(ty::consts::STRING, "from_utf16_lit");
+            }
             sim.push(Expr::Lit(lit), RsType::class(ty::consts::STRING.to_string(), Vec::new()));
         }
         Const::Int(i) => {
@@ -62,6 +66,8 @@ fn ldc(_env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, c: &Const) -> In
         Const::Class(b) => {
             // [equiv-audit] class-literal：每次构造新 Class 对象（只计数，不改发射）
             log.audit(Audit::ClassLiteral);
+            // K4-2a：类字面量走手写 `Class::for_class`（`__ClassHw`），按锚点名登记
+            env.ctx.ty.use_hw(ty::consts::CLASS, "for_class");
             sim.push(Expr::Lit(Lit::ClassRef(b.clone())), RsType::class(ty::consts::CLASS.to_string(), Vec::new()));
         }
         // javac 只在 invokedynamic 的引导实参里使用 MethodType / MethodHandle / 动态常量，

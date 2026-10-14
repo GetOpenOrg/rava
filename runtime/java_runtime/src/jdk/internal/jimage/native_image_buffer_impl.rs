@@ -4,6 +4,7 @@ use crate::prelude::*;
 use super::native_image_buffer::NativeImageBuffer;
 use crate::java::lang::String;
 use crate::java::nio::{ByteBuffer, DirectByteBuffer};
+use super::__NativeImageBufferHw;
 
 // jdk.internal.jimage.NativeImageBuffer 伴生（手写边界 ①：ACC_NATIVE）。
 //
@@ -13,10 +14,11 @@ use crate::java::nio::{ByteBuffer, DirectByteBuffer};
 // jimage（`meta::module_image`，闭包读取的模块资源，计划 boot-image §5.7）：路径等于嵌入树的
 // `lib/modules` 时返回它的直接缓冲区，其余路径 null（与 HotSpot 对未打开映像的回答一致）。
 // 其后 `BasicImageReader` / `ImageReader` / `SystemModuleReader` / jrt 协议全部按字节码执行。
-impl NativeImageBuffer {
+impl __NativeImageBufferHw for NativeImageBuffer {
     /// native `getNativeMap(String)`：名为 `${java.home}/lib/modules` → 本程序 jimage 的直接缓冲区；否则 null
     #[jvm_native]
-    pub fn getNativeMap(imagePath: String) -> Result<ByteBuffer> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getNativeMap(imagePath: String) -> Result<ByteBuffer> {
         if imagePath.is_jvm_null() {
             return Err(JvmError::null_pointer());
         }

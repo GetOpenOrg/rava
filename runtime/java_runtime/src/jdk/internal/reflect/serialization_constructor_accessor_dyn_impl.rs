@@ -5,13 +5,15 @@ use crate::jdk::internal::reflect::SerializationConstructorAccessorDyn__Methods 
 use crate::prelude::*;
 use super::serialization_constructor_accessor_dyn::SerializationConstructorAccessorDyn;
 use crate::java::lang::Class;
+use super::__SerializationConstructorAccessorDynHw;
 
-impl SerializationConstructorAccessorDyn {
+impl __SerializationConstructorAccessorDynHw for SerializationConstructorAccessorDyn {
     /// native `allocateAndInit(Class target, Class initCl)`：分配 target 实例（不运行其构造器），
     /// 在其上运行 initCl 的无参构造体——L3 分派闭包的 `<alloc>` / `<init_on>` 伪成员（N2），
     /// 即 JDK 生成访问器的 `new target` + `invokespecial initCl.<init>()V` 两步。
     #[jvm_native]
-    pub fn allocateAndInit(target: Class, init_cl: Class) -> Result<Object> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn allocateAndInit(target: Class, init_cl: Class) -> Result<Object> {
         let t = format!("{}", target.__get_name()).replace('.', "/");
         let i = format!("{}", init_cl.__get_name()).replace('.', "/");
         let empty: JArray<Object> = JArray::from(Vec::<Object>::new());

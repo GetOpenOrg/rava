@@ -216,6 +216,8 @@ impl Env {
             diag: closure::engine::Diag::default(),
             cold_cut: false,
             flow_batch: self.flow_batch,
+            // 声明分析级别（骨架）：profile 的缓存查找与闭包跑批同键须同档，暂固定缺省 0cfa
+            closure_level: Default::default(),
         };
         let out = crate::closure_run::analyze(&self.cache, &input, &h, &man, &hw, false, true).map_err(|f| format!("入口 {}：{f}", e.name))?;
         let v = out.json.ok_or_else(|| format!("入口 {}：闭包产物缺失", e.name))?;

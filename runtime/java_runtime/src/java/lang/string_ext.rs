@@ -1,11 +1,15 @@
 use crate::java::lang::String__Methods as _;
 use crate::prelude::*;
 use super::string::String;
+use super::__StringHw;
+use crate::java::lang::__StringHw as _;
+use super::__StringHw2;
 
-impl String {
+impl __StringHw for String {
     /// Rust `String`（UTF-8）→ Java `String`（新对象，不入驻留表）。
     #[jvm_ext]
-    pub fn from_owned(s: std::string::String) -> Self {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn from_owned(s: std::string::String) -> Self {
         String::from_units(&s.encode_utf16().collect::<Vec<u16>>())
     }
 
@@ -15,7 +19,8 @@ impl String {
     /// 全部码元 ≤ 0xFF → LATIN1（每 char 一字节）；否则 UTF16，字节序与
     /// 生成侧 `StringUTF16.putChar` 的 HI/LO_BYTE_SHIFT 一致（平台字节序）。
     /// 增补字符（非 BMP）必然走 UTF16：代理对各占一个 code unit（S-19 #3）；孤立代理项原样保留。
-    pub fn from_units(units: &[u16]) -> Self {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn from_units(units: &[u16]) -> Self {
         let mut inst = String::default();
         inst._init_not_null();
         if units.iter().all(|u| *u <= 0xFF) {
@@ -39,7 +44,8 @@ impl String {
     /// Java 字符串的 UTF-16 码元（字符串转换语义：null 载体 → `"null"`，JLS §5.1.11）。
     /// null 载体的 value 为 JArray Repr::Null，直接解码会在 to_vec panic——先守卫再取值；
     /// 判定走 wrapper 固有 is_jvm_null()（句柄为空）。
-    pub fn units(&self) -> Vec<u16> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn units(&self) -> Vec<u16> {
         if self.is_jvm_null() {
             return "null".encode_utf16().collect();
         }
@@ -58,13 +64,15 @@ impl String {
 
     /// 字符串拼接（`makeConcatWithConstants`）的起点：以配方首段常量文本构造新对象，
     /// 后续片段经 `+` 在 UTF-16 层追加（见下方 `Add` 实现），孤立代理项不经 Rust 文本。
-    pub fn of(text: &str) -> Self {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn of(text: &str) -> Self {
         String::from_owned(text.to_owned())
     }
 
     /// 字面量加载路径的 UTF-16 码元形态：常量含孤立代理项（`"\uD83D"`）时 codegen 发射本
     /// 构造（Rust `&str` 无法表示孤立代理项）。与 `From<&str>` 同样经常量池驻留（JLS §3.10.5）。
-    pub fn from_utf16_lit(units: &[u16]) -> Self {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn from_utf16_lit(units: &[u16]) -> Self {
         String::from_units(units).__interned()
     }
 

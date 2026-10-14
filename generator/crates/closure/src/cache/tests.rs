@@ -37,6 +37,7 @@ struct Case {
     locales: Vec<String>,
     cold_cut: bool,
     flow_batch: Option<usize>,
+    closure_level: crate::ClosureLevel,
     release: Vec<String>,
     dropped: Vec<String>,
 }
@@ -50,6 +51,7 @@ fn base() -> Case {
         locales: vec![],
         cold_cut: false,
         flow_batch: None,
+        closure_level: Default::default(),
         release: vec![],
         dropped: vec![],
     }
@@ -68,6 +70,7 @@ fn key_of(c: &Case, user: &Path, jar: &Path, rt: &Path) -> String {
         diag: Default::default(),
         cold_cut: c.cold_cut,
         flow_batch: c.flow_batch,
+        closure_level: c.closure_level,
     };
     key_with(&c.analyzer, &input, (&c.release, &c.dropped)).unwrap()
 }
@@ -174,6 +177,8 @@ fn every_input_changes_the_key() {
         ("locale", Case { locales: vec!["zh-CN".into()], ..b.clone() }),
         ("cold_cut", Case { cold_cut: true, ..b.clone() }),
         ("flow_batch", Case { flow_batch: Some(7), ..b.clone() }),
+        ("声明分析级别 rta", Case { closure_level: crate::ClosureLevel::Rta, ..b.clone() }),
+        ("声明分析级别 0cfa-saturated", Case { closure_level: crate::ClosureLevel::OcfaSaturated, ..b.clone() }),
         ("放行", Case { release: vec!["a/b/".into()], ..b.clone() }),
         ("按字节码建模", Case { dropped: vec!["a/b/C".into()], ..b.clone() }),
     ];

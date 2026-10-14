@@ -209,6 +209,8 @@ pub(crate) fn analyze<R: Send>(
         diag: crate::closure_cmd::diag_opts(&o.cuts, &o.cut_files, o.dump_edges.clone())?,
         cold_cut: false,
         flow_batch: None,
+        // 声明分析级别（骨架）：build 路径暂固定缺省 0cfa（分档构建面待 S9/S6 语义本体落地后再开）
+        closure_level: Default::default(),
     };
     // 跨运行闭包缓存缺省落仓库 build/closure_cache（键覆盖分析器、JDK、手写层、用户类与全部分析参数）
     let dir = o.closure_cache.clone().unwrap_or_else(|| repo_root(rt).join("build").join("closure_cache"));
@@ -317,7 +319,8 @@ pub(crate) fn with_emit_ctx<R>(
         jobs: j.o.emit_jobs,
         archive: j.o.profile.is_some(),
     };
-    let shared = EmitShared::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
+    let hw_names = inp.handwritten.hw_names();
+    let shared = EmitShared::new(&inp, &names, &manifest, j.cp, &hw_names, j.rt, opts).map_err(|e| e.to_string())?;
     perf.mark("names+ctx");
     f(&shared.view(), &names, perf)
 }

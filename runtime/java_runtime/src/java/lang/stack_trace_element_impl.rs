@@ -13,6 +13,8 @@
 use crate::prelude::*;
 use super::*;
 use super::throwable_impl::StackTraceFrames;
+use super::__StackTraceElementHw;
+use crate::java::lang::__ClassHw as _;
 
 fn _ref(obj: &Object, class: &str, field: &str) -> Object {
     obj.0.__unsafe_ref_get(field).unwrap_or_else(|| panic!("stub: {}.{} 无按名协议", class, field))
@@ -39,12 +41,13 @@ fn _frame_method(info: &Object) -> (Object, Object, i32, Object) {
     (clazz, _ref(info, "java/lang/StackFrameInfo", "name"), flags, _ref(info, "java/lang/StackFrameInfo", "type_"))
 }
 
-impl StackTraceElement {
+impl __StackTraceElementHw for StackTraceElement {
     /// native initStackTraceElements([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V：
     /// 按 `fillInStackTrace` 捕获的 Rust 栈帧填充元素字段。载体形态不符
     ///（非本数据面写入，如反序列化路径）时元素保持默认值，不失败。
     #[jvm_native]
-    pub fn initStackTraceElements(
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn initStackTraceElements(
         mut stack_trace: JArray<StackTraceElement>,
         backtrace: Object,
         depth: i32,
@@ -83,7 +86,8 @@ impl StackTraceElement {
     /// 形参以 `Into<Object>` 接收：StackFrameInfo 只在 StackFrameTraverser 路径进入生成范围，本文件不以
     /// 类型名引用它。
     #[jvm_native]
-    pub fn initStackTraceElement<S: Into<Object>>(mut element: StackTraceElement, info: S) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn initStackTraceElement<S: Into<Object>>(mut element: StackTraceElement, info: S) -> Result<()> {
         const ACC_NATIVE: i32 = 0x100;
         let info: Object = info.into();
         if info.0.is_jvm_null() {

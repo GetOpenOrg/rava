@@ -7,11 +7,13 @@
 use crate::java::lang::VirtualThread__Methods as _;
 use crate::prelude::*;
 use super::virtual_thread::VirtualThread;
+use super::__VirtualThreadHw;
 
-impl VirtualThread {
+impl __VirtualThreadHw for VirtualThread {
     /// native `registerNatives()`：JNI 注册（notifyJvmti* 等 JVMTI 通知）；无 JVMTI——no-op。
     #[jvm_native]
-    pub fn registerNatives() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn registerNatives() -> Result<()> {
         Ok(())
     }
 
@@ -19,43 +21,50 @@ impl VirtualThread {
     // 代理，事件无接收方——no-op（HotSpot 在无 JVMTI 环境下同为空操作）。
 
     #[jvm_native]
-    pub fn notifyJvmtiStart(&self) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn notifyJvmtiStart(&self) -> Result<()> {
         Ok(())
     }
 
     #[jvm_native]
-    pub fn notifyJvmtiEnd(&self) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn notifyJvmtiEnd(&self) -> Result<()> {
         Ok(())
     }
 
     #[jvm_native]
-    pub fn notifyJvmtiMount(&self, _hide: bool) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn notifyJvmtiMount(&self, _hide: bool) -> Result<()> {
         Ok(())
     }
 
     #[jvm_native]
-    pub fn notifyJvmtiUnmount(&self, _hide: bool) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn notifyJvmtiUnmount(&self, _hide: bool) -> Result<()> {
         Ok(())
     }
 
     /// JDK 21：隐藏帧通知（JDK 25 已删）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
-    pub fn notifyJvmtiHideFrames(&self, _hide: bool) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn notifyJvmtiHideFrames(&self, _hide: bool) -> Result<()> {
         Ok(())
     }
 
     /// JDK 25：挂起禁用通知（JVMTI）——no-op
     #[cfg(jdk_ge_25)]
     #[jvm_native]
-    pub fn notifyJvmtiDisableSuspend(_enter: bool) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn notifyJvmtiDisableSuspend(_enter: bool) -> Result<()> {
         Ok(())
     }
 
     /// JDK 25：pin 住时的 JFR `VirtualThreadPinned` 事件；无 JFR 记录器——no-op
     #[cfg(jdk_ge_25)]
     #[jvm_native]
-    pub fn postPinnedEvent(_op: String) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn postPinnedEvent(_op: String) -> Result<()> {
         Ok(())
     }
 
@@ -64,7 +73,8 @@ impl VirtualThread {
     /// 链表恒空——按 HotSpot 空表语义永久阻塞调用线程（守护线程，不影响进程退出）
     #[cfg(jdk_ge_25)]
     #[jvm_native]
-    pub fn takeVirtualThreadListToUnblock() -> Result<VirtualThread> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn takeVirtualThreadListToUnblock() -> Result<VirtualThread> {
         loop {
             std::thread::park();
         }

@@ -25,7 +25,8 @@
 #                                                           # cp 取 projects/<库>/form.toml；golden 文件名 <库>_<入口简名>
 #
 # 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
-#（scripts/fetch_pilot_deps.sh --no-scan 导出，同时生成依赖锁 deps.lock.toml；可经 PILOT_LIBS 覆盖）。
+#（scripts/fetch_pilot_deps.sh --no-scan 导出，同时生成依赖锁 deps.lock.toml；PILOT_LIBS 仅限本机多版本
+# 实验覆盖——gate 一律经 scripts/diag/gate_lib_golden.sh 自取依赖，禁止 PILOT_LIBS 外指其他检出）。
 # 库输入走 V12-1 终态入口：--deps deps.lock.toml + --cp 锁条目名（crate 名 = 模块 crate 名：
 # hamcrest → org_hamcrest、junit → junit）；整包翻译以 --seed-class 显式给出（jar 全类清单）。
 # 流程：javac（-cp jars）→ java 真 jar 侧 golden → rava build --deps/--cp 转译 + 编译 →
@@ -36,7 +37,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # jar 资产默认取仓库内导出位（依赖清单 tests/lib_pilot/deps/pom.xml）
 LIBS="${PILOT_LIBS:-$REPO_ROOT/tests/lib_pilot/deps/target/pilot-libs}"
-[ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（或设 PILOT_LIBS）" >&2; exit 2; }
+[ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（gate 一律经 scripts/diag/gate_lib_golden.sh 自取依赖，禁 PILOT_LIBS 外指其他检出）" >&2; exit 2; }
 LOCK="${DEPS_LOCK:-$(dirname "$LIBS")/deps.lock.toml}"
 [ -f "$LOCK" ] || { echo "缺依赖锁 $LOCK：先跑 scripts/fetch_pilot_deps.sh --no-scan" >&2; exit 2; }
 # hamcrest 全类清单（m1 整包翻译的显式种子；m2–m5 在此之上加 junit 种子——与原 :seed= 序一致）
@@ -63,12 +64,13 @@ mkdir -p golden
 
 # ---- 2026-10-12 迁移批：单文件 pilot 与多文件项目两种直达模式 ----
 # 单文件 pilot 的 cp 表（条目名 = 依赖锁 artifactId；jar 路径按锁序解析，与 e2e_form 同口径）
+# 2026-10-13 放量迁入（docs/plans/2026-10-13-e2e-libpilot-rollout-draft.md §二）：22 绿例 + AsmTransformMain
+# + Slf4jBasicMain 已 git mv 入 tests/e2e/{75_slf4j,78_lang3,79_io,80_servlet,81_jpa,85_spring_core,
+# 88_log4j2,89_asm}（目录级 form.toml 承接 cp），本表同步删去已迁入口的死行；表内只剩未进管道的
+# pilot（其 golden 直达复现入口保留）。
 pilot_cp_table() {
     case "$1" in
-    Slf4jBasicMain|Slf4jFormatterMain|Slf4jSpiMain) echo slf4j-api ;;
     JodaBasicMain|JodaChronologyMain|JodaPeriodMain) echo joda-time ;;
-    Lang3NumberUtilsMain|Lang3ReflectMain|Lang3StringUtilsMain|Lang3TimeFormatMain|Lang3TupleMain) echo commons-lang3 ;;
-    IoCopyMain|IoEndianMain|IoFilenameMain) echo commons-io ;;
     OgnlCollectionMain|OgnlContextMain|OgnlEvalMain) echo ognl,javassist ;;
     JsoupParseMain|JsoupSelectorMain) echo jsoup ;;
     CaffeineManualMain|CaffeineWeigherMain) echo caffeine ;;
@@ -77,14 +79,8 @@ pilot_cp_table() {
     AssertJChainMain) echo assertj-core ;;
     FastjsonPathMain|FastjsonStreamMain) echo fastjson2 ;;
     LogbackConfigMain|LogbackPatternMain) echo logback-classic,logback-core,slf4j-api ;;
-    Log4j2ApiMain) echo log4j-api ;;
     DatabindAnnotationMain|DatabindDeserMain|DatabindSerMain) echo jackson-databind,jackson-core,jackson-annotations ;;
-    ServletAnnotationMain|ServletCookieMain|ServletEnumMetaMain|ServletSessionEventMain) echo jakarta.servlet-api ;;
-    JpaAnnotationMain|JpaEnumMetaMain) echo jakarta.persistence-api ;;
-    SpringGenericResolverMain|SpringReflectUtilsMain|SpringUtilAssertMain) echo spring-core,spring-jcl ;;
     SpringProxyJdkMain) echo spring-aop,spring-core,spring-jcl ;;
-    AsmGenerateMain) echo asm ;;
-    AsmTransformMain|AsmCommonsMain) echo asm,asm-commons ;;
     KotlinStdlibPilotMain) echo kotlin-stdlib ;;
     *) return 1 ;;
     esac

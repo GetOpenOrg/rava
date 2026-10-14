@@ -9,9 +9,11 @@ use crate::java::lang::Class;
 use crate::java::util::Set;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
+use super::__ReflectionHw;
+use crate::java::lang::__ClassHw as _;
 
 
-impl Reflection {
+impl __ReflectionHw for Reflection {
     /// native `getCallerClass()`：`@CallerSensitive`——返回「调用 getCallerClass
     /// 的方法」的调用者声明类（JDK javadoc：ignoring frames associated with
     /// java.lang.reflect.Method.invoke）。
@@ -25,7 +27,8 @@ impl Reflection {
     /// 与 JDK 默认安装的可观测行为一致——`ServiceLoader.checkCaller` 不再误报 "no caller to check"
     /// （Charset.forName 未知名的扩展 provider 查找，macOS 实测揭出）。
     #[jvm_native]
-    pub fn getCallerClass() -> Result<Class> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getCallerClass() -> Result<Class> {
         if let Some(caller) = crate::reflect_dispatch::current_caller_sensitive() {
             return Ok(Class::for_class(caller));
         }
@@ -42,7 +45,8 @@ impl Reflection {
     /// 不入类标志——由 Modifier 位集（含 InnerClasses 语义）还原。消费方：verifyMemberAccess 的
     /// 「非 public 类 → 同包判定」（FS-R R2a 字节码路径）。
     #[jvm_native]
-    pub fn getClassAccessFlags(c: Class) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getClassAccessFlags(c: Class) -> Result<i32> {
         let mods = c.getModifiers()?;
         let public = if mods & (0x0001 | 0x0004) != 0 { 0x0001 } else { 0 };
         // 保留 final / interface / abstract / annotation / enum 等类级位，去掉成员级的 private / protected / static
@@ -52,7 +56,8 @@ impl Reflection {
     /// native `areNestMates(Class, Class)`：javac 的 NestHost 恒为最外层封闭类（binary name
     /// 首个 `$` 前），同巢即互为 nestmate（private 成员可达，JDK 11+）。
     #[jvm_native]
-    pub fn areNestMates(current: Class, member: Class) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn areNestMates(current: Class, member: Class) -> Result<bool> {
         let host = |c: &Class| {
             let n = format!("{}", c.__get_name()).replace('.', "/");
             n.split('$').next().unwrap_or("").to_owned()

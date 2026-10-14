@@ -76,6 +76,10 @@ pub(super) fn box_prim_via_valueof(env: &InstrEnv, val: &str, prim_desc: &str) -
         return Ok(None);
     };
     let mname = ty::ident::safe_ident(&mangle_if_overloaded(&env.ctx, wci.name(), &m.name, Some(&m.desc))?);
+    // K4 阶段 2 起 valueOf_* 在装箱类的方法 trait 上：调用点文件登记导入（SAM 装箱返回值
+    // 不经 invokestatic 指令——record_member 不覆盖，s7k4d 5case6 实测 TestStackWalkerFrames）
+    env.ctx.ty.use_methods(wci.name());
+    env.ctx.ty.use_hw(wci.name(), "valueOf");
     Ok(Some(format!("{}::from({wrapper_rust}::{mname}({val})?)", ir::anchors::OBJECT)))
 }
 

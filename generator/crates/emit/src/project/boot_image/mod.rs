@@ -62,6 +62,8 @@ pub(crate) struct Plan<'c, 'a> {
     pub views: RefCell<BTreeSet<u32>>,
     /// 文本中出现的生成类（类型 / 表达式位置）：其方法 trait `X__Methods` 须匿名导入（§9.9 K3）
     pub methods: RefCell<BTreeSet<String>>,
+    /// K4-2a：映像常量求值引用的手写扩展 trait 块（类 → 块序号）
+    pub hws: RefCell<BTreeMap<String, BTreeSet<u32>>>,
     pub layouts: BTreeMap<String, Vec<Slot>>,
     /// 类 → 实现层模块路径（存储类型 `X__inner` 随存储层进实现 crate）
     pub homes: &'c BTreeMap<String, String>,
@@ -97,6 +99,7 @@ impl<'c, 'a> Plan<'c, 'a> {
             memos,
             views: RefCell::new(BTreeSet::new()),
             methods: RefCell::new(BTreeSet::new()),
+            hws: RefCell::new(BTreeMap::new()),
             layouts: BTreeMap::new(),
             homes,
             seg: BTreeMap::new(),
@@ -185,19 +188,48 @@ impl<'c, 'a> Plan<'c, 'a> {
     }
 
     /// 登记类的方法 trait 使用：由字节码生成的类与接口载体（宏为其生成 `X__Methods`；
-    /// 接口载体成员自 §9.9 K6 前置项起同样在方法 trait 上）
+    /// 接口载体成员自 §9.9 K6 前置项起同样在方法 trait 上）。映像常量求值体会调用
+    /// 手写伴生方法（Runtime.maxMemory 等，§9.9 K4-2a）——映像侧无成员名可配，
+    /// 该类的全部 hw 块一并登记
     fn use_methods(&self, cls: &str) {
         let generated = self.ctx.class(cls).is_some()
             && !self.ctx.is_opaque(cls)
             && self.ems.get(cls).is_some_and(|em| !em.handwritten);
         if generated {
             self.methods.borrow_mut().insert(cls.to_string());
+            // K4-2a：映像常量求值体可调用手写伴生方法（Runtime.maxMemory 等）——映像侧
+            // 无成员名可配，该类全部 hw 块登记（名单来自 EmitShared 的 HwNames，不依赖作用域）
+            for ord in self.ctx.hw.ordinals(cls) {
+                self.hws.borrow_mut().entry(cls.to_string()).or_default().insert(ord);
+            }
         }
     }
 
-    /// 方法 trait 导入行（`use <类路径>__Methods as _;`）
+    /// 方法 trait 与 hw 扩展 trait 导入行（`use <类路径>__Methods as _;` /
+    /// `use <类路径>::__XHw{N} as _;`——hw 块序号来自全局 HwNames）
     pub fn methods_imports(&self) -> String {
-        self.methods.borrow().iter().map(|c| format!("use {}{} as _;\n", self.path(c), METHODS_SUFFIX)).collect()
+        let mut out = self
+            .methods
+            .borrow()
+            .iter()
+            .map(|c| format!("use {}{} as _;\n", self.path(c), METHODS_SUFFIX))
+            .collect::<String>();
+        let mut hws: Vec<(String, u32)> = self
+            .hws
+            .borrow()
+            .iter()
+            .flat_map(|(c, ords)| ords.iter().map(move |o| (c.clone(), *o)))
+            .collect();
+        hws.sort();
+        for (c, ord) in hws {
+            let suffix = if ord == 1 { String::new() } else { ord.to_string() };
+            // path(c) = 包路径::定义名（同 __Methods 行的再导出口径）；hw trait 按包级再导出名
+            let full = self.path(&c);
+            let decl = self.ctx.declared(&c);
+            let pkg = full.strip_suffix(&decl).unwrap_or_default();
+            out.push_str(&format!("use {pkg}__{decl}Hw{suffix} as _;\n"));
+        }
+        out
     }
 
     /// 类的完整类型（类型位置）

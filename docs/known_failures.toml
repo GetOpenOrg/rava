@@ -74,3 +74,57 @@ signature = "Exception in thread \"main\" java.lang.NullPointerException"
 owner = "引导映像第 5 步 T3（jimage 嵌入数据 + getNativeMap，docs/plans/2026-10-05-boot-image-evaluator.md / 2026-10-02-boot-layer.md §2.3 第 6 条）"
 since = "2026-10-08"
 note = "`.class` 资源未内嵌：base.getResourceAsStream(\"java/lang/Object.class\") 返回 null 后 readNBytes NPE（前 23 行与 JDK 相同）；模块内容中的类字节随第 5 步 jimage 一并嵌入"
+
+# ── lib pilot 放量迁入（rollout 轮，2026-10-13，分支 libtests-rollout-exec）──
+# 台账出处：docs/plans/2026-10-13-e2e-libpilot-rollout-draft.md §三（#14 案乙，用户裁决）
+# + 本轮首跑实测（22 PASS / 2 FAIL，见 docs/tasks.md 对应登记行）
+
+[[known]]
+test = "Slf4jBasicMain"
+signature = "FAIL mdc-keyset-sorted :: java.lang.NullPointerException"
+owner = "JDK 21 helpful NPE 文本未实现（验证报告 2026-10-12 §四.5，低优先）"
+since = "2026-10-13"
+note = "随 75_slf4j 迁入（案乙）：期望按 JVM 真值生成（含 helpful NPE 消息），rs 侧行为与异常类型两侧一致、仅消息文本差，diff 稳定 2 行（-…NullPointerException: Cannot invoke \\\"java.util.Map.keySet()\\\" because… / +…NullPointerException）"
+deferred = "面外"
+deferred_reason = "helpful NPE 消息属 JVM 诊断文本层（-XX:+ShowCodeDetailsInExceptionMessages 语义），非任何已排框架阶段的 API 面；实现后本例跑绿自动出列"
+
+# Log4j2ApiMain（E0599 构造器族，放量首跑登记）已修：mark-ctor-fix——构造器 new/new_* 进
+# moves_to_trait 留固有名单（手写层直调协议面，与 valueOf_* 同级）+ net_impl.rs 补
+# System/InetAddress 两导入；条目随修复删除（failure_patterns `ctor-trait-handwritten-seam`）。
+
+
+# ── batch-1016-v2 放行登记（E0599 __default_begin 族，K4 语义统一过渡期）──
+
+[[known]]
+test = "PartitionInteger"
+signature = "__default_begin"
+owner = "K4 语义统一过渡期（接口 default 方法用户 crate 可达性，b1017 修）"
+since = "2026-10-14"
+note = "E0599 Sink 接口 __default_begin"
+
+[[known]]
+test = "DataEncryptionStandard"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+
+[[known]]
+test = "TestHttpLoopbackSync"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+note = "覆盖旧 IOUtil.fdLimit 条目（新失败形态）"
+
+[[known]]
+test = "TestHttpLoopbackAsync"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+note = "覆盖旧条目"
+
+[[known]]
+test = "Log4j2ApiMain"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+note = "覆盖旧 constructor face 条目（新根因）"

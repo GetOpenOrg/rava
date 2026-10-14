@@ -114,10 +114,13 @@ pub fn vendor_siblings(out_dir: &Path, runtime_dir: &Path) -> Result<Vec<String>
     let root = runtime_dir.parent().unwrap_or(Path::new(""));
     let cargo = runtime_dir.join("Cargo.toml");
     let text = std::fs::read_to_string(&cargo).map_err(|e| io_err(&cargo.display().to_string(), e))?;
+    // java_marker 由 overlay 单独镜像进 scratch（§9.9 K4：还要承载生成的类标记文件，不能走
+    // 静态 vendor 拷贝），排除出兄弟 vendoring
     let mut queue = sibling_deps(&text, &cargo)?;
+    queue.retain(|n| n != super::overlay::MARKER_CRATE);
     let mut crates: BTreeMap<String, (PathBuf, Vec<String>)> = BTreeMap::new();
     while let Some(name) = queue.pop() {
-        if crates.contains_key(&name) {
+        if crates.contains_key(&name) || name == super::overlay::MARKER_CRATE {
             continue;
         }
         let dir = root.join(&name);

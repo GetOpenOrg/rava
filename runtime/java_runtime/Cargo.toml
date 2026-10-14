@@ -9,6 +9,8 @@ path = "src/lib.rs"
 
 [dependencies]
 parking_lot = "0.12"
+# 标记层基础（§9.9 K4）：与签名无关的运行时基础设施，独立 crate 置于声明链之下
+java_marker = { path = "../java_marker" }
 # POSIX 系统调用（access / statvfs / pathconf：std 无等价，FS-IO1 / IO2）
 libc = "0.2"
 rava_macros = { path = "../rava_macros" }

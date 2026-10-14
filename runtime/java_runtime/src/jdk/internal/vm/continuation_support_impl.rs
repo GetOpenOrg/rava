@@ -4,13 +4,15 @@
 use crate::jdk::internal::vm::ContinuationSupport__Methods as _;
 use crate::prelude::*;
 use super::continuation_support::ContinuationSupport;
+use super::__ContinuationSupportHw;
 
-impl ContinuationSupport {
+impl __ContinuationSupportHw for ContinuationSupport {
     /// native `isSupported0()`：VM 是否支持 continuation（`-XX:+VMContinuations`）。
     /// Continuation 由有栈协程承载（`continuation_impl.rs`）→ true：`ThreadBuilders.newVirtualThread`
     /// 走 `VirtualThread` 分支（false 时退化为 `BoundVirtualThread`，每个虚拟线程一条 OS 线程）。
     #[jvm_native]
-    pub fn isSupported0() -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isSupported0() -> Result<bool> {
         Ok(true)
     }
 }

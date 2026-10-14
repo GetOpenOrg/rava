@@ -145,3 +145,57 @@ field_put 值打印、fopen / 全局开关翻转打印与 [proc] 节点号后，
 - 引擎层面的普遍现象（本修复不展开）：全局字段格 `fvals` 只升不降，某轮「暂时 Unknown」的调用
   答复经 putfield 以 Top 并入后不可撤回，是否到达 Top 依赖分析次序。本次以调用点事实消除
   getSecurityManager 的不确定性；其它无返回事实的取值法若再现同类摆动，按同一口径补清单事实。
+
+## 七、第二例（s7-k4 链，2026-10-14 闭环）：写站点先于返回常量建立的次序窗口
+
+K4-2a 交接的确定性遗留（S7 §9.9）：`closure_independent_of_hash_seed` 在 s7-k4 链失败，
+二分定归属阶段 1/2（s7k4d-detmid（042465b7）与 s7k4d-det4 逐字同，基线 a07fbb6f 过）。
+作业 s7k4s-why1（e9597fef，`--why` + RAVA_DBG_FIELD/RET，种子 0/2 = 2709/2711）取证：
+
+- **不是 §五修法的旁路**：`getSecurityManager = null` 事实两种子均生效（`getProtectionDomains`
+  的 `@16 ifnull` 恒跳），§五结论仍然成立。
+- **同一两类、新一层机理**：种子 2 里 `ObjectStreamClass$2.run@336 putfield domains`
+  首轮写 **Top**、其后（失效重写）才写 Const(Null)；种子 0 全程 Const(Null)。链：
+  `@333 invokevirtual getProtectionDomains` 的返回常量格 `rvals` 在种子 2 的首轮
+  **缺席**（被调方该轮分析无返回点）→ oracle 答 Unknown → 写入以 Top 并入全局 `fvals`
+  不可撤回（格只升不降）→ `newInstance@15 ifnull domains` 不折 → `@38
+  SharedSecrets.getJavaSecurityAccess` → 映像常量分派牵出 impl + 接口两类。
+  rvals 随后出现时经 `Dep::Ret` 失效重写已晚——**写入是否污染依赖「调用方写站点」与
+  「被调返回常量建立」的先后**，正是 §六末段预言的普遍现象的字段值集面。
+- **closure crate 在 a07fbb6f..e9597fef 间零改动**：阶段 1/2（e6edfa24/a867b085）的
+  手写层挪移（obj_ref/sync_model 出 runtime 树、object.rs `__Obj` impl 移出等）只是
+  扰动内部表迭代序，把潜伏的次序敏感翻出面——与 §二 nogc「掩盖」同一性质：基线过
+  ≠ 无缺陷，只是两侧恰好同面。s7k4d-seed2（19802647）的「四例全同」同属侥幸
+  （三种子恰好都落在含两类的一面，集合相等但非正确侧）。
+
+### 修法（cc2cfc3e）：pending_write 暂缓并入 + 失效重算强制重跑
+
+- `bytecode.rs::pending_write`：PUTFIELD/PUTSTATIC 的写入值恰是**无标签、单来源
+  （产生它的调用点）**的引用，调用点有唯一字节码目标（`Ctx::call_info`）、目标已建
+  节点（`noreturn.created`——标记建模旁路调用边的站点无节点、返回常量不会出现，
+  不属暂态）、且 `rvals` 缺席时，本次 Top **暂不并入**（`fvals`/`ovals`/`owild`），
+  偏移登记进 `pending_skips`。与 `noreturn.rs`「尚无返回」的乐观-重算同一原理
+  （次序无关不动点口径）：缺席是暂态，不是 ⊤。
+- 方法失效重算时（`process_bytecode` 的 changed 偏移计算）`pending_skips` 一并并入：
+  事件值不变也重跑——被调返回常量升到 Top 时按新格补并入（防漏），出现常量时写入
+  常量（防污染）。真不返回的被调方使写入不可达，不并入同样正确。
+- 验收（全绿）：**s7k4s-det1**（jp2，rc=0）`closure_independent_of_hash_seed` +
+  `closure_independent_of_order` **2 过 0 失**（6612s，较修复前 5058s 慢约三成——
+  暂缓写入多出的 Dep::Ret 失效重算轮，可接受）；**s7k4s-tslp1 / s7k4s-seed1**
+  （us1/kr1，rc=0 ×2，`seed-sets: ALL-IDENTICAL`）四例种子 0/1/2 集合对 e9597fef
+  逐项全同（TSLP 2662×3、HelloWorld 641×3、CollectorsDemo 662×3、DeepCopy 2660×3
+  ——修复只影响确定性不影响集合）；**s7k4s-link1**（kr1，rc=0）HelloWorld +
+  TestStackWalkerFrames 链接级逐字对 JVM PASS；generator `cargo check --release
+  --tests` 本机过、closure --lib 252 过。
+- 附带澄清（交接疑点的 disposal）：「两工具口径差异」非闭包缓存指纹——指纹本就计入
+  hash seed（cache.rs `f.field("hash_seed", …)`），且两口径都不开缓存；真因是
+  `--jdk 21`（cargo 测试与 --why 作业，JDK 发现）与 `--java-home`（s7k6_seed_sets.sh
+  固定参考 21.0.11）解析到不同 JDK，闭包宇宙差 47 类（TSLP 2709/2711 vs 2662），
+  回归只在发现侧宇宙复现、在参考侧宇宙两种子恰同面（集合相等但非语义正确侧）。
+
+### 遗留（本次不展开）
+
+- 摘要共享（`share.rs`）的陈旧窗口：共享摘要携带的旧 Unknown 事件值在 rvals 已建立后
+  落地仍会写 Top（与修复前同行为，不劣化）；如再现按「pending 入 Analysis 工件」口径根治。
+- 分支直接依赖 pending 调用值的暂态两侧展开（类集合只增）未在本例出现，机制上与
+  `noreturn.rs` 头部注释的收尾口径同源，再现时按同一口径处理。

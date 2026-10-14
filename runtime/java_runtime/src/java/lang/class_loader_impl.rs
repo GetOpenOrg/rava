@@ -9,6 +9,9 @@ use crate::java::nio::ByteBuffer__Methods as _;
 use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::prelude::*;
 use super::class_loader::ClassLoader;
+use super::__ClassLoaderHw;
+use super::__ClassLoaderHw2;
+use crate::java::lang::__ClassHw as _;
 
 // java.lang.ClassLoader 伴生。
 //
@@ -17,10 +20,11 @@ use super::class_loader::ClassLoader;
 // 类路径资源经 class_path 内建读 EmbeddedClassPath，boot-image §5.7）。本文件只承载：
 //   - native 方法；
 //   - 运行期类定义点（第 ② 类）。
-impl ClassLoader {
+impl __ClassLoaderHw for ClassLoader {
     /// native `registerNatives()`（<clinit> 首句）：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
-    pub fn registerNatives() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn registerNatives() -> Result<()> {
         Ok(())
     }
 
@@ -30,7 +34,8 @@ impl ClassLoader {
     /// 类在此可见——应用 / 平台加载器的类由各自的 `findLoadedClass0` 命中（与 HotSpot 的
     /// SystemDictionary 按 (加载器, 类名) 登记一致）。
     #[jvm_native]
-    pub fn findBootstrapClass(name: String) -> Result<super::Class> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn findBootstrapClass(name: String) -> Result<super::Class> {
         let slash = format!("{}", name).replace('.', "/");
         if slash.starts_with('[')
             || !super::Class::__is_known_class(&slash)
@@ -48,7 +53,8 @@ impl ClassLoader {
     /// 于是 `BuiltinClassLoader.loadClassOrNull` 对闭包内的类在 `findLoadedClass` 一步命中，不进入
     /// `findClassInModuleOrNull → defineClass`（引导层方案 §2.3 第 5 项）。
     #[jvm_native]
-    pub fn findLoadedClass0(&self, name: String) -> Result<super::Class> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn findLoadedClass0(&self, name: String) -> Result<super::Class> {
         let slash = format!("{}", name).replace('.', "/");
         if slash.starts_with('[') || !super::Class::__is_known_class(&slash) {
             return Ok(super::Class::default());
@@ -257,14 +263,15 @@ fn _range_bytes(b: &JArray<i8>, off: i32, len: i32) -> Result<Vec<u8>> {
     Ok(all[off as usize..(off + len) as usize].iter().map(|v| *v as u8).collect())
 }
 
-impl ClassLoader {
+impl __ClassLoaderHw2 for ClassLoader {
     /// static native `defineClass0(loader, lookup, name, b, off, len, pd, initialize, flags, classData)`：
     /// `Lookup.defineClass` / `defineHiddenClass` 的入口（JVM_LookupDefineClass）。参数检查同 defineClass1，
     /// 随后经 `_define` 按内容查预定义类表。隐藏类（flags 含 HIDDEN_CLASS）不触发 ClassFileLoadHook，
     /// 训练运行记录不到，按未命中处理；lambda / 代理等 VM 另行承载的定义点不经此处。classData 不落地
     /// （命中的只可能是非隐藏类，Lookup.defineClass 传 null）。
     #[jvm_native]
-    pub fn defineClass0(loader: ClassLoader, _lookup: super::Class, name: String, b: JArray<i8>, off: i32, len: i32,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn defineClass0(loader: ClassLoader, _lookup: super::Class, name: String, b: JArray<i8>, off: i32, len: i32,
                         pd: crate::java::security::ProtectionDomain, initialize: bool, _flags: i32,
                         _class_data: Object) -> Result<super::Class> {
         let bytes = _range_bytes(&b, off, len)?;
@@ -275,7 +282,8 @@ impl ClassLoader {
     /// 参数检查（b 为 null → NPE；len < 0 或区间越界 → ArrayIndexOutOfBoundsException）后取区间字节，
     /// 经 `_define` 判定（见上）。
     #[jvm_native]
-    pub fn defineClass1(loader: ClassLoader, name: String, b: JArray<i8>, off: i32, len: i32,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn defineClass1(loader: ClassLoader, name: String, b: JArray<i8>, off: i32, len: i32,
                         pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
         let bytes = _range_bytes(&b, off, len)?;
         _define(loader, &name, &bytes, pd, false)
@@ -285,7 +293,8 @@ impl ClassLoader {
     /// （ClassLoader.defineClass(ByteBuffer) 只对 direct 缓冲区调用本 native）；地址取 Buffer.address
     /// （GetDirectBufferAddress），为 0 → NPE。
     #[jvm_native]
-    pub fn defineClass2(loader: ClassLoader, name: String, b: crate::java::nio::ByteBuffer, off: i32, len: i32,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn defineClass2(loader: ClassLoader, name: String, b: crate::java::nio::ByteBuffer, off: i32, len: i32,
                         pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
         if _is_jnull(&Object::from(Clone::clone(&b))) {
             return Err(JvmError::null_pointer());
@@ -303,7 +312,8 @@ impl ClassLoader {
     /// 选项填表。原生二进制无启动选项，断言恒关（与 `Class.desiredAssertionStatus0` 同源）：
     /// 四个数组为空、deflt 为 false。
     #[jvm_native]
-    pub fn retrieveDirectives() -> Result<super::AssertionStatusDirectives> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn retrieveDirectives() -> Result<super::AssertionStatusDirectives> {
         let mut d = super::AssertionStatusDirectives::new()?;
         d.__set_classes(JArray::from(Vec::<String>::new()));
         d.__set_classEnabled(JArray::from(Vec::<bool>::new()));

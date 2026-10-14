@@ -4,8 +4,12 @@
 //! 消息为 strerror 文案；IOStatus：UNAVAILABLE = -2、INTERRUPTED = -3。
 //! 套接字选项、poll 与可用性探测见同类的 `net_ext.rs`。组播 / 带外数据 native 不在档案调用链上。
 
+// 伴生 statics / 实例方法走导入口径（mark-ctor-fix 的两枚随语义统一移入：System::getProperty_str
+// 与 InetAddress::getAddress——构造器族不在此列，发射侧按 §9.9「构造器缝自动补入」处理）
+use crate::java::lang::System__Methods as _;
 use crate::java::net::Inet4Address__Methods as _;
 use crate::java::net::Inet6Address__Methods as _;
+use crate::java::net::InetAddress__Methods as _;
 use crate::java::net::InetSocketAddress__Methods as _;
 use crate::sun::nio::ch::Net__Methods as _;
 use crate::prelude::*;
@@ -13,6 +17,9 @@ use super::net::Net;
 use crate::java::io::FileDescriptor;
 use crate::java::net::{Inet4Address, Inet6Address, InetAddress, InetSocketAddress};
 use crate::net_posix::{self, errno, SockAddr};
+use super::__NetHw;
+use super::__NetHw2;
+use crate::java::lang::__StringHw as _;
 
 pub(super) const IOS_UNAVAILABLE: i32 = -2;
 pub(super) const IOS_INTERRUPTED: i32 = -3;
@@ -116,10 +123,11 @@ fn bind_rejected(_sa: &SockAddr) -> bool {
     false
 }
 
-impl Net {
+impl __NetHw2 for Net {
     /// native `initIDs()`：缓存 JNI 类与方法 ID——无需。
     #[jvm_native]
-    pub fn initIDs() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn initIDs() -> Result<()> {
         Ok(())
     }
 
@@ -127,7 +135,8 @@ impl Net {
     /// IPv6 套接字在 IPv4 可用时关闭 IPV6_V6ONLY（双栈）；reuse 设 SO_REUSEADDR；数据报套接字按平台补选项。
     /// fastLoopback 仅 Windows 使用。
     #[jvm_native]
-    pub fn socket0(prefer_ipv6: bool, stream: bool, reuse: bool, _fast_loopback: bool) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn socket0(prefer_ipv6: bool, stream: bool, reuse: bool, _fast_loopback: bool) -> Result<i32> {
         let domain = if ipv6_available()? && prefer_ipv6 { libc::AF_INET6 } else { libc::AF_INET };
         let ty = if stream { libc::SOCK_STREAM } else { libc::SOCK_DGRAM };
         // SAFETY: 新建套接字；失败路径在返回前关闭
@@ -157,7 +166,8 @@ impl Net {
 
     /// native `bind0(FileDescriptor, boolean preferIPv6, boolean useExclBind, InetAddress, int port)`。
     #[jvm_native]
-    pub fn bind0(fdo: FileDescriptor, prefer_ipv6: bool, _use_excl_bind: bool, ia: InetAddress, port: i32) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn bind0(fdo: FileDescriptor, prefer_ipv6: bool, _use_excl_bind: bool, ia: InetAddress, port: i32) -> Result<()> {
         let sa = to_sockaddr(&ia, port, prefer_ipv6)?;
         if bind_rejected(&sa) {
             return socket_error(libc::EADDRNOTAVAIL).map(|_| ());
@@ -171,7 +181,8 @@ impl Net {
 
     /// native `listen(FileDescriptor, int backlog)`。
     #[jvm_native]
-    pub fn listen(fdo: FileDescriptor, backlog: i32) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn listen(fdo: FileDescriptor, backlog: i32) -> Result<()> {
         // SAFETY: listen 只作用于 fd
         if unsafe { libc::listen(fdo.__get_fd(), backlog) } < 0 {
             socket_error(errno())?;
@@ -182,7 +193,8 @@ impl Net {
     /// native `connect0(boolean preferIPv6, FileDescriptor, InetAddress, int port)`：
     /// 成功 1；非阻塞进行中 UNAVAILABLE；被信号打断 INTERRUPTED。
     #[jvm_native]
-    pub fn connect0(prefer_ipv6: bool, fdo: FileDescriptor, ia: InetAddress, port: i32) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn connect0(prefer_ipv6: bool, fdo: FileDescriptor, ia: InetAddress, port: i32) -> Result<i32> {
         let sa = to_sockaddr(&ia, port, prefer_ipv6)?;
         let fd = fdo.__get_fd();
         // SAFETY: sa 为已编码的 sockaddr
@@ -200,7 +212,8 @@ impl Net {
     /// native `accept(FileDescriptor, FileDescriptor newfd, InetSocketAddress[] isaa)`：
     /// 新连接 fd 写入 newfd，对端地址写入 isaa[0]；ECONNABORTED 重试。
     #[jvm_native]
-    pub fn accept(fdo: FileDescriptor, newfdo: FileDescriptor, isaa: JArray<InetSocketAddress>) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn accept(fdo: FileDescriptor, newfdo: FileDescriptor, isaa: JArray<InetSocketAddress>) -> Result<i32> {
         let fd = fdo.__get_fd();
         let mut sa = SockAddr::empty();
         let newfd = loop {
@@ -226,7 +239,8 @@ impl Net {
 
     /// native `shutdown(FileDescriptor, int how)`：SHUT_RD = 0 / SHUT_WR = 1 / 其余 SHUT_RDWR；未连接不报错。
     #[jvm_native]
-    pub fn shutdown(fdo: FileDescriptor, how: i32) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn shutdown(fdo: FileDescriptor, how: i32) -> Result<()> {
         let how = match how {
             0 => libc::SHUT_RD,
             1 => libc::SHUT_WR,
@@ -241,13 +255,15 @@ impl Net {
 
     /// native `localPort(FileDescriptor)`：getsockname 的端口。
     #[jvm_native]
-    pub fn localPort(fdo: FileDescriptor) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn localPort(fdo: FileDescriptor) -> Result<i32> {
         Ok(sock_name(&fdo, false)?.map(|sa| net_posix::decode(&sa).port).unwrap_or(-1))
     }
 
     /// native `localInetAddress(FileDescriptor)`：getsockname 的地址。
     #[jvm_native]
-    pub fn localInetAddress(fdo: FileDescriptor) -> Result<InetAddress> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn localInetAddress(fdo: FileDescriptor) -> Result<InetAddress> {
         match sock_name(&fdo, false)? {
             Some(sa) => Ok(inet_address(&sa)?.0),
             None => Ok(InetAddress::default()),
@@ -256,13 +272,15 @@ impl Net {
 
     /// native `remotePort(FileDescriptor)`：getpeername 的端口。
     #[jvm_native]
-    pub fn remotePort(fdo: FileDescriptor) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn remotePort(fdo: FileDescriptor) -> Result<i32> {
         Ok(sock_name(&fdo, true)?.map(|sa| net_posix::decode(&sa).port).unwrap_or(-1))
     }
 
     /// native `remoteInetAddress(FileDescriptor)`：getpeername 的地址。
     #[jvm_native]
-    pub fn remoteInetAddress(fdo: FileDescriptor) -> Result<InetAddress> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn remoteInetAddress(fdo: FileDescriptor) -> Result<InetAddress> {
         match sock_name(&fdo, true)? {
             Some(sa) => Ok(inet_address(&sa)?.0),
             None => Ok(InetAddress::default()),

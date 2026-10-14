@@ -104,6 +104,19 @@ pub fn import_lines(ctx: &EmitCtx<'_>, site: &ImportSite<'_>, scope: &NameScope)
             out.push(line);
         }
     }
+    // 手写扩展 trait（§9.9 K4-2a，`__XHw{N}`）：与调用点登记的块序号一一对应，匿名导入；
+    // 本类的在本文件定义（trait 声明随宏块后的尾部文本留在声明层）
+    for (b, ord) in st.hw_traits() {
+        if b == self_bin || ctx.is_opaque(b) {
+            continue;
+        }
+        let Some(m) = module_path(ctx, site, b, false) else { continue };
+        let suffix = if ord == 1 { String::new() } else { ord.to_string() };
+        let line = format!("use {m}::__{}Hw{suffix} as _;", declared(ctx, b));
+        if seen.insert(line.clone()) {
+            out.push(line);
+        }
+    }
     out
 }
 

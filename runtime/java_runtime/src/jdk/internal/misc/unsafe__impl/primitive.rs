@@ -1,6 +1,7 @@
 //! Unsafe 的基本类型读写与 volatile 访问（boolean / byte / short / char / float / double）（宿主 unsafe__impl.rs 的私有辅助模块）
 
 use super::*;
+use crate::java::lang::reflect::__ArrayHw as _;
 
 // ── 基本类型读写（boolean / byte / short / char / float / double 的对象偏移形态）──────────
 //

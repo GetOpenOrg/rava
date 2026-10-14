@@ -8,6 +8,7 @@
 use crate::java::lang::ProcessHandleImpl__Methods as _;
 use crate::prelude::*;
 use super::process_handle_impl::ProcessHandleImpl;
+use super::__ProcessHandleImplHw;
 
 /// /proc/<pid>/stat 的父进程号与计时（对标 ProcessHandleImpl_linux.c os_getParentPidAndTimings）。
 pub(super) struct ProcStat {
@@ -84,16 +85,18 @@ fn wait_no_reap(_pid: i64) -> Result<i32> {
     unreachable!("非 Linux 平台按回收等待")
 }
 
-impl ProcessHandleImpl {
+impl __ProcessHandleImplHw for ProcessHandleImpl {
     /// native `initNative()`：缓存时钟频率 / 启动时间基准等 JNI 状态——无需初始化。
     #[jvm_native]
-    pub fn initNative() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn initNative() -> Result<()> {
         Ok(())
     }
 
     /// native `getCurrentPid0()`：当前进程号（getpid）。
     #[jvm_native]
-    pub fn getCurrentPid0() -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getCurrentPid0() -> Result<i64> {
         Ok(std::process::id() as i64)
     }
 
@@ -101,7 +104,8 @@ impl ProcessHandleImpl {
     /// 进程不存在返回 -1。JDK 以启动时刻区分 pid 复用，`Info.info` 也以它校验 info0 的结果，
     /// 两处须同一口径（proc_stat）。
     #[jvm_native]
-    pub fn isAlive0(pid: i64) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isAlive0(pid: i64) -> Result<i64> {
         if let Some(st) = proc_stat(pid) {
             return Ok(st.start_time);
         }
@@ -117,7 +121,8 @@ impl ProcessHandleImpl {
     /// native `parent0(long pid, long startTime)`：父进程号；不可得返回 -1。
     /// 调用方给出的启动时刻与进程实际启动时刻不符（pid 已复用）时同样返回 -1。
     #[jvm_native]
-    pub fn parent0(pid: i64, start_time: i64) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn parent0(pid: i64, start_time: i64) -> Result<i64> {
         if pid == std::process::id() as i64 {
             // SAFETY: getppid 无副作用
             return Ok(unsafe { libc::getppid() } as i64);
@@ -133,7 +138,8 @@ impl ProcessHandleImpl {
     /// pid == 0 枚举全部进程，否则只取父进程为 pid 的子进程；逐项写入三个数组（ppids / stimes
     /// 可为 null），返回匹配总数——超过数组长度时只写前 len 项，调用方按返回值扩容重试。
     #[jvm_native]
-    pub fn getProcessPids0(pid: i64, pids: JArray<i64>, ppids: JArray<i64>, stimes: JArray<i64>) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getProcessPids0(pid: i64, pids: JArray<i64>, ppids: JArray<i64>, stimes: JArray<i64>) -> Result<i32> {
         let size = pids.len()?;
         if (!ppids.is_jvm_null() && ppids.len()? != size)
             || (!stimes.is_jvm_null() && stimes.len()? != size) {
@@ -174,7 +180,8 @@ impl ProcessHandleImpl {
     /// 正常退出返回退出码，被信号终止返回 `0x80 + 信号号`（shell 约定，JDK 同形）；
     /// reap=false 时用 waitid(WNOWAIT) 只观察不回收。非本进程子进程（ECHILD）等错误返回 0。
     #[jvm_native]
-    pub fn waitForProcessExit0(pid: i64, reap: bool) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn waitForProcessExit0(pid: i64, reap: bool) -> Result<i32> {
         const SIGNAL_BASE: i32 = 0x80;
         // waitid(WNOWAIT) 的 siginfo 访问器仅 Linux 可移植；其余平台按回收等待
         if reap || !cfg!(target_os = "linux") {
@@ -203,7 +210,8 @@ impl ProcessHandleImpl {
     /// native `destroy0(long pid, long startTime, boolean forcibly)`：SIGKILL / SIGTERM；
     /// 发送成功返回 true。
     #[jvm_native]
-    pub fn destroy0(pid: i64, _start_time: i64, forcibly: bool) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn destroy0(pid: i64, _start_time: i64, forcibly: bool) -> Result<bool> {
         let sig = if forcibly { libc::SIGKILL } else { libc::SIGTERM };
         // SAFETY: 向指定进程发送终止信号（ProcessHandle.destroy 的 JDK 语义）
         Ok(unsafe { libc::kill(pid as libc::pid_t, sig) } == 0)

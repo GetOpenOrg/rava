@@ -124,6 +124,18 @@ impl<'a> Engine<'a> {
         if let Some(i) = self.methods.get_index_of(&k) {
             return i;
         }
+        // S7 上下文硬上限（优化方案 §二 S7「硬上限 + 超限折叠回无上下文副本」）：成员已封顶时
+        // 新克隆上下文折叠回本体（widening，sound 过近似——该调用的实参并入本体参数格、
+        // 接收者并入本体 this，分派面只增不减；与 `SITE_CAP` 同型的单调计数 + 粘性封顶，
+        // 已建节点不动）。语料上零触发（缺省阈值取 ctxhist 实测上界之上），重语料上砍尾部成员
+        if ctx != NOCTX && self.ctx_cap > 0 {
+            if let Some(&b) = self.mbase.get(&k.0) {
+                if self.ctx_capped.contains(&b) {
+                    self.ctx_widened += 1;
+                    return self.method_node(k.0, NOCTX, via);
+                }
+            }
+        }
         let (key, ctx) = k;
         if ctx != NOCTX && self.mbase.get(&key).is_some_and(|&b| self.methods[b].kind != Kind::Bytecode) {
             return self.method_node(key, NOCTX, via);
@@ -182,6 +194,16 @@ impl<'a> Engine<'a> {
             MNode { key: key.clone(), kind, via: via.clone(), is_static, ptypes, rtype, analysis: None, hw_fns: vec![], ctx, ret_model, returned: None, applied: None, aseq: 0, applied_seq: 0 },
         );
         self.mbase.entry(key.clone()).or_insert(idx);
+        // S7 计数：成员的克隆上下文数；过阈即粘性封顶（此后该成员的新上下文全部折叠回本体）
+        if ctx != NOCTX && self.ctx_cap > 0 {
+            if let Some(&b) = self.mbase.get(&key) {
+                let n = self.ctx_counts.entry(b).or_insert(0);
+                *n += 1;
+                if *n as usize >= self.ctx_cap {
+                    self.ctx_capped.insert(b);
+                }
+            }
+        }
         if kind == Kind::Bytecode && ctx != self.concrete.ctx {
             self.nr_created(&key);
         }

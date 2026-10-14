@@ -8,6 +8,7 @@ use crate::jdk::internal::loader::BuiltinClassLoader__Methods as _;
 use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::jdk::internal::reflect::ConstantPool__Methods as _;
 use super::*;
+use crate::java::lang::__ClassHw as _;
 
 impl Class {
     /// native `getRawAnnotations()`：类级 RuntimeVisibleAnnotations 原始属性体（FS-R R4b，

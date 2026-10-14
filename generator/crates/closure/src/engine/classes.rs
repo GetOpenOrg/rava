@@ -170,7 +170,11 @@ impl<'a> Engine<'a> {
     pub(super) fn g_of(&mut self, t: u32) -> Rc<[u32]> {
         if !self.g_sub.contains_key(&t) {
             let g: Vec<u32> = self.g.iter().copied().collect();
-            let v: Vec<u32> = g.into_iter().filter(|&x| self.sub(x, t)).collect();
+            // 收集后收缩：g 的 IntoIter 是精确长度迭代器，filter 的 collect 按其上界预留容量——
+            // 行内容常远小于 |G|（窄过滤类型），不收缩则每行驻留 ~|G|×4B（§4.21 实测：sb3 死点 5117 行
+            // Σlen 仅 34.1 万元素、capacity 各 ≈|G|=7.9 万，g_sub 记 1094 MiB 而真实内容 ~1.3 MiB）
+            let mut v: Vec<u32> = g.into_iter().filter(|&x| self.sub(x, t)).collect();
+            v.shrink_to_fit();
             self.g_sub.insert(t, v);
         }
         self.g_sub[&t].as_slice().into()

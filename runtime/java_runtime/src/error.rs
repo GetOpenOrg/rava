@@ -27,6 +27,7 @@ use crate::java::lang::StringIndexOutOfBoundsException__Methods as _;
 use crate::java::lang::Thread__Methods as _;
 use crate::java::lang::Throwable__Methods as _;
 use crate::java::lang::{Object, ObjectVTable, String, Throwable};
+use crate::java::lang::__ThrowableHw as _;
 
 /// 被抛出的 Java 异常对象（运行时类任意，静态视图为 `Object`）。
 #[derive(Clone)]

@@ -1,0 +1,13 @@
+PASS typevar-t
+PASS typevar-id
+PASS map-generic
+PASS list-generic
+PASS list-element
+PASS as-map
+PASS generic-string
+PASS super-dao
+PASS super-generics
+PASS array-component
+PASS is-array
+PASS is-assignable
+DONE SpringGenericResolverMain

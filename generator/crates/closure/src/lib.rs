@@ -29,6 +29,49 @@ use manifest::{Domain, Manifest, Members};
 use resolve::{ClassPath, Hierarchy};
 use serde_json::{json, Value};
 
+/// 声明分析级别（CLAUDE.md 不变量 #2 改写 2026-10-13 / 优化方案 S11 骨架）：
+/// 档案 = 声明级别的输出；级别是构建的显式参数，写入档案元数据（summary.closure_level）并纳入
+/// 缓存键（级别变化 = 摘要变化，同输入同级别恒得同一档案）。三档：
+/// - `rta`：类层次 + 已实例化类型的保守闭包（优化方案 S9 RTA 地板层——所有降级的统一落点）；
+/// - `0cfa`：现行精确分析（缺省）；
+/// - `0cfa-saturated`：0cfa + 饱和降级（优化方案 S6，sound 过近似）。
+///
+/// 骨架期只落参数、元数据与缓存键三件；`rta` / `0cfa-saturated` 的语义本体未实施——
+/// 非缺省档由调用方显式拒绝（不静默按 0cfa 跑：换档即换档案，静默换档违反「档案 = 级别输出」）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ClosureLevel {
+    Rta,
+    #[default]
+    Ocfa,
+    OcfaSaturated,
+}
+
+impl ClosureLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rta => "rta",
+            Self::Ocfa => "0cfa",
+            Self::OcfaSaturated => "0cfa-saturated",
+        }
+    }
+    /// 该档的语义本体是否已实施（骨架期仅 `0cfa`）
+    pub fn implemented(&self) -> bool {
+        matches!(self, Self::Ocfa)
+    }
+}
+
+impl std::str::FromStr for ClosureLevel {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "rta" => Ok(Self::Rta),
+            "0cfa" => Ok(Self::Ocfa),
+            "0cfa-saturated" => Ok(Self::OcfaSaturated),
+            _ => Err(()),
+        }
+    }
+}
+
 pub struct Input<'a> {
     pub cp: &'a ClassPath,
     /// runtime/java_runtime
@@ -45,6 +88,8 @@ pub struct Input<'a> {
     pub cold_cut: bool,
     /// 流传播批量（`--flow-batch`；缺省 `engine::FLOW_BATCH`）
     pub flow_batch: Option<usize>,
+    /// 声明分析级别（`--closure-level`；缺省 0cfa。骨架：入档案元数据与缓存键，语义本体仅 0cfa 已实施）
+    pub closure_level: ClosureLevel,
 }
 
 pub struct Closure<'a> {
@@ -76,6 +121,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.seeds.locales = input.locales.clone();
     e.cold_cut = input.cold_cut;
+    e.closure_level = input.closure_level;
     e.set_site_prof(input.diag.site_prof);
     e.set_lambda_prof(input.diag.lambda_prof);
     if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
@@ -221,6 +267,8 @@ impl Closure<'_> {
             o.insert("boot_image_ms".into(), json!(self.boot_ms as u64));
         }
         json!({
+            // 档案元数据：声明分析级别（CLAUDE.md #2 改写——档案 = 级别输出；级别入缓存键，同输入同级别恒同档案）
+            "closure_level": e.closure_level.as_str(),
             "classes": e.classes.len(),
             "classes_by_level": by_level,
             "classes_by_domain": by_domain,
@@ -465,3 +513,24 @@ impl Closure<'_> {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::ClosureLevel;
+
+    /// 声明分析级别骨架的往返验证：字符串 ↔ 枚举往返恒等、缺省 0cfa、未知串显式拒绝
+    /// （不静默回缺省——错拼档名静默跑 0cfa 会违反「档案 = 级别输出」）、骨架期实施面只有 0cfa
+    #[test]
+    fn closure_level_roundtrip() {
+        for s in ["rta", "0cfa", "0cfa-saturated"] {
+            let l: ClosureLevel = s.parse().unwrap();
+            assert_eq!(l.as_str(), s);
+        }
+        assert_eq!(ClosureLevel::default(), ClosureLevel::Ocfa);
+        assert!("0CFA".parse::<ClosureLevel>().is_err());
+        assert!("saturated".parse::<ClosureLevel>().is_err());
+        assert!(ClosureLevel::Ocfa.implemented());
+        assert!(!ClosureLevel::Rta.implemented());
+        assert!(!ClosureLevel::OcfaSaturated.implemented());
+    }
+}

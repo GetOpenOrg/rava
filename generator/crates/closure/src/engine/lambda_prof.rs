@@ -54,11 +54,12 @@ pub(super) struct LambdaProf {
     rss_max: u64,
     /// 全程 RSS 采样峰值
     rss_max_all: u64,
+    /// 增长链追踪快照（`growth.rs`，S1 埋点；dump 时读旧写新）
+    pub(super) growth: std::cell::RefCell<super::growth::GrowthSnap>,
 }
 
 impl LambdaProf {
-    pub(super) fn new(secs: u64) -> LambdaProf {
-        let now = Instant::now();
+    pub(super) fn new(secs: u64) -> LambdaProf {        let now = Instant::now();
         LambdaProf {
             every: Duration::from_secs(secs.max(1)),
             t0: now,
@@ -77,7 +78,12 @@ impl LambdaProf {
             revived: 0,
             rss_max: 0,
             rss_max_all: 0,
+            growth: Default::default(),
         }
+    }
+    /// 自开启剖析起的秒数（增长链 fam 行的时间轴）
+    pub(super) fn elapsed_s(&self) -> u64 {
+        self.t0.elapsed().as_secs()
     }
 }
 
@@ -235,6 +241,8 @@ impl Engine<'_> {
             self.eqm.budget_hits,
             self.eqm.budget_trig_rss,
         );
+        // pstr 墙钟归因（§4.19）：插边 / 哈希 / 分叉克隆 / 惰性逆边首访重建的累计计数与耗时
+        eprintln!("{tag} pstr-perf {}", self.pstr.perf_line());
         // 内存剖析（同上，定位 RSS 尖峰）：分配器计数 + 主要驻留结构的字节估计。
         // rss_max 为上一段 dump 间隙的采样峰值；live（活跃字节）与 rss 之差是分配器滞留
         let ac = &crate::alloc_prof::COUNTERS;
@@ -290,6 +298,36 @@ impl Engine<'_> {
             self.graph.members.len(),
             self.graph.fmemo_bytes >> 20,
             (self.graph.node_count() * 160) >> 20,
+        );
+        // S4 画像（优化方案 §二 S4）：流边按（源种类 → 目标种类）的分布——hub 路由边（HP→P / R→HR）
+        // 是「临时推导边」（由枢纽 plain 路由关系可重导出），与 provenance 边的分野就在这一矩阵里。
+        // dump 时扫一遍边表（kinds 列是现成字节，~0.5s @1.7 亿边，剖析档专用）
+        let mut ek = [0u64; stats::KINDS * stats::KINDS];
+        for (s, es) in self.graph.edges.iter().enumerate() {
+            if es.is_empty() {
+                continue;
+            }
+            let sk = self.graph.kind(s as u32) * stats::KINDS;
+            for &(d, _) in es {
+                ek[sk + self.graph.kind(d)] += 1;
+            }
+        }
+        let mut ekv: Vec<(usize, u64)> = ek.iter().enumerate().filter(|(_, n)| **n > 0).map(|(k, n)| (k, *n)).collect();
+        ekv.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let eks: Vec<String> = ekv
+            .iter()
+            .take(8)
+            .map(|(k, n)| format!("{}->{}={}", stats::KIND_NAMES[k / stats::KINDS], stats::KIND_NAMES[k % stats::KINDS], n))
+            .collect();
+        let khp = stats::kind_ix(&Node::HP(0, 0));
+        let (khr, kp, kr) = (stats::kind_ix(&Node::HR(0)), stats::kind_ix(&Node::P(0, 0)), stats::kind_ix(&Node::R(0)));
+        eprintln!(
+            "{tag} census edges total={} hub_route(HP→P={} R→HR={} 路由MiB={:.0}) top: {}",
+            edges,
+            ek[khp * stats::KINDS + kp],
+            ek[kr * stats::KINDS + khr],
+            ((ek[khp * stats::KINDS + kp] + ek[kr * stats::KINDS + khr]) * 8) as f64 / 1048576.0,
+            eks.join(" "),
         );
         let kinds: Vec<String> = by_kind
             .iter()
@@ -526,14 +564,19 @@ impl Engine<'_> {
         let hub_links: usize = self.hubs.iter().map(|h| h.links.len()).sum();
         let hub_edged: usize = self.hubs.iter().map(|h| h.edged.len()).sum();
         let hub_lam: usize = self.hubs.iter().map(|h| h.lambdas.len()).sum();
+        // S4 画像：plain 路由关系水位（h→t 的 Σ|plain|，与边表里 HP→P/R→HR 行同源对照；
+        // 惰性化后边表路由行归零、plain 保留为唯一载体 + 逆表 Σ 同量）
+        let hub_plain: usize = self.hubs.iter().map(|h| h.plain.len()).sum();
         eprintln!(
-            "{tag} census hubs n={} recvs={}MiB special={}MiB links={}MiB lambdas={} edged={} grow_max={} upgraded={}",
+            "{tag} census hubs n={} recvs={}MiB special={}MiB links={}MiB lambdas={} edged={} plain={}({:.0}MiB) grow_max={} upgraded={}",
             self.hubs.len(),
             hub_recvs * 4 >> 20,
             hub_special * 4 >> 20,
             (hub_links * 16) >> 20,
             hub_lam * 4 >> 20,
             hub_edged >> 20,
+            hub_plain,
+            (hub_plain * 4) as f64 / 1048576.0,
             self.grow_max,
             self.hub_upgraded,
         );
@@ -586,6 +629,12 @@ impl Engine<'_> {
         if super::pstrs::shape_on() {
             self.pstr_shape_dump(&tag);
         }
+        // gathers 相异内容形态画像（§4.20 选型证据）：RAVA_GATHERS_SHAPE=1 时才走（逐 dump 全量走集有秒级代价）
+        if super::gather::shape_on() {
+            self.gathers_shape_dump(&tag);
+        }
+        // 增长链追踪（优化方案 S1 埋点）：实体 / 关系族水位与增量、新名字分类与计数器模板、深度分布
+        self.growth_dump(&tag);
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {

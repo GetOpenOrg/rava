@@ -3,11 +3,13 @@
 use crate::java::net::Inet4Address__Methods as _;
 use crate::prelude::*;
 use super::inet4_address::Inet4Address;
+use super::__Inet4AddressHw;
 
-impl Inet4Address {
+impl __Inet4AddressHw for Inet4Address {
     /// native `init()`：缓存 JNI 字段 ID——无需。
     #[jvm_native]
-    pub fn init() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn init() -> Result<()> {
         Ok(())
     }
 }

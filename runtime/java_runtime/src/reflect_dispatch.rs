@@ -32,11 +32,15 @@
 //! 未命中（闭包缺席 / 方法形态未承载）→ panic stub（如实报出缺口，与反射
 //! 族其他未覆盖面语义一致）。
 
+use crate::java::lang::{Boolean__Methods as _, Byte__Methods as _, Double__Methods as _,
+                              Float__Methods as _, Integer__Methods as _, Long__Methods as _,
+                              Short__Methods as _};
 use crate::java::lang::Character__Methods as _;
 use crate::java::lang::Class__Methods as _;
 use crate::error::Result;
 use crate::java::lang::{Boolean, Byte, Character, Double, Float, Integer, Long, Object, Short};
 use crate::prelude::JArray;
+use crate::java::lang::__ClassHw as _;
 
 /// 按名分派入口：(方法名, 描述符, 接收者, 实参) → 处理结果（各类生成的 `__reflect_dispatch`）。
 /// `None` = 本类未声明该方法（上溯继续）；`Some(r)` = 已处理（含错误传播）。
