@@ -14,14 +14,12 @@ const W = 176, H = 62, PADX = 26, PADY = 16;
 let DATA, nodesById, adjacency, curFilter = "all", criticalOn = false, ganttOn = false, selected = null;
 
 async function loadData() {
-  // 兼容两种数据约定：window.RAVA_DATA（本目录 data.js）或全局 const DASHBOARD_DATA（维护方生成器）
-  DATA = (typeof window !== "undefined" && window.RAVA_DATA)
-      || (typeof DASHBOARD_DATA !== "undefined" ? DASHBOARD_DATA : null);
-  if (!DATA) { try {
-      const r = await fetch("data.json"); if (!r.ok) throw new Error("HTTP " + r.status);
-      DATA = await r.json();
-    } catch (e) {
-      document.body.insertAdjacentHTML("afterbegin", '<div style="padding:10px 20px;color:#f0978f">数据加载失败：data.js 的变量名须为 window.RAVA_DATA 或全局 DASHBOARD_DATA（当前两者都未定义）；HTTP 服务下也可提供 data.json。</div>'); throw e; } }
+  // 唯一数据约定：data.js 里的全局 const DASHBOARD_DATA
+  DATA = (typeof DASHBOARD_DATA !== "undefined") ? DASHBOARD_DATA : null;
+  if (!DATA) {
+    document.body.insertAdjacentHTML("afterbegin", '<div style="padding:10px 20px;color:#f0978f">数据加载失败：data.js 未定义全局 DASHBOARD_DATA（唯一约定），请检查 data.js 是否随 index.html 一并加载。</div>');
+    throw new Error("DASHBOARD_DATA undefined");
+  }
 }
 const colorOf = s => ({ done:"#2e9e5b", doing:"#2f7fd3", blocked:"#d64541", risk:"#e08a1e", waiting:"#8e5bd3", todo:"#9aa3ab" }[s] || "#9aa3ab");
 
