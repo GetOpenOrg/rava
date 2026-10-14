@@ -92,3 +92,39 @@ deferred_reason = "helpful NPE 消息属 JVM 诊断文本层（-XX:+ShowCodeDeta
 # moves_to_trait 留固有名单（手写层直调协议面，与 valueOf_* 同级）+ net_impl.rs 补
 # System/InetAddress 两导入；条目随修复删除（failure_patterns `ctor-trait-handwritten-seam`）。
 
+
+# ── batch-1016-v2 放行登记（E0599 __default_begin 族，K4 语义统一过渡期）──
+
+[[known]]
+test = "PartitionInteger"
+signature = "__default_begin"
+owner = "K4 语义统一过渡期（接口 default 方法用户 crate 可达性，b1017 修）"
+since = "2026-10-14"
+note = "E0599 Sink 接口 __default_begin"
+
+[[known]]
+test = "DataEncryptionStandard"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+
+[[known]]
+test = "TestHttpLoopbackSync"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+note = "覆盖旧 IOUtil.fdLimit 条目（新失败形态）"
+
+[[known]]
+test = "TestHttpLoopbackAsync"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+note = "覆盖旧条目"
+
+[[known]]
+test = "Log4j2ApiMain"
+signature = "__default_begin"
+owner = "同 PartitionInteger"
+since = "2026-10-14"
+note = "覆盖旧 constructor face 条目（新根因）"
