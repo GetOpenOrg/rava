@@ -4,11 +4,8 @@
 //! 消息为 strerror 文案；IOStatus：UNAVAILABLE = -2、INTERRUPTED = -3。
 //! 套接字选项、poll 与可用性探测见同类的 `net_ext.rs`。组播 / 带外数据 native 不在档案调用链上。
 
-<<<<<<< HEAD
-=======
 // 伴生 statics / 实例方法走导入口径（mark-ctor-fix 的两枚随语义统一移入：System::getProperty_str
 // 与 InetAddress::getAddress——构造器族不在此列，发射侧按 §9.9「构造器缝自动补入」处理）
->>>>>>> s7-k4-b1016
 use crate::java::lang::System__Methods as _;
 use crate::java::net::Inet4Address__Methods as _;
 use crate::java::net::Inet6Address__Methods as _;

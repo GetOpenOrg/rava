@@ -153,8 +153,8 @@ impl __UnixFileDispatcherImplHw for UnixFileDispatcherImpl {
     /// 其余 = fstat 的 st_size − lseek(SEEK_CUR)；失败抛 IOException("Handle not readable")。
     /// `FileChannelImpl.available` 的后端。
     #[jvm_native]
-    pub fn available0(fdo: FileDescriptor) -> Result<i32> {
-        let fd = fd_of(&fdo);
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn available0(fdo: FileDescriptor) -> Result<i32> {        let fd = fd_of(&fdo);
         if crate::jdk_resources::is_virtual(fd) {
             return Ok(crate::jdk_resources::virtual_available(fd).min(i32::MAX as i64) as i32);
         }
