@@ -221,12 +221,6 @@ impl<'a> Engine<'a> {
         if self.probes.is_some() {
             self.probe_edge(si, di, filter);
         }
-        self.push_now(rs, rd, di, filter, si, objf);
-    }
-
-    /// 新接边（或惰性路由边接入）后的即时推送：源当前集合按过滤收窄一次推给目标。
-    /// 大集合经同一过滤类型接出多条边时按集合版本走收窄记忆（`fmemo`；元素数即版本号）
-    pub(super) fn push_now(&mut self, rs: u32, rd: u32, di: u32, f: u32, si: u32, objf: bool) {
         if self.graph.set(rs).is_empty() {
             return;
         }
@@ -240,13 +234,13 @@ impl<'a> Engine<'a> {
         };
         if objf || n < FILTER_MEMO_AT {
             let s = self.graph.set_rc(rs);
-            let out = self.filter(&s, f);
+            let out = self.filter(&s, filter);
             self.flow_src = si;
             self.add_to_id(di, &out);
             return;
         }
         // 大集合经同一过滤类型接出多条新边（手写调用点写入槽 → 各数组元素）：收窄结果按集合版本记忆
-        let hit = self.graph.fmemo.remove(&(rs, f));
+        let hit = self.graph.fmemo.remove(&(rs, filter));
         if let Some((_, o)) = &hit {
             self.graph.fmemo_bytes -= memo_bytes(o);
         }
@@ -258,7 +252,7 @@ impl<'a> Engine<'a> {
             _ => {
                 self.graph.fmemo_stats[1] += 1;
                 let s = self.graph.set_rc(rs);
-                let out = self.filter(&s, f);
+                let out = self.filter(&s, filter);
                 out
             }
         };
@@ -271,36 +265,7 @@ impl<'a> Engine<'a> {
             self.graph.fmemo_stats[2] += 1;
         }
         self.graph.fmemo_bytes += b;
-        self.graph.fmemo.insert((rs, f), (n, out));
-    }
-
-    /// 枢纽形参 HP(h, j) 的待推增量经惰性路由边扇出：按 `plain_seq` 接入序（= 存边设计的边表序）
-    /// 逐目标以被调形参声明类型（= τ(P)，恒不破坏封闭类型）收窄后推给 P(t, 1+j)。
-    /// 同一过滤类型只收窄一次（同 `push_edge` 的 narrowed 复用）；按下标重取引用，
-    /// 扇出中重入接入的新目标（已由 `push_now` 按当前集合推过）重复推送为无增量空操作
-    fn hub_param_fan(&mut self, h: u32, j: u16, si: u32, s: &TypeSet) {
-        let js = 1 + j as usize;
-        let mut k = 0usize;
-        let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
-        loop {
-            let Some(t) = self.hubs.get(h as usize).and_then(|hub| hub.plain_seq.get(k).copied()) else { break };
-            k += 1;
-            let Some(Some(pt)) = self.methods[t].ptypes.get(js).copied() else { continue };
-            self.graph.hub_fans += 1;
-            let di = self.graph.id(Node::P(t, js as u16));
-            let k2 = match narrowed.iter().position(|x| x.0 == pt) {
-                Some(k) => k,
-                None => {
-                    let out = self.filter(s, pt);
-                    narrowed.push((pt, out));
-                    narrowed.len() - 1
-                }
-            };
-            let out = std::mem::take(&mut narrowed[k2].1);
-            self.flow_src = si;
-            self.add_to_id(di, &out);
-            narrowed[k2].1 = out;
-        }
+        self.graph.fmemo.insert((rs, filter), (n, out));
     }
 
     /// 代表 src 沿一条出边推送增量 s；同一过滤类型只收窄一次（`narrowed`），Object 过滤直接推增量本身
@@ -367,17 +332,6 @@ impl<'a> Engine<'a> {
             ps[0] += 1;
             ps[1] += ne as u64;
             ps[2] += self.graph.adds[1] - grew0;
-            // S4 惰性路由边（优化方案 §二 S4「hub 边集延迟物化——dirty 标记，节点被取出才合并增量」）：
-            // HP→P / R→HR 不落边表，代表被取出时把待推增量经枢纽 plain 路由关系扇出给各目标。
-            // 与存边设计推送同一增量（单调 + 全量到达 ⟹ 同一不动点，集合内容逐项相同）
-            if self.graph.has_hub_route(i) {
-                let ms = self.graph.members.get(&i).cloned().unwrap_or_else(|| vec![i]);
-                for m in ms {
-                    if let Node::HP(h, j) = self.graph.node(m) {
-                        self.hub_param_fan(h, j, m, &s);
-                    }
-                }
-            }
             if !self.graph.has_mirror_src(i) {
                 continue;
             }

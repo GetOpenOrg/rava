@@ -365,9 +365,6 @@ pub(super) struct Hub {
     pub(super) recvs: SortedSet<u32>,
     /// 经枢纽中转的目标
     pub(super) plain: SortedSet<usize>,
-    /// `plain` 的插入序镜像（S4 惰性路由：HP→P 扇出按接入顺序推——与存边设计的边表序逐位一致，
-    /// 保折叠口径的推送次序；`plain` 仍作插入去重与有序遍历（报告 / 重绑定））
-    pub(super) plain_seq: Vec<usize>,
     /// 逐调用点派发的 lambda / 手写实现对象接收者（接入时取快照，故按 `Rc` 共享）
     pub(super) lambdas: Rc<Vec<u32>>,
     /// 按调用点建模的目标 → 其接收者：逐调用点接边，同目标的接收者合成一条

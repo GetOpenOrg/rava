@@ -43,7 +43,6 @@ impl<'a> Engine<'a> {
             expanded: false,
             recvs: Default::default(),
             plain: Default::default(),
-            plain_seq: Vec::new(),
             lambdas: Rc::default(),
             special: BTreeMap::new(),
             links: BTreeMap::new(),
@@ -418,23 +417,10 @@ impl<'a> Engine<'a> {
         if !self.hubs[h as usize].plain.insert(t) {
             return;
         }
-        self.hubs[h as usize].plain_seq.push(t);
-        // S4 惰性路由边（优化方案 §二 S4「区分 provenance 边与临时推导边，后者不落主存」）：
-        // HP→P 由 (h → t) plain 路由关系可重导出，属临时推导边——不接进边表（省 |ptypes|×|plain|
-        // 条边与去重索引），只做接入时的即时推送（= `flow` 的立即推送分支，含大集合收窄记忆），
-        // 其后增长经 `drain_flows` 的惰性路由扇出（`flow.rs::hub_param_fan`，按 `plain_seq`
-        // 接入序——与存边设计的边表序逐位一致）。过滤类型是被调形参声明类型 = τ(P)，恒不破坏
-        // 封闭类型（`tau.rs`），不走 `flow` 的入边校验。R→HR 向保持存边：R 节点的出边与站点
-        // 结果边交错接入，惰性化必然改推送次序（首版 Commit B 的折叠差即此），不惰性化
         let ptypes = self.methods[t].ptypes.clone();
         for j in 0..self.hubs[h as usize].ptypes.len() {
-            if let Some(Some(pt)) = ptypes.get(1 + j).copied() {
-                let si = self.graph.id(Node::HP(h, j as u16));
-                let di = self.graph.id(Node::P(t, (1 + j) as u16));
-                let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
-                let objf = pt & (NOT_SUB | OPEN_EXACT) == 0 && self.names[pt as usize].as_ref() == OBJECT;
-                self.push_now(rs, rd, di, pt, si, objf);
-                self.graph.mark_hub_route(si);
+            if let Some(Some(pt)) = ptypes.get(1 + j) {
+                self.flow(Node::HP(h, j as u16), Node::P(t, (1 + j) as u16), *pt);
             }
         }
         if let Some(rt) = self.hubs[h as usize].ret {

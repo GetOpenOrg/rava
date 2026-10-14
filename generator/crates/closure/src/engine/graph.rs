@@ -16,9 +16,6 @@ pub(super) struct FlowGraph {
     mirror_src: Vec<bool>,
     /// 节点登记过增长钩子（`flow.rs::node_grown` 所查的各表，或种类本身带钩子）：未登记的成员增长时不逐表查找
     hooked: Vec<bool>,
-    /// 代表的成员中有枢纽路由边源（S4 惰性路由：`Node::HP` / `Node::R` 经枢纽 plain 路由扇出，
-    /// 边不落本表）：出队时才逐成员扇出，同 `mirror_src` 的代表标记法
-    hub_route: Vec<bool>,
     /// 节点受过直接注入（`flow.rs::add_to`，非流边推送）：等价节点诊断（`hvn_diag.rs`）的入边签名之外的来源
     pub(super) injected: Vec<bool>,
     /// 节点失去封闭类型（`tau.rs`，单调）
@@ -61,8 +58,6 @@ pub(super) struct FlowGraph {
     pub(super) push_src: Vec<[u64; 3]>,
     /// 观测：收窄记忆命中 / 未命中 / 超预算清空次数
     pub(super) fmemo_stats: [u64; 3],
-    /// 观测（S4 惰性路由）：HP→P 惰性扇出次数（R→HR 向保持存边，无扇出计数）
-    pub(super) hub_fans: u64,
 }
 
 /// 出度达到此数的源建去重索引；以下逐条比对出边表（多数源只有几条出边）
@@ -129,7 +124,6 @@ impl FlowGraph {
         self.nodes.push(n);
         self.kinds.push(super::stats::kind_ix(&n) as u8);
         self.mirror_src.push(false);
-        self.hub_route.push(false);
         self.hooked.push(matches!(n, Node::Esc | Node::K(_) | Node::NR(_) | Node::A(..)));
         self.injected.push(false);
         self.tau_broken.push(false);
@@ -157,7 +151,6 @@ impl FlowGraph {
     /// 把代表 b 并入代表 a（调用方负责类型集 / 增量 / 出边的合并）
     pub(super) fn union_into(&mut self, a: u32, b: u32) {
         self.mirror_src[a as usize] |= self.mirror_src[b as usize];
-        self.hub_route[a as usize] |= self.hub_route[b as usize];
         let mb = self.members.remove(&b).unwrap_or_else(|| vec![b]);
         for &x in &mb {
             self.rep[x as usize] = a;
@@ -176,21 +169,6 @@ impl FlowGraph {
         let r = self.rep(i) as usize;
         self.mirror_src[r] = true;
     }
-    /// 登记节点 i 为枢纽路由边源（S4 惰性路由；标记在其代表上，合并随 `union_into` 传播）
-    pub(super) fn mark_hub_route(&mut self, i: u32) {
-        let r = self.rep(i) as usize;
-        self.hub_route[r] = true;
-    }
-    /// 代表 r 的成员中有镜像流边源
-    #[inline]
-    pub(super) fn has_mirror_src(&self, r: u32) -> bool {
-        self.mirror_src[r as usize]
-    }
-    /// 代表 r 的成员中有枢纽路由边源（S4）
-    #[inline]
-    pub(super) fn has_hub_route(&self, r: u32) -> bool {
-        self.hub_route[r as usize]
-    }
     /// 节点 n 登记了增长钩子（驻留后标记；标记只增不撤，多标只多查表）
     pub(super) fn mark_hooked(&mut self, n: Node) {
         let i = self.id(n) as usize;
@@ -199,6 +177,11 @@ impl FlowGraph {
     #[inline]
     pub(super) fn hooked(&self, i: u32) -> bool {
         self.hooked[i as usize]
+    }
+    /// 代表 r 的成员中有镜像流边源
+    #[inline]
+    pub(super) fn has_mirror_src(&self, r: u32) -> bool {
+        self.mirror_src[r as usize]
     }
     #[inline]
     pub(super) fn node(&self, i: u32) -> Node {
