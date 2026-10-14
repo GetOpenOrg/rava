@@ -148,3 +148,79 @@ S1 埋点（半天，决定后续路径）
 - native-image 文档：closed-world、reflect-config / tracing agent、reachability-metadata
   （社区库配置仓）；
 - 专家提醒未核实项：Graal 22 版重写细节、各工具精确内存数字——实施时以论文与官方文档为准。
+<<<<<<< HEAD
+=======
+
+## 八、S1/S2 实施记录（2026-10-14，`g1-ctx2` 6d2ab4d0/7fc783d7，未合入）
+
+**S1 埋点＝增长链追踪**（`generator/crates/closure/src/engine/growth.rs`，随 `--lambda-prof`
+dump 打印、缺省零开销——dump 只在剖析开启时运行，热路径零新增指令；四例 × 种子 0/1/2 对
+922f8883（≡96f21ea6，其后仅文档）12/12 SAME，mc 逐例相同）。七个观测段：
+
+- `growth fam` / `growth rel`：实体族（names 细分 @ctx/obj/array/mirror/lambda/hwobj/class、
+  methods、members、ctx、objs、G）与关系族（g_sub 行/元素、sub 查询位图、mirror_open、
+  hub_sites、pstr succ、gathers、an/aev、dispatch、图节点/边/adds）的水位 + 较上段增量——
+  **判据落地**：方法数停增后仍长的族 = 无界嫌疑；持续线性/加速 = 不收敛；
+- `growth names` / `growth tmpl`：本段新登记名字分类计数 + **数字段坍缩模板**前列
+  （`Foo$$_javassist_12` → `Foo$$_javassist_#`）——同模板单段多实例即实体名混入计数器，
+  S2 实锤检测；
+- `growth site`：新 ctx 名 / 对象名按来源站点（`@成员:偏移`，mbase 下标 dump 时解析成标签）
+  的前列——名字自带溯源，不需要热路径挂钩；
+- `growth depth`：上下文 / 对象堆链段数直方图（HEAP_DEPTH 截断的实际落点）；
+- `growth rows`：g_sub / mirror_open 行规模前列（过滤类型归因）+ hub_sites 调用点接入枢纽数前列。
+
+配套：`SubRow::has_any/known_bits`、`PStrs::growth_stats`（succ 行/槽水位）、`LambdaProf.growth`
+快照（RefCell，段末覆写）；单测 `growth_template`。计数分配器与 RSS/自报对齐（S1 另一半）
+由既有 alloc_prof/census mem 行承担（§4.14 起在役）。
+
+**S2 无限链排查**（作业 g1s1-sb3/s0a/j8e，tag g1s1-*，dev 32 GiB 槽）：对 sb3 全程到死点、
+S0 A 30 GiB 看门狗、junit 族代表（T1/T2/带首）+ esper + thymeleaf 780 s 截断跑上述埋点，
+逐链读增长律与来源——**无界增长链清单与逐链可降级性评估落性能计划 §4.21**（证据与数字的
+家在性能计划，本节只记方法与结论指针）。排查总判据（S2 定义）：实体名混入迭代号/计数器
+（运行时生成类 / 代理 / `ClassPool.toClass` 建模路径的实锤）——**模板分解未见任何持续增长的
+计数器合成名**；全部增长名可归因到「分配 / 调用点身份（mbase 下标 + 偏移，程序有界）×
+前沿扩张」。结论方向（详见 §4.21）：非「不收敛 bug」型无限链，是「可达前沿线性 × 每查询 /
+每站点扇出」型容量增长——分三路处置（S4 差分 / S7 上下文 / S9+S6 声明档），与
+§4.20 结论 2 的「methods+an 交声明式降级」路线互为印证。
+
+附带交付（本阶段时间充裕项）：**closure-level 三档枚举骨架**（`ClosureLevel` rta | 0cfa（缺省）
+| 0cfa-saturated；`--closure-level` 入参、summary.closure_level 档案元数据、缓存键 fingerprint
+增 closure_level 字段——级别变化 = 摘要变化；骨架期 rta / 0cfa-saturated 显式报错不静默换档，
+语义本体归 S9/S6；往返验证单测 closure_level_roundtrip + every_input_changes_the_key 增两档
+变体）。这是 S11 改写的参数面落地——CLAUDE.md #2 的「档案 = 声明级别的输出」从此有键可查。
+
+## 九、S4 实施记录（2026-10-14，`g1-ctx2` 2826315f/78da04f4/00598f20，未合入）
+
+**S4 设计对位（方案原文 → 本库现状）**：方案三件套中，①「删全局 is_subset 不动点判定 /
+收敛 = 本轮无增量 diff / 入队仅基于真实增长 / worklist 版本号」在本库**已在位**（§4.5/§4.6：
+`add_to_id` 差分并入、`graph.delta` 按节点累积 + `queued` 去重 + 批量排空——epoch worklist
+语义等价物，无全局判定可删）；②「hub 边集延迟物化（dirty 标记，节点被取出才合并增量）」与
+③「区分 provenance 边与临时推导边，后者不落主存」**本轮实施**——hub 路由边（HP→P 形参向 /
+R→HR 返回向）由 (h→t) plain 路由关系可重导出，即临时推导边。画像（census edges 边种类矩阵，
+新增观测）：语料深例路由边占全边 40%+，sb3 死点图边 1360 MiB + seen 索引 55.0M 槽为死点
+第一大块。
+
+**首版（78da04f4，撤回）**：双向惰性 + 有序集扇出 + plain_rev 逆表。集合与 mc 逐位相同但
+**DeepCopy 三种子折叠口径 DIFF**（folds 死代码 / 常量折叠统计跨种子置换）——根因是**推送
+次序漂移**：R(t) 出边表里路由边与站点结果边按接入交错，惰性扇出把路由推送移到排空末尾必改
+序；折叠事实依赖分析时点（catch/instanceby 目标类型按当下 G 判活）。**教训：不动点集合序
+不敏感、折叠口径序敏感——改推送序的改造必须逐位复刻原序或全量重验折叠**。
+
+**终态 PATH B（00598f20）**：只惰性化 HP→P 向——HP 节点出边表本就只有路由边（无交错），
+`plain_seq`（插入序镜像，8 B/中转目标）使扇出序与边表序逐位一致：接入时 `push_now`（flow
+立即推送分支重构，含收窄记忆）即时推送一次，其后增长在 drain_flows 按接入序惰性扇出
+（`flow.rs::hub_param_fan`，同过滤只收窄一次）。R→HR 保持存边。tau 不变量构造性保持
+（HP→P 过滤恒 = τ(P)，f==t 分支）。验收与实测数字落性能计划 §4.22。
+
+**方法论沉淀**：本轮再次验证「画像先行 + 分阶段验收」——census edges 观测先行落 commit 才
+有首版败因的归因面（边种类矩阵直接指向 R→HR 交错序）；语料四例 × 三种子 12/12 是折叠口径
+的第一道闸（mc/集合逐位一致不充分）。
+
+**S4 终判（2026-10-14 补记）：惰性路由判负撤回，负结果三连**——PATH B（00598f20）sb3 全程
+实测：边表兑现（1360→602 MiB、seen 5500 万→1162 万槽）但 **plain_seq 序镜像 +2422 MiB 吃尽**
+（Σ|plain| 实测 2.04 亿条）、死点 −0.3%、墙钟 +45%（751.7 亿次扇出每次重解析目标图序号）；
+折叠口径两轮均 DIFF（且把基线跨种子双态收敛为单态——折叠盆对传播序敏感的实证）。**根因：
+路由关系本体就是该份额的质量，「推导边不落主存」无免费午餐；方案 S4 的差分/延迟收益已由
+§4.5/§4.6 的按节点增量缓冲兑现**。引擎改动 revert（观测保留）；S4 后续按落地序交 S7（上下文
+上限 + 共享——§4.21 链 1 死点主项）。数字与全表见性能计划 §4.22。
+>>>>>>> g1-ctx2

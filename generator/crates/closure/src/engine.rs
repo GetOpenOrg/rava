@@ -62,6 +62,7 @@ mod recv_fp;
 mod site_prof;
 mod lambda_prof;
 mod deep3;
+mod growth;
 mod ctx_prof;
 mod ctx_free;
 mod ctx_flat;
@@ -172,6 +173,12 @@ use rtfn::RTFN_KIND;
 
 /// 精确接收者达到此数时经集合枢纽派发
 const HUB_MIN: usize = 8;
+/// 每成员克隆上下文数硬上限（优化方案 S7「硬上限 + 超限折叠回无上下文副本」；`RAVA_CTX_CAP` 覆盖，
+/// 0 = 关闭）。超限成员的后续上下文折叠回本体（widening，sound 过近似——实参并入本体参数格、
+/// 分派面只增不减）。缺省取语料实测每成员克隆数上界之上（ctxhist：DeepCopy >1024 桶存在），
+/// 语料零触发；重语料（sb3 死点 top：Object.wait 19914 / requireNonNull 7506 …）按成员封顶。
+/// 与 `SITE_CAP` 同型：单调计数 + 粘性封顶，旧节点不动、只折叠其后
+pub(super) const CTX_CAP: usize = 4096;
 /// 字段站点在 `recv_done` 中的哨兵：与值无关的部分已接 / 未知接收者视图已接（抽象对象 id 不会取到）
 const FIELD_STATIC: u32 = u32::MAX;
 const FIELD_OTHER: u32 = u32::MAX - 1;
@@ -326,6 +333,14 @@ pub struct Engine<'a> {
     site_capped: HashSet<Rc<str>>,
     /// 宽分配点阈值（`RAVA_SITE_CAP` 覆盖；0 = 关闭）。语料上取实测上界之上、零触发（objscan，性能计划 §4.14）
     site_cap: usize,
+    /// S7 每成员上下文硬上限：成员（本体节点序号）→ 已建克隆上下文数；超 `ctx_cap` 粘性封顶
+    ctx_counts: HashMap<usize, u32>,
+    /// 已封顶的成员：后续克隆上下文一律折叠回本体（widening）
+    ctx_capped: HashSet<usize>,
+    /// 折叠次数（观测；语料零触发时应恒为 0）
+    ctx_widened: u64,
+    /// 每成员上下文上限（`RAVA_CTX_CAP` 覆盖；0 = 关闭）
+    ctx_cap: usize,
     /// 等价类合并的内存预算（`RAVA_EQ_BUDGET`，字节，可带 K/M/G 后缀；0 = 关闭，缺省）。预算降级口径
     /// （§4.15）：排空点 RSS 达预算才做一轮合并（通道 1|2 全开，近似档、接受语料漂移率验收）
     eq_budget: usize,
@@ -369,16 +384,19 @@ pub struct Engine<'a> {
     hub_upgraded: usize,
     /// 调用点 → 所连枢纽（输出分派结果用）
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
-    /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)
+    /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象链)。
+    /// 对象集经差分链内容驻留（§4.20：链中间步只存增量，站点累计集与汇集节点键共享节点）
     gathers: Vec<(gather::Slot, u32, bool)>,
-    gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
-    gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<[u32]>)>>,
-    /// 手写方法调用点 (序号, 实参, 元素槽) → (当前汇集节点, 累计数组)：该实参数组元素流向写入来源（`gather.rs::gather_hw_elems`）
-    hw_gather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
-    /// 手写读内存调用点 (序号, 元素槽) → (当前汇集节点, 累计数组)：源实参数组元素流向结果（`gather.rs::gather_hw_read`）
-    hw_rgather_last: HashMap<(u32, u8), (u32, Rc<[u32]>)>,
-    /// 手写方法调用点 (序号, 写入目标实参, 元素槽) → (当前汇集节点, 累计数组)：写入来源流向数组元素（`gather.rs::gather_hw_write`）
-    hw_wgather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
+    gather_ids: HashMap<(gather::Slot, bool, gather::SetKey), u32>,
+    gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<gather::GSet>)>>,
+    /// 对象集差分链内容驻留池（`gather.rs`）
+    gather_pool: gather::SetPool,
+    /// 手写方法调用点 (序号, 实参, 元素槽) → (当前汇集节点, 累计数组链)：该实参数组元素流向写入来源（`gather.rs::gather_hw_elems`）
+    hw_gather_last: HashMap<(u32, u16, u8), (u32, Rc<gather::GSet>)>,
+    /// 手写读内存调用点 (序号, 元素槽) → (当前汇集节点, 累计数组链)：源实参数组元素流向结果（`gather.rs::gather_hw_read`）
+    hw_rgather_last: HashMap<(u32, u8), (u32, Rc<gather::GSet>)>,
+    /// 手写方法调用点 (序号, 写入目标实参, 元素槽) → (当前汇集节点, 累计数组链)：写入来源流向数组元素（`gather.rs::gather_hw_write`）
+    hw_wgather_last: HashMap<(u32, u16, u8), (u32, Rc<gather::GSet>)>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）
@@ -455,6 +473,8 @@ pub struct Engine<'a> {
     pub sigpoly_sites: BTreeSet<String>,
     /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
     pub cold_cut: bool,
+    /// 声明分析级别（骨架期恒 0cfa；档案元数据 summary.closure_level 与缓存键据此，语义本体见优化方案 S6/S9）
+    pub closure_level: crate::ClosureLevel,
     /// 构建期引导映像起点（`install_image`）
     img: Option<Box<image_start::ImgState>>,
     /// 构建期初始化扩展的求值器（引导映像求值器在导出后保留，concrete/ext_init.rs）

@@ -131,4 +131,12 @@ impl SubRow {
     pub(super) fn prof_bytes(&self) -> usize {
         (self.known.capacity() + self.yes.capacity()) * 8
     }
+    /// 是否判过任何类型（增长链 fam 行：查询过的过滤类型数，只读）
+    pub(super) fn has_any(&self) -> bool {
+        self.known.iter().any(|w| *w != 0)
+    }
+    /// 已判定（known）的位数（增长链 fam 行，只读）
+    pub(super) fn known_bits(&self) -> u64 {
+        self.known.iter().map(|w| w.count_ones() as u64).sum()
+    }
 }
