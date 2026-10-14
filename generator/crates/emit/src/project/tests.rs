@@ -373,3 +373,35 @@ fn user_crate_sweeps_previous_test() {
     assert!(!src.join("com").exists(), "陈旧包目录整棵删除");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// §9.9 K4 与 mark-ctor-fix 的语义统一（构造器缝自动补入）：手写文本中的生成类构造器
+/// UFCS 直调（含 `super::X::…` 路径形态）→ `X__Methods as _;` 导入行；已含 trait 名的
+/// 类跳过、非注册表名 / 未发射类跳过；`new` / `new_<后缀>` 词面匹配。
+#[test]
+fn ctor_trait_import_lines_scans_ufcs_ctor_calls() {
+    use super::ctor_trait_import_lines;
+    let resolve = |name: &str| match name {
+        "IOException" => Some(("java/io/IOException".to_string(), "IOException".to_string())),
+        "FileNotFoundException" => {
+            Some(("java/io/FileNotFoundException".to_string(), "FileNotFoundException".to_string()))
+        }
+        _ => None, // Self / 本地类型 / 未发射类
+    };
+    let text = "fn f(e: &std::io::Error) -> JvmError {\n    \
+                JvmError::from(super::IOException::new_str(String::from(\"x\")).unwrap())\n}\n\
+                let e2 = crate::java::io::FileNotFoundException::new()?;\n\
+                let self_new = Self::new_view(n)?;\n";
+    let lines = ctor_trait_import_lines(text, resolve);
+    assert_eq!(
+        lines,
+        vec![
+            "use crate::java::io::FileNotFoundException__Methods as _;".to_string(),
+            "use crate::java::io::IOException__Methods as _;".to_string(),
+        ],
+        "{lines:?}"
+    );
+    // 文件已含该 trait 名（b1013-fix 既有行）→ 跳过
+    let already = "use crate::java::io::IOException__Methods as _;\nIOException::new()?;\n";
+    let lines = ctor_trait_import_lines(already, resolve);
+    assert!(lines.is_empty(), "{lines:?}");
+}

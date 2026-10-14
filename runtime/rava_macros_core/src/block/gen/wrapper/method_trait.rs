@@ -35,6 +35,17 @@ pub(crate) const STD_COLLISIONS: [&str; 11] = [
 /// 手写层直调点补 `use …__Methods as _;`（b1013-fix 清单口径）。K3 收尾为压峰值把它们留固有，
 /// 峰值代价（估 +0.5–1.5 pp）由 K4 把标记文件整体挪出声明 crate（约 −6 MB 源码）收回。
 ///
+/// **构造器（`new` / `new_<描述符后缀>`）同入方法 trait（2026-10-14 语义统一裁决，对
+/// main mark-ctor-fix「构造器留固有」的否定）**：构造器体调 `__init_on` / `__class_init`
+/// （声明层类初始化状态机），标记层固有不可行；声明层固有在 K4 阶段 3（wrapper struct 已
+/// 在 java_marker）即 E0390——「构造器固有」与 K4 跨 crate 结构不相容。mark-ctor-fix 的
+/// 动机（伴生声明按闭包条件发生、per-file 手工导入无法穷举对齐——Log4j2ApiMain E0599
+/// ×19 构造器直调）由**发射侧自动补入**收口：`write_project` 扫描 scratch 手写副本的
+/// 构造器 UFCS 直调（`X::new…(`），对注册表生成类自动补 `use crate::<包>::X__Methods
+/// as _;`（真源不动；`new` / `new_*` 是保留名，词面匹配零误补）——任意闭包下缝恒收口，
+/// 不再依赖「哪个闭包拉入宿主」的可预测性。statics / 实例方法 UFCS 直调（名字不可预测）
+/// 仍走真源 use 行口径（如 net_impl 的 System / InetAddress 两枚）。
+///
 /// 仍留固有：`const fn`（trait 方法不可为 const）、std 同名成员（[`STD_COLLISIONS`]）、
 /// 接口载体 `is_jvm_null`（null 探测，K6 归标记层身份面——载体 struct 搬标记 crate 后随
 /// 标记层固有 impl 走）。
