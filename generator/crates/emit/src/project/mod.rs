@@ -352,22 +352,11 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), ctx.opts.jdk_major, crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     }
-    // java_marker 的 mod 树与 lib.rs（§9.9 K4 阶段 3）：与声明层 crate 同口径——手写真源
-    // （runtime/java_marker）按磁盘扫描自动声明，生成标记文件（带生成标记）并入；lib.rs 由
-    // 手写清单 + 磁盘顶层包补全写出
-    if let Some(marker_dir) = ctx.runtime_dir.parent().map(|p| p.join(overlay::MARKER_CRATE)) {
-        if marker_dir.join("Cargo.toml").is_file() {
-            mod_tree::write_mod_tree(&marker_root, Some(&marker_dir), ctx.opts.jdk_major, crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
-            mod_tree::complete_lib_rs(&marker_root, &marker_dir.join("src"), &mut w)?;
-        }
-    }
-    // 声明层 java/lang 包注入（§9.9 K4 阶段 3）：object 三件随标记层迁走，`crate::java::lang::
-    // Object` 等旧路径经本行保持（java_marker 侧同名模块按包 glob 再导出）
-    inject_marker_pkg_reexport(&decl_src, &mut w)?;
     // 手写层构造器缝自动补入（§9.9 K4 与 mark-ctor-fix 的语义统一）：伴生 / INFRA 手写
     // 副本对生成类构造器的 UFCS 直调补 `X__Methods as _;`（详见函数头注）
     inject_ctor_method_trait_imports(ctx, &ems, &decl_src, &mut w)?;
-    segs.write_crates(&mut w, out_dir, &decl_src)?;    perf.mark("mod_tree");
+    segs.write_crates(&mut w, out_dir, &decl_src, &marker.hosts)?;
+    perf.mark("mod_tree");
     module_side::write_module_crates(ctx, &mut w, out_dir, segs.top())?;
     libs.write_crates(ctx, &mut w, out_dir, segs.top())?;
     body_plan.write_crates(ctx, &mut w, out_dir, segs.top())?;
