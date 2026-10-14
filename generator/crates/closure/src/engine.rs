@@ -173,6 +173,12 @@ use rtfn::RTFN_KIND;
 
 /// 精确接收者达到此数时经集合枢纽派发
 const HUB_MIN: usize = 8;
+/// 每成员克隆上下文数硬上限（优化方案 S7「硬上限 + 超限折叠回无上下文副本」；`RAVA_CTX_CAP` 覆盖，
+/// 0 = 关闭）。超限成员的后续上下文折叠回本体（widening，sound 过近似——实参并入本体参数格、
+/// 分派面只增不减）。缺省取语料实测每成员克隆数上界之上（ctxhist：DeepCopy >1024 桶存在），
+/// 语料零触发；重语料（sb3 死点 top：Object.wait 19914 / requireNonNull 7506 …）按成员封顶。
+/// 与 `SITE_CAP` 同型：单调计数 + 粘性封顶，旧节点不动、只折叠其后
+pub(super) const CTX_CAP: usize = 4096;
 /// 字段站点在 `recv_done` 中的哨兵：与值无关的部分已接 / 未知接收者视图已接（抽象对象 id 不会取到）
 const FIELD_STATIC: u32 = u32::MAX;
 const FIELD_OTHER: u32 = u32::MAX - 1;
@@ -327,6 +333,14 @@ pub struct Engine<'a> {
     site_capped: HashSet<Rc<str>>,
     /// 宽分配点阈值（`RAVA_SITE_CAP` 覆盖；0 = 关闭）。语料上取实测上界之上、零触发（objscan，性能计划 §4.14）
     site_cap: usize,
+    /// S7 每成员上下文硬上限：成员（本体节点序号）→ 已建克隆上下文数；超 `ctx_cap` 粘性封顶
+    ctx_counts: HashMap<usize, u32>,
+    /// 已封顶的成员：后续克隆上下文一律折叠回本体（widening）
+    ctx_capped: HashSet<usize>,
+    /// 折叠次数（观测；语料零触发时应恒为 0）
+    ctx_widened: u64,
+    /// 每成员上下文上限（`RAVA_CTX_CAP` 覆盖；0 = 关闭）
+    ctx_cap: usize,
     /// 等价类合并的内存预算（`RAVA_EQ_BUDGET`，字节，可带 K/M/G 后缀；0 = 关闭，缺省）。预算降级口径
     /// （§4.15）：排空点 RSS 达预算才做一轮合并（通道 1|2 全开，近似档、接受语料漂移率验收）
     eq_budget: usize,

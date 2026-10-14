@@ -110,6 +110,12 @@ impl<'a> Engine<'a> {
             site_variants: HashMap::default(),
             site_capped: HashSet::default(),
             site_cap: std::env::var("RAVA_SITE_CAP").ok().map_or(SITE_CAP, |v| v.parse().unwrap_or(SITE_CAP)),
+            // S7 上下文硬上限（engine.rs `CTX_CAP`）：RAVA_CTX_CAP 覆盖（0 = 关闭）。
+            // 缺省取语料每成员克隆数实测上界之上，语料零触发（行为与关闭一致）
+            ctx_counts: HashMap::default(),
+            ctx_capped: HashSet::default(),
+            ctx_widened: 0,
+            ctx_cap: std::env::var("RAVA_CTX_CAP").ok().map_or(CTX_CAP, |v| v.parse().unwrap_or(CTX_CAP)),
             // 预算降级合并（eqmerge.rs §4.15）：RSS 预算（字节，K/M/G 后缀）；0 = 关闭（缺省，路径零影响）
             eq_budget: std::env::var("RAVA_EQ_BUDGET").ok().map_or(0, |v| eqmerge::parse_budget(&v)),
             ctx_heap: HashMap::default(),
