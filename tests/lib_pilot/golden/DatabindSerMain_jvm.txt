@@ -1,0 +1,16 @@
+  order json: {"orderId":"SO-001","amountFen":12500,"items":["键盘","鼠标"],"stock":{"键盘":3,"鼠标":5}}
+PASS contains-id
+PASS contains-amount
+PASS roundtrip-id
+PASS roundtrip-amount
+PASS roundtrip-items
+PASS tree-path
+PASS tree-items-size
+PASS tree-items-0
+PASS tree-long
+PASS tree-missing-default
+PASS generic-list-size
+PASS generic-list-elem
+PASS generic-map
+PASS null-field
+DONE DatabindSerMain

@@ -1,0 +1,12 @@
+PASS property
+PASS field-num
+PASS method-call
+PASS static-method
+PASS arith
+PASS ternary
+PASS concat
+PASS assign
+PASS assign-side-effect
+PASS literal
+PASS bool-true
+DONE OgnlEvalMain

@@ -1,0 +1,7 @@
+PASS default-strict
+PASS boot-style-lenient
+PASS null-primitive :: MismatchedInputException
+PASS null-primitive-lenient
+PASS bigdecimal-for-float
+PASS empty-string-kept
+DONE DatabindDeserMain
