@@ -224,7 +224,7 @@
     {
       "id": "t-t13",
       "lane": "tm",
-      "status": "doing",
+      "status": "done",
       "badge": "bolt",
       "name": "T13 抽查分担（高危 14 例）",
       "waitOn": "K4 新 tip → re-tip",
@@ -242,7 +242,7 @@
           "status": "waiting"
         }
       ],
-      "note": "排雷与信号采集完；14/14 墙栈结论 + L1-L4 修复工单已交付；正式验收挂 re-tip"
+      "note": "14/14 FAIL 定论+L2-L4 精确工单；正式验收挂 re-tip 触发"
     },
     {
       "id": "t-t14",
@@ -285,10 +285,10 @@
       "id": "b1016",
       "lane": "batch",
       "type": "milestone",
-      "status": "waiting",
+      "status": "blocked",
       "badge": "bolt",
       "name": "batch-1016（9 分支已装）",
-      "blockReason": "K4 编译墙（L2-L4）",
+      "blockReason": "K4 阶段3搬迁后编译面从未通过（L2-L4 六处）",
       "sub": [
         {
           "name": "重装 24821896",
@@ -303,16 +303,17 @@
           "status": "waiting"
         }
       ],
-      "note": "闸门全停（零信息量）；mark-ctor-fix / libpilot-gaps / g1-ctx2 / s7-k4 已在批内"
+      "note": "9分支已合（4906e31f）；闸门暂停等 K4 新 tip re-tip"
     },
     {
       "id": "b-gates",
       "lane": "batch",
-      "status": "waiting",
+      "status": "blocked",
       "badge": "bolt",
       "name": "三路闸门（ut/golden/抽查28）",
       "waitOn": "re-tip",
-      "note": "golden 段 gatefix 首战；--transpile-timeout 900"
+      "note": "golden 段 gatefix 首战；--transpile-timeout 900",
+      "blockReason": "同上——当前 tip e2e 编译段必败"
     },
     {
       "id": "b-retip",
@@ -320,7 +321,8 @@
       "type": "milestone",
       "status": "waiting",
       "name": "re-tip",
-      "waitOn": "K4 六处修复"
+      "waitOn": "K4 六处修复",
+      "note": "K4 L2-L4 修复落地后触发；--transpile-timeout 900 口径"
     },
     {
       "id": "b-release",
@@ -347,15 +349,17 @@
     {
       "id": "g-s4",
       "lane": "g1s",
-      "status": "doing",
+      "status": "done",
       "name": "G1-S4 收敛改写",
-      "note": "g1s4-det/sb3 验收收尾（并行不阻塞）"
+      "note": "两版判负（保序 PATH B 12/12 一致但 sb3 负结果三连）；死点零弹性实证；观测保留→S7 底座",
+      "ev": "9d039134"
     },
     {
       "id": "g-s7",
       "lane": "g1s",
-      "status": "todo",
-      "name": "S7 上下文上限"
+      "status": "doing",
+      "name": "S7 上下文上限",
+      "note": "上下文上限+共享（链1死点主项：ctx 铸造仍在、members 前沿已饱和）"
     },
     {
       "id": "g-s69",
@@ -390,7 +394,8 @@
       "lane": "k4",
       "status": "done",
       "name": "E0433 修复",
-      "note": "4906e31f exec_context 标记层承载"
+      "note": "E0433 根治（exec_context 守卫→java_marker 同名模块+钩子）",
+      "ev": "3c36a887"
     },
     {
       "id": "k-fix",
@@ -400,7 +405,7 @@
       "isBlocker": true,
       "critical": true,
       "name": "K4 六处修复（唯一关键路径）",
-      "note": "2×import（L2 Object/L3 String）+ 1×模板笔误（marker_hooks.rs:16）+ 3×发射族（L4-a 属性位移 55 / L4-b 重名 40 / L4-c 私有 2）；修复清单由 T13 排雷交付"
+      "note": "L2-L4 六处一次做全：L2/L3 import、L4-d 模板笔误、L4-a/b/c 生成侧 171 错"
     },
     {
       "id": "k-acc",
@@ -440,16 +445,17 @@
     {
       "id": "n-p0",
       "lane": "nogc",
-      "status": "doing",
+      "status": "done",
       "name": "P0 引用类语义",
-      "note": "nogc-impl 在跑"
+      "note": "R1 弱引用原语 + 引用类语义全链（8/8 e2e、10/10 并发单测）",
+      "ev": "3f3ad41b"
     },
     {
       "id": "n-weak",
       "lane": "nogc",
       "status": "todo",
       "name": "Weak 环子项",
-      "note": "T8 结论：语料不构成运行期压力面，用 NogcWeakCycle 探针验收"
+      "note": "子项一 Weak 环（cyclic 400k 411MB 泄漏面收口）——二阶段第二轮待派"
     },
     {
       "id": "n-jdk",
