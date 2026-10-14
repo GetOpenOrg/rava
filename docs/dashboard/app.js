@@ -14,9 +14,14 @@ const W = 176, H = 62, PADX = 26, PADY = 16;
 let DATA, nodesById, adjacency, curFilter = "all", criticalOn = false, ganttOn = false, selected = null;
 
 async function loadData() {
-  DATA = window.RAVA_DATA;
-  if (!DATA) { try { DATA = await (await fetch("data.json")).json(); } catch (e) {
-      document.body.insertAdjacentHTML("afterbegin", '<div style="padding:10px 20px;color:#f0978f">数据加载失败：file:// 下请打开 dashboard.html（单文件版），或用本地 HTTP 服务打开 index.html。</div>'); throw e; } }
+  // 兼容两种数据约定：window.RAVA_DATA（本目录 data.js）或全局 const DASHBOARD_DATA（维护方生成器）
+  DATA = (typeof window !== "undefined" && window.RAVA_DATA)
+      || (typeof DASHBOARD_DATA !== "undefined" ? DASHBOARD_DATA : null);
+  if (!DATA) { try {
+      const r = await fetch("data.json"); if (!r.ok) throw new Error("HTTP " + r.status);
+      DATA = await r.json();
+    } catch (e) {
+      document.body.insertAdjacentHTML("afterbegin", '<div style="padding:10px 20px;color:#f0978f">数据加载失败：data.js 的变量名须为 window.RAVA_DATA 或全局 DASHBOARD_DATA（当前两者都未定义）；HTTP 服务下也可提供 data.json。</div>'); throw e; } }
 }
 const colorOf = s => ({ done:"#2e9e5b", doing:"#2f7fd3", blocked:"#d64541", risk:"#e08a1e", waiting:"#8e5bd3", todo:"#9aa3ab" }[s] || "#9aa3ab");
 
