@@ -25,7 +25,8 @@
 #                                                           # cp 取 projects/<库>/form.toml；golden 文件名 <库>_<入口简名>
 #
 # 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
-#（scripts/fetch_pilot_deps.sh --no-scan 导出，同时生成依赖锁 deps.lock.toml；可经 PILOT_LIBS 覆盖）。
+#（scripts/fetch_pilot_deps.sh --no-scan 导出，同时生成依赖锁 deps.lock.toml；PILOT_LIBS 仅限本机多版本
+# 实验覆盖——gate 一律经 scripts/diag/gate_lib_golden.sh 自取依赖，禁止 PILOT_LIBS 外指其他检出）。
 # 库输入走 V12-1 终态入口：--deps deps.lock.toml + --cp 锁条目名（crate 名 = 模块 crate 名：
 # hamcrest → org_hamcrest、junit → junit）；整包翻译以 --seed-class 显式给出（jar 全类清单）。
 # 流程：javac（-cp jars）→ java 真 jar 侧 golden → rava build --deps/--cp 转译 + 编译 →
@@ -36,7 +37,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # jar 资产默认取仓库内导出位（依赖清单 tests/lib_pilot/deps/pom.xml）
 LIBS="${PILOT_LIBS:-$REPO_ROOT/tests/lib_pilot/deps/target/pilot-libs}"
-[ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（或设 PILOT_LIBS）" >&2; exit 2; }
+[ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（gate 一律经 scripts/diag/gate_lib_golden.sh 自取依赖，禁 PILOT_LIBS 外指其他检出）" >&2; exit 2; }
 LOCK="${DEPS_LOCK:-$(dirname "$LIBS")/deps.lock.toml}"
 [ -f "$LOCK" ] || { echo "缺依赖锁 $LOCK：先跑 scripts/fetch_pilot_deps.sh --no-scan" >&2; exit 2; }
 # hamcrest 全类清单（m1 整包翻译的显式种子；m2–m5 在此之上加 junit 种子——与原 :seed= 序一致）
