@@ -118,8 +118,9 @@ function renderGraph() {
   lg.html(Object.entries(STATUS).map(([k, v]) => `<span class="it"><span class="sw" style="background:${colorOf(k)}"></span>${v.label}</span>`).join("")
     + `<span class="it">━ 红 = 关键路径</span><span class="it">内嵌小条 = 子任务状态</span>`);
   applyFilter(); if (criticalOn) applyCritical();
-  d3.zoom().scaleExtent([0.25, 2.5]).on("zoom", ev => root.attr("transform", ev.transform))(svg);
-  window.__root = root;
+  const zb = d3.zoom().scaleExtent([0.15, 4]).on("zoom", ev => root.attr("transform", ev.transform));
+  zb(svg); window.__zoom = zb; window.__root = root;
+  fitView();
 }
 
 /* ---------- 悬停链路高亮 ---------- */
@@ -195,6 +196,29 @@ function renderBlockers() {
     }).join("");
 }
 
+/* ---------- 缩放适配 / 全屏 ---------- */
+function fitView() {
+  const svgN = document.getElementById("graph");
+  const vw = svgN.clientWidth || 1200, vh = svgN.clientHeight || 700;
+  const xs = DATA.nodes.map(n => n.x), ys = DATA.nodes.map(n => n.y);
+  const x0 = Math.min(...xs) - 30, y0 = Math.min(...ys) - 40;
+  const bw = Math.max(...xs) + W + 60 - x0, bh = Math.max(...ys) + H + 60 - y0;
+  const k = Math.min(vw / bw, vh / bh, 1.15);
+  const tx = (vw - bw * k) / 2 - x0 * k, ty = (vh - bh * k) / 2 - y0 * k;
+  svgN.__zoom ? null : null;
+  d3.select(svgN).call(window.__zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+}
+function stepZoom(f) {
+  const svgN = document.getElementById("graph");
+  d3.select(svgN).transition().duration(220).call(window.__zoom.scaleBy, f);
+}
+function toggleFull() {
+  try {
+    if (!document.fullscreenElement) (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen).call(document.documentElement);
+    else (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  } catch (e) { document.getElementById("fsHint").textContent = "此环境不允许全屏，请用浏览器直接打开文件"; }
+}
+
 /* ---------- 控件绑定与启动 ---------- */
 function bindControls() {
   const fb = document.getElementById("filters");
@@ -204,6 +228,10 @@ function bindControls() {
     fb.appendChild(b);
   });
   document.getElementById("btnCritical").onclick = e => { criticalOn = !criticalOn; e.target.classList.toggle("on", criticalOn); applyCritical(); };
+  document.getElementById("btnZoomIn").onclick = () => stepZoom(1.3);
+  document.getElementById("btnZoomOut").onclick = () => stepZoom(1 / 1.3);
+  document.getElementById("btnFit").onclick = fitView;
+  document.getElementById("btnFull").onclick = toggleFull;
   document.getElementById("btnView").onclick = e => {
     ganttOn = !ganttOn; e.target.classList.toggle("on", ganttOn); e.target.textContent = ganttOn ? "DAG 视图" : "甘特视图";
     document.getElementById("graphWrap").style.display = ganttOn ? "none" : "block";

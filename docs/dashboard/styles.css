@@ -4,7 +4,8 @@
   --bg: #14171c; --panel: #1c2027; --line: #2a3038; --txt: #dfe4ea; --txt-dim: #8b93a0;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: var(--bg); color: var(--txt); font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--txt); display: flex; flex-direction: column; overflow: hidden; font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 header { padding: 14px 20px 10px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 header h1 { font-size: 17px; font-weight: 600; }
 .ts { color: var(--txt-dim); font-size: 11px; }
@@ -25,11 +26,11 @@ header h1 { font-size: 17px; font-weight: 600; }
 #pipe .h-bad { border-color: var(--c-blocked); animation: pulse 1.6s infinite; } #pipe .h-bad .nm { color: var(--c-blocked); }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(214,69,65,.35); } 50% { box-shadow: 0 0 0 5px rgba(214,69,65,0); } }
 /* 主区 */
-#main { display: flex; }
-#graphWrap { flex: 1; position: relative; overflow: hidden; height: 720px; border-right: 1px solid var(--line); }
+#main { display: flex; flex: 1; min-height: 0; }
+#graphWrap { flex: 1; position: relative; overflow: hidden; min-height: 420px; border-right: 1px solid var(--line); }
 #graph { width: 100%; height: 100%; cursor: grab; }
-#gantt { display: none; padding: 16px 20px; height: 720px; overflow: auto; flex: 1; }
-#detail { width: 320px; padding: 14px 16px; overflow-y: auto; max-height: 720px; }
+#gantt { display: none; padding: 16px 20px; flex: 1; overflow: auto; }
+#detail { width: 320px; padding: 14px 16px; overflow-y: auto; }
 #detail h3 { font-size: 14px; margin-bottom: 8px; }
 #detail .row { margin-bottom: 7px; font-size: 12px; }
 #detail .k { color: var(--txt-dim); margin-right: 6px; }
@@ -79,3 +80,7 @@ header h1 { font-size: 17px; font-weight: 600; }
 .g-cells { display: flex; gap: 3px; flex-wrap: wrap; }
 .g-cell { min-width: 26px; height: 22px; border-radius: 4px; font-size: 9px; color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0 4px; }
 .g-cell:hover { outline: 2px solid #fff; }
+
+.ctrl button.icon { min-width: 34px; font-size: 14px; }
+#graph { touch-action: none; }
+#fsHint { color: var(--txt-dim); font-size: 10px; }
