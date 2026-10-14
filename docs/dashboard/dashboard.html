@@ -858,11 +858,11 @@ function renderGraph() {
     if (!pts) return;
     const src = nodesById[e.from], cls = ["edge", e.critical ? "critical" : "",
       src.status === "done" ? "e-done" : (e.to === "k-fix" ? "e-doing" : ((nodesById[e.to] || {}).badge === "bolt" ? "e-blocked" : "e-doing"))].join(" ");
-    const p = edgeG.append("path").attr("class", cls)
+    const p = edgeG.append("path").attr("class", cls).attr("data-from", e.from).attr("data-to", e.to)
       .attr("d", d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBumpY)(pts));
     if (e.label) {
       const mid = pts[Math.floor(pts.length / 2)];
-      edgeG.append("text").attr("class", cls).attr("x", mid.x).attr("y", mid.y - 6).attr("text-anchor", "middle").text(e.label);
+      edgeG.append("text").attr("class", cls).attr("data-from", e.from).attr("data-to", e.to).attr("x", mid.x).attr("y", mid.y - 6).attr("text-anchor", "middle").text(e.label);
     }
     p.on("click", () => selectNode(nodesById[e.to]));
   });
@@ -906,8 +906,8 @@ function reach(id, dir) {
 }
 function highlight(id) {
   const keep = new Set([...reach(id, "down"), ...reach(id, "up")]);
-  d3.selectAll(".node").classed("dim", n => !keep.has(n.id));
-  d3.selectAll(".edge").classed("dim", e => !(keep.has(e.from) && keep.has(e.to)));
+  d3.selectAll(".node").classed("dim", function () { return !keep.has(this.getAttribute("data-id")); });
+  d3.selectAll(".edge").classed("dim", function () { return !(keep.has(this.getAttribute("data-from")) && keep.has(this.getAttribute("data-to"))); });
 }
 function clearHighlight() { d3.selectAll(".node").classed("dim", false); d3.selectAll(".edge").classed("dim", false); }
 
@@ -933,13 +933,13 @@ function selectNode(n) {
 /* ---------- 筛选 / 关键路径 ---------- */
 function applyFilter() {
   const keep = new Set(curFilter === "all" ? DATA.nodes.map(n => n.id) : DATA.nodes.filter(n => n.status === curFilter || (curFilter === "blocked" && n.badge === "bolt")).map(n => n.id));
-  d3.selectAll(".node").classed("hide", n => !keep.has(n.id));
-  d3.selectAll(".edge").classed("hide", e => !(keep.has(e.from) && keep.has(e.to)));
+  d3.selectAll(".node").classed("hide", function () { return !keep.has(this.getAttribute("data-id")); });
+  d3.selectAll(".edge").classed("hide", function () { return !(keep.has(this.getAttribute("data-from")) && keep.has(this.getAttribute("data-to"))); });
 }
 function applyCritical() {
   const critE = DATA.edges.filter(e => e.critical), critN = new Set([...critE.flatMap(e => [e.from, e.to])]);
-  d3.selectAll(".node").classed("dim", n => criticalOn && !critN.has(n.id));
-  d3.selectAll(".edge").classed("dim", e => criticalOn && !e.critical);
+  d3.selectAll(".node").classed("dim", function () { return criticalOn && !critN.has(this.getAttribute("data-id")); });
+  d3.selectAll(".edge").classed("dim", function () { return criticalOn && !this.classList.contains("critical"); });
 }
 
 /* ---------- 甘特辅助视图（泳道 × 状态条） ---------- */
