@@ -1,0 +1,81 @@
+:root {
+  --c-done: #2e9e5b; --c-doing: #2f7fd3; --c-blocked: #d64541;
+  --c-risk: #e08a1e; --c-waiting: #8e5bd3; --c-todo: #9aa3ab;
+  --bg: #14171c; --panel: #1c2027; --line: #2a3038; --txt: #dfe4ea; --txt-dim: #8b93a0;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--txt); font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+header { padding: 14px 20px 10px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+header h1 { font-size: 17px; font-weight: 600; }
+.ts { color: var(--txt-dim); font-size: 11px; }
+.stats { display: flex; gap: 10px; font-size: 12px; margin-left: auto; flex-wrap: wrap; }
+.stats span { padding: 2px 9px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+.stats b { font-weight: 600; }
+.ctrl { padding: 8px 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.ctrl button { background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+.ctrl button.on { border-color: var(--c-doing); color: #9ecdf5; background: #1d2c3d; }
+.ctrl .sep { color: var(--line); margin: 0 4px; }
+/* 管线健康条 */
+#pipe { display: flex; gap: 4px; padding: 10px 20px; align-items: stretch; flex-wrap: wrap; }
+#pipe .stage { flex: 1; min-width: 110px; border-radius: 6px; padding: 6px 10px; font-size: 12px; border: 1px solid var(--line); background: var(--panel); position: relative; }
+#pipe .stage .nm { font-weight: 600; }
+#pipe .stage .nt { font-size: 10px; color: var(--txt-dim); margin-top: 2px; }
+#pipe .h-ok { border-color: var(--c-done); } #pipe .h-ok .nm { color: var(--c-done); }
+#pipe .h-warn { border-color: var(--c-risk); } #pipe .h-warn .nm { color: var(--c-risk); }
+#pipe .h-bad { border-color: var(--c-blocked); animation: pulse 1.6s infinite; } #pipe .h-bad .nm { color: var(--c-blocked); }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(214,69,65,.35); } 50% { box-shadow: 0 0 0 5px rgba(214,69,65,0); } }
+/* 主区 */
+#main { display: flex; }
+#graphWrap { flex: 1; position: relative; overflow: hidden; height: 720px; border-right: 1px solid var(--line); }
+#graph { width: 100%; height: 100%; cursor: grab; }
+#gantt { display: none; padding: 16px 20px; height: 720px; overflow: auto; flex: 1; }
+#detail { width: 320px; padding: 14px 16px; overflow-y: auto; max-height: 720px; }
+#detail h3 { font-size: 14px; margin-bottom: 8px; }
+#detail .row { margin-bottom: 7px; font-size: 12px; }
+#detail .k { color: var(--txt-dim); margin-right: 6px; }
+#detail .chip { display: inline-block; padding: 1px 8px; border-radius: 8px; font-size: 11px; color: #fff; }
+#detail ul { margin: 4px 0 8px 16px; }
+#detail li { font-size: 12px; margin: 2px 0; }
+#detail .impact { background: #3a1d1c; border: 1px solid var(--c-blocked); border-radius: 6px; padding: 8px 10px; margin-top: 8px; font-size: 12px; }
+.placeholder { color: var(--txt-dim); font-size: 12px; }
+/* DAG 节点 */
+.node rect.box { fill: var(--panel); stroke: var(--line); stroke-width: 1; rx: 8; }
+.node { cursor: pointer; }
+.node .title { fill: var(--txt); font-size: 11.5px; font-weight: 600; }
+.node .badge { font-size: 11px; }
+.node .wait { fill: var(--txt-dim); font-size: 9px; }
+.node.milestone rect.box { rx: 18; stroke-dasharray: none; }
+.node.context rect.box { stroke-dasharray: 4 3; }
+.node.dim { opacity: 0.13; }
+.node.hide { display: none; }
+.node.crit rect.box { stroke-width: 2.5; }
+/* 边 */
+.edge path { fill: none; stroke: #566070; stroke-width: 1.4; }
+.edge.e-done path { stroke: #3f6f57; }
+.edge.e-doing path { stroke: var(--c-doing); stroke-dasharray: 7 5; animation: flow 1.1s linear infinite; }
+.edge.e-blocked path { stroke: var(--c-blocked); stroke-dasharray: 4 4; }
+.edge.critical path { stroke-width: 3.2; stroke: #d64541; }
+.edge.dim path, .edge.dim text { opacity: 0.08; }
+.edge.hide { display: none; }
+.edge text { fill: var(--txt-dim); font-size: 9px; }
+@keyframes flow { to { stroke-dashoffset: -24; } }
+/* 泳道底带 */
+.laneband { fill: #181c22; }
+.lanelabel { fill: var(--txt-dim); font-size: 11px; font-weight: 600; }
+/* 卡点清单 */
+#blockers { border-top: 1px solid var(--line); padding: 12px 20px 18px; }
+#blockers h2 { font-size: 13px; color: var(--c-blocked); margin-bottom: 8px; }
+.blk { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--c-blocked); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; }
+.blk b { color: #f0978f; }
+.blk .why { color: var(--txt-dim); }
+.blk .sug { margin-top: 4px; color: #ffd28a; }
+/* 图例 */
+#legend { position: absolute; left: 12px; bottom: 12px; background: rgba(28,32,39,.92); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 11px; display: flex; gap: 12px; flex-wrap: wrap; max-width: 640px; }
+#legend .it { display: flex; align-items: center; gap: 5px; }
+#legend .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+/* 甘特 */
+.g-row { display: flex; align-items: center; margin-bottom: 8px; }
+.g-lane { width: 130px; color: var(--txt-dim); font-size: 12px; flex-shrink: 0; }
+.g-cells { display: flex; gap: 3px; flex-wrap: wrap; }
+.g-cell { min-width: 26px; height: 22px; border-radius: 4px; font-size: 9px; color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0 4px; }
+.g-cell:hover { outline: 2px solid #fff; }
