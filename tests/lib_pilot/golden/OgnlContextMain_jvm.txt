@@ -1,2 +1,8 @@
 PASS var-read
 PASS var-compare
+PASS root-ref
+PASS map-get
+PASS set-collect
+PASS type-convert
+FAIL context-keys :: expected=<[k2, threshold]> actual=<[k2, m, s, threshold]>
+DONE OgnlContextMain
