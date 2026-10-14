@@ -15,6 +15,7 @@ use super::method_impl::__slot_row;
 use super::Constructor;
 use crate::java::lang::Class;
 use crate::java::lang::Object;
+use super::__ConstructorHw;
 
 crate::__process_static! {
     /// (声明类镜像身份, slot) → 构造键 (类名斜线形态, 完整描述符——返回段 V)。
@@ -106,10 +107,10 @@ fn __member_key<T: Clone + Default + 'static + From<Object> + Into<Object> + cra
     }
 }
 
-impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> Constructor<T> {
+impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> __ConstructorHw<T> for Constructor<T> {
     /// 反射族内部：本构造器的 L3 分派键 (声明类斜线名, 描述符)。两分量均为 `&'static`
     /// （表构造：元数据表行；非表形态：驻留池），调用方零分配消费。
-    pub(crate) fn __reflect_key(&self) -> Option<(&'static str, &'static str)> {
+    fn __reflect_key(&self) -> Option<(&'static str, &'static str)> {
         __member_key(self)
     }
 }

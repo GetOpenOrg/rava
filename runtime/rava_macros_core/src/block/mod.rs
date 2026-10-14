@@ -84,9 +84,9 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
 
     // ── 接口：同名载体类型（接口引用 + 静态成员）────────────────────────────
     if meta.is_interface {
-        // 接口载体整体属声明层（default / static 方法体进实现层是后续项，见拆 crate 文档 §7.5）；
-        // 标记层（§9.9 K6）本轮不拆接口（载体 struct 留接口文件），展开为空
-        if meta.layer == Layer::Body || meta.layer == Layer::Marker {
+        // 接口载体拆层（§9.9 K4）：标记层展开载体身份面（struct + 身份 impl，随标记文件入
+        // `java_marker` crate）；`I__VTable` / `I__Methods` / statics 留声明层；实现层为空
+        if meta.layer == Layer::Body {
             return Ok(TokenStream2::new());
         }
         return Ok(expand_interface(

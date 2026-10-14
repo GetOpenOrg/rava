@@ -116,6 +116,8 @@ fn gen_signature_polymorphic(
     let decl_ret = ty::type_map::parse_descriptor_return(decl_desc);
     let site_key = format!("{}.{}", call.owner, call.name);
     if !is_static && env.ctx.rt.sigpoly_callsite_typed.contains(&site_key) {
+        // K4-2a：`recv.m__site(..)` 落在手写伴生块上（`__site` 后缀条目），按名登记导入
+        env.ctx.ty.use_hw(&call.owner, &call.name);
         let recv = text(env, &sim.pop()?.expr);
         let res = sim.fresh("_t")?;
         let ret_ty = ty.jvm_to_rust(decl_ret);

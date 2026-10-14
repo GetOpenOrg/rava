@@ -7,9 +7,15 @@ pub mod field_reflect;
 pub mod handle;
 #[doc(hidden)]
 pub mod image_rt;
-pub mod obj_ref;
 pub mod region;
-pub mod sync_model;
+pub mod marker_hooks;
+// 标记层基础（§9.9 K4）：obj_ref / sync_model 移入独立 java_marker crate（本 crate 依赖
+// 它），按原模块路径整体再导出——`crate::obj_ref::*` / `crate::sync_model::*` 等既有
+// 引用路径不变。两个宏（`__process_static!` / `__DynFn!`）随 sync_model 落在 java_marker
+// 根，同路径再导出。
+pub use java_marker::{obj_ref, sync_model};
+pub use java_marker::__DynFn;
+pub use java_marker::__process_static;
 pub mod gil;
 pub mod reflect_dispatch;
 pub mod error;
@@ -34,6 +40,7 @@ pub mod sun;
 pub mod vm_constants;
 
 use crate::java::lang::Shutdown__Methods as _;
+use crate::java::lang::__ThreadHw as _;
 pub use array::JArray;
 pub use error::{JvmError, Result};
 pub use java::lang::Object;

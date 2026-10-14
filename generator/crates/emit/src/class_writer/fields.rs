@@ -226,6 +226,8 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
                 blocks.push(injected_static_block(&head, &fname, &ty, expr));
             }
         } else if let Some(Const::StringUtf16(units)) = &sf.constant_value {
+            // K4-2a：初值走手写 `String::from_utf16_lit`（`__StringHw`），按锚点名登记
+            ctx.ty.use_hw(ty::consts::STRING, "from_utf16_lit");
             blocks.push(format!("{head}pub const {fname}: {ty} = {};", utf16_const_literal(units)));
         } else if !cv.is_empty() {
             blocks.push(format!("{head}pub const {fname}: {ty} = {};", const_literal(&ty, &cv)));

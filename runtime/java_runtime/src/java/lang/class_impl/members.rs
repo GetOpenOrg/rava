@@ -4,6 +4,7 @@ use crate::java::lang::reflect::Constructor__Methods as _;
 use crate::java::lang::reflect::Field__Methods as _;
 use crate::java::lang::reflect::Method__Methods as _;
 use super::*;
+use crate::java::lang::__ClassHw as _;
 
 impl Class {
     /// `getDeclaredFields()`：本类全部声明字段的构造序列（字段表驱动，

@@ -241,6 +241,9 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
         parts.push(format!("access = \"{}\"", method.access));
     }
     parts.push(format!("inherited_from = \"{}\"", rust_type(&ctx.short(owner_bin), &owner_args)));
+    // K4-2a：继承成员的转发体（宏合成的上转直调 `.<rust_name>(..)` 与手写 `__impl_<名>` 体）
+    // 调用点在本类文件——按名登记 owner 的 hw 块导入（无匹配块时无操作）
+    ctx.ty.use_hw(owner_bin, &method.rust_name);
     let slotless = method.virtual_in.is_empty() && !method.handwritten;
     if !method.virtual_in.is_empty() {
         parts.push(format!("vtable_owner = \"{}\"", rust_type(&ctx.short(&vt_bin), &vt_args)));
@@ -281,8 +284,10 @@ fn interface_member_declaration(
     let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
     let mut signature = substitute_type_params(&method.signature(&ctx.ty), &param_mapping(&owner_params, owner_args));
     let local = ctx.ty.interface_member_local_name(recv_ci, &method.name, &method.descriptor);
-    // 转发体（宏生成，留在声明层）调用 owner 载体的方法——载体成员在 I__Methods 上（K6 前置项）
+    // 转发体（宏生成，留在声明层）调用 owner 载体的方法——载体成员在 I__Methods 上（K6 前置项）；
+    // 手写成员（K4-2a）在 `__OwnerHw` 上，按名登记导入（无匹配块时无操作）
     ctx.ty.use_methods(owner_bin);
+    ctx.ty.use_hw(owner_bin, &method.rust_name);
     let mut parts = vec![format!("name = \"{}\"", method.name), format!("descriptor = \"{}\"", method.descriptor)];
     if !method.access.is_empty() {
         parts.push(format!("access = \"{}\"", method.access));

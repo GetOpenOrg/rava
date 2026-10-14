@@ -10,6 +10,9 @@ use crate::prelude::*;
 use super::Method_Direct;
 use crate::java::lang::reflect::Method;
 use crate::java::lang::reflect::InvocationTargetException;
+use super::__Method_DirectHw;
+use crate::java::lang::reflect::__MethodHw as _;
+use crate::java::lang::reflect::__ConstructorHw as _;
 
 /// 目标抛出的异常包装为 InvocationTargetException（JVM 同）；实参拆箱失败的
 /// IllegalArgumentException 直抛。
@@ -24,9 +27,10 @@ fn __wrap_target_exception(e: crate::error::JvmError) -> crate::error::JvmError 
     }
 }
 
-impl Method_Direct {
+impl __Method_DirectHw for Method_Direct {
     #[jvm_native]
-    pub fn invoke0(m: Method, obj: Object, args: JArray<Object>) -> Result<Object> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn invoke0(m: Method, obj: Object, args: JArray<Object>) -> Result<Object> {
         let Some((cls, name, desc)) = m.__reflect_key() else {
             panic!("stub: Method$Direct.invoke0 无声明键（非表构造的 Method）");
         };

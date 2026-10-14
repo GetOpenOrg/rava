@@ -12,10 +12,10 @@
 //! - 标记段：与签名无关的部分（struct、`__from_parts` / `__from_image` / `__virtual_view` /
 //!   `is_jvm_null` / `__nn`、身份 std impl、`From<Wrapper> for Object`）——展开文本不含
 //!   `__VTable` / `__Methods`；
-//! - 声明段：引用本类 vtable trait 的 `__vt` 固有方法 + wrapper impl 块（方法 trait 与访问器等
-//!   固有遗留——后者引用 vtable 槽，随标记 crate 分离（K4 后）再并入方法 trait）。
-//!   完整展开按「标记段在前、声明段在后」拼回（`__vt` 自 `__from_parts` impl 拆出为独立
-//!   impl 块，项序与拆前不同、内容不变）。
+//! - 声明段：wrapper impl 块——方法 trait `X__Methods` 与其实现（可读层成员全量在 trait 上，
+//!   §9.9 K4：`__vt`、字段访问器、`_init_not_null` / `__init_on`、装箱工厂 `valueOf_*` 一并入
+//!   trait，wrapper struct 搬入标记 crate 后跨 crate 仍可解析）。完整展开按「标记段在前、
+//!   声明段在后」拼回（项序与拆前不同、内容不变）。
 
 mod body_fns;
 mod methods;
@@ -138,34 +138,8 @@ pub(crate) fn generate_marker(ctx: &GenContext) -> TokenStream2 {
     }
 }
 
-/// §5-§7 声明段：`__vt` 固有方法（引用本类 vtable trait，§9.9 K6 遗留——标记 crate 分离
-/// （K4 后）时并入方法 trait 或改调用点内联取视图）+ wrapper impl 块（方法 trait 与固有遗留）。
-/// 第二项为方法体函数（`__jbm_`，拆层时进实现层）。
+/// §5-§7 声明段：wrapper impl 块（方法 trait 及其实现——`__vt` 与访问器等均随方法 trait，
+/// §9.9 K4）。第二项为方法体函数（`__jbm_`，拆层时进实现层）。
 pub(crate) fn generate_decl(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
-    let struct_ident = &ctx.struct_ident;
-    let vtable_trait_ident = &ctx.vtable_trait_ident;
-    let impl_g = &ctx.impl_g;
-    let ty_g = &ctx.ty_g;
-    let where_c = &ctx.where_c;
-    // 本类在描述符 display 表中的深度（与 `class_desc` 同口径：祖先数，不含 Object）
-    let depth = ctx.meta.all_superclasses.len() as u16;
-
-    // 虚分派 / 字段访问入口（S7 计划 §3.1 取法 A）：按本类 display 深度向运行时类
-    // 存储取本类视图（一次间接调用 + 一次槽类型比较）。
-    let wrapper_vt = quote! {
-        impl #impl_g #struct_ident #ty_g #where_c {
-            #[doc(hidden)]
-            #[inline]
-            pub fn __vt(&self) -> &dyn #vtable_trait_ident {
-                self.__r.view::<dyn #vtable_trait_ident>(#depth)
-            }
-        }
-    };
-
-    let (wrapper_impl, body_fns) = methods::generate(ctx)?;
-
-    Ok((quote! {
-        #wrapper_vt
-        #wrapper_impl
-    }, body_fns))
+    methods::generate(ctx)
 }

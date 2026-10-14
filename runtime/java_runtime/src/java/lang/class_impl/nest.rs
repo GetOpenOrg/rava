@@ -1,6 +1,7 @@
 //! Class 的类级 native：嵌套 / 外围 / record / 访问标志 / 签名者（数据源 = 元数据表）（宿主 class_impl.rs 的私有辅助模块）
 
 use super::*;
+use crate::java::lang::__ClassHw as _;
 
 // ── FS-R R1：类级 native（数据源 = 元数据表，JDK 公开方法体回到字节码）────────────
 //

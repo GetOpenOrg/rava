@@ -57,6 +57,8 @@ use parking_lot::{Condvar, Mutex};
 
 use crate::error::{JvmError, Result};
 use crate::java::lang::Object;
+use crate::java::lang::__ClassHw as _;
+use crate::java::lang::__ThreadHw as _;
 
 // ── 监视器本体 ───────────────────────────────────────────────────────────────
 

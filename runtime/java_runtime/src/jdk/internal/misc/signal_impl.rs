@@ -9,6 +9,9 @@ use crate::jdk::internal::misc::Signal__Methods as _;
 use crate::prelude::*;
 use super::signal::Signal;
 use std::sync::OnceLock;
+use super::__SignalHw;
+use crate::java::lang::__ThreadHw as _;
+use crate::java::lang::__ThreadHw2 as _;
 
 /// 信号名（不带 `SIG` 前缀，与 `Signal(String)` 的入参一致）→ 信号号
 const SIGNALS: &[(&str, libc::c_int)] = &[
@@ -116,10 +119,11 @@ fn ensure_dispatcher() -> Result<()> {
     })
 }
 
-impl Signal {
+impl __SignalHw for Signal {
     /// native `findSignal0(String)`：信号名 → 信号号，未知为 -1
     #[jvm_native]
-    pub fn findSignal0(arg0: String) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn findSignal0(arg0: String) -> Result<i32> {
         let name = format!("{arg0}");
         Ok(SIGNALS.iter().find(|(n, _)| *n == name).map_or(-1, |&(_, s)| s))
     }
@@ -127,7 +131,8 @@ impl Signal {
     /// native `handle0(int, long)`：安装处理器并返回原处理器（同一编码，非本运行时的处理器返回其地址）；
     /// 保留信号与安装失败返回 -1，启动时被忽略的关停信号返回 1 且不改动
     #[jvm_native]
-    pub fn handle0(arg0: i32, arg1: i64) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn handle0(arg0: i32, arg1: i64) -> Result<i64> {
         let sig = arg0 as libc::c_int;
         if RESERVED.contains(&sig) {
             return Ok(-1);
@@ -172,7 +177,8 @@ impl Signal {
 
     /// native `raise0(int)`：向本进程发信号
     #[jvm_native]
-    pub fn raise0(arg0: i32) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn raise0(arg0: i32) -> Result<()> {
         // SAFETY: raise 无内存前置条件
         unsafe {
             libc::raise(arg0 as libc::c_int);

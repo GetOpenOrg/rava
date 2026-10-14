@@ -16,6 +16,7 @@ use super::unix_mount_entry::UnixMountEntry;
 use super::unix_native_dispatcher_impl::unix_exception;
 #[cfg(target_os = "linux")]
 use super::unix_native_dispatcher_impl::{errno, restartable};
+use super::__LinuxNativeDispatcherHw;
 
 /// `sun/nio/ch/IOStatus` 的返回码（directCopy0 的约定）
 const IOS_UNAVAILABLE: i32 = -2;
@@ -36,43 +37,49 @@ fn cancelled(cancel: i64) -> bool {
     cancel != 0 && unsafe { crate::native_memory::load_volatile_direct(cancel, 4) } != 0
 }
 
-impl LinuxNativeDispatcher {
+impl __LinuxNativeDispatcherHw for LinuxNativeDispatcher {
     /// native `init()`：见模块注释，无状态需初始化。
     #[jvm_native]
-    pub fn init() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn init() -> Result<()> {
         Ok(())
     }
 
     /// native `setmntent0(long pathAddress, long modeAddress)`：setmntent(3)，失败抛 UnixException(errno)。
     #[jvm_native]
-    pub fn setmntent0(path: i64, mode: i64) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn setmntent0(path: i64, mode: i64) -> Result<i64> {
         set_mount_table(path, mode)
     }
 
     /// native `getmntent0(long fp, UnixMountEntry entry, long buffer, int bufLen)`：getmntent_r(3)，
     /// 读到条目时填 name / dir / fstype / opts 并返回 0，表尾返回 -1。
     #[jvm_native]
-    pub fn getmntent0(fp: i64, entry: UnixMountEntry, buffer: i64, buf_len: i32) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getmntent0(fp: i64, entry: UnixMountEntry, buffer: i64, buf_len: i32) -> Result<i32> {
         next_mount_entry(fp, &entry, buffer, buf_len)
     }
 
     /// native `endmntent(long stream)`：endmntent(3)（恒返回 1，JNI 不检查结果）。
     #[jvm_native]
-    pub fn endmntent(stream: i64) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn endmntent(stream: i64) -> Result<()> {
         end_mount_table(stream);
         Ok(())
     }
 
     /// native `posix_fadvise(int fd, long offset, long len, int advice)`：直接返回 posix_fadvise 结果码。
     #[jvm_native]
-    pub fn posix_fadvise(fd: i32, offset: i64, len: i64, advice: i32) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn posix_fadvise(fd: i32, offset: i64, len: i64, advice: i32) -> Result<i32> {
         Ok(fadvise(fd, offset, len, advice))
     }
 
     /// native `directCopy0(int dst, int src, long cancelAddress)`：成功返回 0；sendfile 会阻塞返回
     /// IOS_UNAVAILABLE、参数不受支持返回 IOS_UNSUPPORTED_CASE；其余失败抛异常。
     #[jvm_native]
-    pub fn directCopy0(dst: i32, src: i32, cancel: i64) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn directCopy0(dst: i32, src: i32, cancel: i64) -> Result<i32> {
         direct_copy(dst, src, cancel)
     }
 }

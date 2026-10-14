@@ -153,13 +153,46 @@ fn scan_impls(src_dir: &Path) -> HashSet<String> {
         // 去掉 _impl 后缀还原为对应类的路径
         let impl_path = host.with_file_name(format!("{}.rs", &stem[..stem.len()-5]));
         let class = path_to_class(src_dir, &impl_path);
+        // K4-2a：`impl __XHw{N} for X` 块内条目可见性已剥（trait impl 不允许 pub），块内
+        // 的 `fn ` 行同样计入已实现集；块外仍只认 `pub fn`（自由辅助 fn 不算实现）。
+        // hw 头可跨行（where 换行形态）：`impl` 行未带 `{` 时等待 `{` 行再进块
+        let mut hw_depth: i32 = 0;
+        let mut hw_head_open = false;
         for line in content.lines() {
             let t = line.trim();
-            if t.starts_with("pub fn ") || t.starts_with("pub unsafe fn ") {
+            let braces = (t.matches('{').count() as i32) - (t.matches('}').count() as i32);
+            if line.starts_with("impl") || hw_head_open {
+                // trait 名 = ` for ` 前的末 token（`impl<GEN> __XHw{N} for X`）
+                let is_hw = t.contains(" for ")
+                    && t.split(" for ").next().unwrap_or("")
+                        .split_whitespace().last()
+                        .is_some_and(|s| s.starts_with("__") && s.contains("Hw"));
+                if hw_head_open {
+                    if t.ends_with('{') {
+                        hw_head_open = false;
+                        hw_depth = braces.max(1);
+                    }
+                    continue;
+                }
+                if is_hw {
+                    if t.ends_with('{') {
+                        hw_depth = braces.max(1);
+                    } else {
+                        hw_head_open = true;
+                    }
+                    continue;
+                }
+            }
+            let counted = t.starts_with("pub fn ") || t.starts_with("pub unsafe fn ")
+                || (hw_depth == 1 && (t.starts_with("fn ") || t.starts_with("unsafe fn ")));
+            if counted {
                 if let Some(name) = extract_fn_name(t) {
                     result.insert(format!("{}.{}", class, name));
                     result.insert(format!("{}.{}", class, to_camel(&name)));
                 }
+            }
+            if hw_depth > 0 {
+                hw_depth += braces;
             }
             if t.starts_with("/// ") {
                 if let Some(rest) = t.strip_prefix("/// ") {

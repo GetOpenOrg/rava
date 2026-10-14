@@ -10,12 +10,15 @@ use crate::jdk::internal::loader::ClassLoaders__Methods as _;
 use crate::jdk::internal::misc::VM__Methods as _;
 use crate::prelude::*;
 use super::vm::VM;
+use super::__VMHw;
+use crate::java::lang::__ClassHw as _;
 
-impl VM {
+impl __VMHw for VM {
     /// native `initialize()`：HotSpot 由 CDS 归档恢复 VM 类的静态字段（`JVM_InitializeFromArchive`）；
     /// 原生二进制无 CDS 归档，静态字段即 `<clinit>` 的字节码结果 → no-op。
     #[jvm_native]
-    pub fn initialize() -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn initialize() -> Result<()> {
         Ok(())
     }
 
@@ -24,7 +27,8 @@ impl VM {
     /// `ConstructorAccessorImpl` 子类）的帧跳过。栈上无此类帧 → null（字节码 `latestUserDefinedLoader`
     /// 回落平台加载器）。消费方：`ObjectInputStream.resolveClass`。帧源见 `crate::vm_stack`。
     #[jvm_native]
-    pub fn latestUserDefinedLoader0() -> Result<crate::java::lang::ClassLoader> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn latestUserDefinedLoader0() -> Result<crate::java::lang::ClassLoader> {
         let platform = Object::from(crate::jdk::internal::loader::ClassLoaders::platformClassLoader()?);
         for f in crate::vm_stack::capture_java_frames() {
             if f.class_extends("jdk/internal/reflect/MethodAccessorImpl") || f.class_extends("jdk/internal/reflect/ConstructorAccessorImpl") {
@@ -44,7 +48,8 @@ impl VM {
     /// 当前 CLOCK_REALTIME 相对 offset 的纳秒差；秒差超出 ±2^32 返回 -1（HotSpot
     /// JVM_GetNanoTimeAdjustment 同阈值，调用方据此重取 offset）。
     #[jvm_native]
-    pub fn getNanoTimeAdjustment(offset_in_seconds: i64) -> Result<i64> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getNanoTimeAdjustment(offset_in_seconds: i64) -> Result<i64> {
         const MAX_DIFF: i64 = 0x1_0000_0000;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH).unwrap_or_default();

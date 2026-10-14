@@ -46,6 +46,8 @@ const ABSTRACT_STACK_WALKER: &str = "java/lang/StackStreamFactory$AbstractStackW
 
 /// 锚定的帧流随执行流存放（执行上下文块，a3-T3）：遍历回调期间虚拟线程可能换载体。
 use crate::vm_stack::AnchoredWalk as Anchored;
+use super::__StackStreamFactory_AbstractStackWalkerHw;
+use crate::java::lang::__ClassHw as _;
 
 fn _internal_error(msg: &str) -> JvmError {
     match crate::java::lang::InternalError::new_str(String::from(msg)) {
@@ -135,11 +137,11 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     _ensure(info.0.__unsafe_int_set("bci", frame.bci), "bci");
 }
 
-impl<R, T> StackStreamFactory_AbstractStackWalker<R, T>
-where
-    R: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
-    T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
-{
+impl<R, T> __StackStreamFactory_AbstractStackWalkerHw<R, T> for StackStreamFactory_AbstractStackWalker<R, T> where R: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe, T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe {
+
+
+
+
     /// HotSpot `StackWalk::fill_in_frames`：自流的当前位置起填至多 `max` 帧到 `frames[start..]`，返回
     /// endIndex。流位置停在下一个待检视帧。
     fn __fill_in_frames(mode: i64, stream: &mut Anchored, max: i32, start: i32, frames: &JArray<T>) -> Result<i32> {
@@ -187,7 +189,8 @@ where
     /// `__walk_batches` 内沿 `self.` 调用链保持接收者归属（failure_patterns `hw-upcall-self-lost-in-helper` 已修）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
-    pub fn callStackWalk(&self, mode: i64, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn callStackWalk(&self, mode: i64, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
         let limit = start_index + batch_size;
         if frames.is_jvm_null() {
@@ -206,7 +209,8 @@ where
     /// 填帧上界是 bufferSize 而非 startIndex + batchSize，HotSpot `StackWalk::walk` 同口径）
     #[cfg(jdk_ge_25)]
     #[jvm_native]
-    pub fn callStackWalk(&self, mode: i32, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn callStackWalk(&self, mode: i32, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
         let mode = i64::from(mode);
         let limit = batch_size;
@@ -250,7 +254,8 @@ where
     /// 按锚点续取下一批，返回 endIndex（流已到底 → startIndex）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
-    pub fn fetchStackFrames_l_l_i_i_arr_obj(&self, mode: i64, anchor: i64, batch_size: i32, start_index: i32,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn fetchStackFrames_l_l_i_i_arr_obj(&self, mode: i64, anchor: i64, batch_size: i32, start_index: i32,
                                             frames: JArray<T>) -> Result<i32> {
         let limit = start_index + batch_size;
         let Some(mut stream) = crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor) else {
@@ -279,7 +284,8 @@ where
     /// 已停在下一个待检视帧，无需再推；bufferSize 口径同 callStackWalk
     #[cfg(jdk_ge_25)]
     #[jvm_native]
-    pub fn fetchStackFrames_i_l_i_i_i_arr_obj(&self, mode: i32, anchor: i64, _last_batch_frame_count: i32, batch_size: i32,
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn fetchStackFrames_i_l_i_i_i_arr_obj(&self, mode: i32, anchor: i64, _last_batch_frame_count: i32, batch_size: i32,
                                               start_index: i32, frames: JArray<T>) -> Result<i32> {
         let mode = i64::from(mode);
         let limit = batch_size;

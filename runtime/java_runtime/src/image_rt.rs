@@ -6,6 +6,7 @@
 use crate::error::Result;
 use crate::java::lang::{Object, ObjectVTable, String, Thread};
 use crate::obj_ref::__Obj;
+use crate::java::lang::__ThreadHw as _;
 
 /// 映像中的 VM 模块（构建期 `defineModule0` 的登记；`loader` 为定义加载器，引导加载器为 None）
 pub struct ImageModule {

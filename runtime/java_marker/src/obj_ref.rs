@@ -15,9 +15,28 @@ use std::ptr::NonNull;
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
+// ── 行为层钩子（§9.9 K4）────────────────────────────────────────────────────
+//
+// 分配 / 释放路径上的两处行为依赖（区域整组释放的登记、监视器身份侧表的摘除）属行为层
+//（java_runtime），经链接期声明转交：声明与定义的签名取自同一类型（`group::Ops` 在本
+// 模块定义），签名漂移即链接失败而不会静默错配。`safe`：定义侧是普通安全函数，调用方
+// 照常直接调用（与 `rava_layer` 拆层同一机制）。
+
+unsafe extern "Rust" {
+    /// 区域整组释放的分配登记（java_runtime `region::__on_alloc`）：有活动区域时登记并
+    /// 返回 true（调用方随即为区域日志加一个强引用）。
+    #[link_name = "__rava_marker_region_on_alloc"]
+    pub safe fn __region_on_alloc(value: *mut u8, ops: &'static group::Ops) -> bool;
+
+    /// 对象曾进入监视器，释放最后一个强引用时摘身份侧表条目（java_runtime `monitor::forget`）。
+    #[link_name = "__rava_marker_monitor_forget"]
+    pub safe fn __monitor_forget(identity: usize);
+}
+
 /// 对象头：值地址前 16 字节。第二个字的位布局见下方常量组（只经这组常量读写）。
+/// `pub`（§9.9 K4）：映像数组（行为层 `array/obj.rs` 的 `__ImageArr`）以本头为字段布局。
 #[repr(C, align(16))]
-pub(crate) struct Header {
+pub struct Header {
     strong: AtomicUsize,
     /// 堆对象：分配字节数（头 + 值 + 尾随元素，16 对齐）| 低 4 位标志；映像对象：`IMAGE_OBJ` |
     /// 可选 `IMAGE_HASHED` + 哈希。原子：监视器标记 `fetch_or` 与释放时的读取并发
@@ -59,7 +78,7 @@ const HEAP_DEFINED_FLAGS: usize = MONITOR_MARK;
 
 impl Header {
     /// 映像对象头（计划 2026-10-05-boot-image-evaluator §5.5.2 D2 / D3）
-    pub(crate) const fn image(hash: Option<i32>) -> Header {
+    pub const fn image(hash: Option<i32>) -> Header {
         Header {
             strong: AtomicUsize::new(IMMORTAL),
             word: AtomicUsize::new(match hash {
@@ -246,7 +265,7 @@ impl<T> __Obj<T> {
             init(value);
             let obj = __Obj { ptr: NonNull::new_unchecked(value), _owns: PhantomData };
             // 区域整组释放（无 GC 文档 §4.5）：活动区域内的分配登记入区域日志，日志持有一个强引用
-            if crate::region::__on_alloc(value as *mut u8, Self::GROUP_OPS) {
+            if __region_on_alloc(value as *mut u8, Self::GROUP_OPS) {
                 obj.inc();
             }
             obj
@@ -263,7 +282,7 @@ impl<T> __Obj<T> {
 }
 
 /// 区域整组释放的对象级操作（`region.rs` 调用；对象头细节只在本模块）
-pub(crate) mod group {
+pub mod group {
     use super::{Header, ALIGN, HEAD};
     use std::alloc::Layout;
     use std::sync::atomic::{fence, Ordering};
@@ -272,13 +291,13 @@ pub(crate) mod group {
     const BIG: usize = 1 << 61;
 
     /// 一个类型的整组释放操作
-    pub(crate) struct Ops {
+    pub struct Ops {
         /// 析构值（含尾随元素），不归还分配
-        pub(crate) drop_value: unsafe fn(*mut u8),
+        pub drop_value: unsafe fn(*mut u8),
         /// 按普通路径释放一个强引用（异常出口撤销区域持有）
-        pub(crate) release: unsafe fn(*mut u8),
+        pub release: unsafe fn(*mut u8),
         /// 诊断用类型名
-        pub(crate) type_name: fn() -> &'static str,
+        pub type_name: fn() -> &'static str,
     }
 
     fn header(value: *mut u8) -> &'static Header {
@@ -292,7 +311,7 @@ pub(crate) mod group {
     /// # Safety
     /// `objs` 为区域日志段：每项是本执行流在区域内登记、仍由日志持有的对象，且逃逸分析已证明
     /// 区域结束后组外不再引用它们。
-    pub(crate) unsafe fn free(objs: &[(*mut u8, &'static Ops)]) {
+    pub unsafe fn free(objs: &[(*mut u8, &'static Ops)]) {
         crate::sync_model::__assert_no_field_lock("区域整组释放");
         for &(p, _) in objs {
             header(p).strong.fetch_add(BIG, Ordering::Relaxed);
@@ -421,7 +440,7 @@ impl<T: ?Sized> __Obj<T> {
             let base = (self.ptr.as_ptr() as *mut u8).sub(HEAD);
             // 曾进入监视器 / 挂过 parker：先摘侧表条目，再析构与归还（无 GC 文档第三节第 5 条）
             if self.header().has_monitor() {
-                crate::monitor::forget(self.ptr.as_ptr() as *const () as usize);
+                __monitor_forget(self.ptr.as_ptr() as *const () as usize);
             }
             std::ptr::drop_in_place(self.ptr.as_ptr());
             std::alloc::dealloc(base, Layout::from_size_align_unchecked(size, ALIGN));
@@ -465,6 +484,16 @@ impl<T: ?Sized> AsRef<T> for __Obj<T> {
     #[inline]
     fn as_ref(&self) -> &T {
         self
+    }
+}
+
+/// Java null 判定（原 `object.rs` 的 `impl __Obj<dyn ObjectVTable>`，§9.9 K4 随 `__Obj` 移入
+/// 标记层并改为泛型形态——`ObjectVTable` 尚在行为层，特化 impl 待其随 K4 后续批次移入后恢复）：
+/// Java null 恰为不计数的静态哨兵，堆对象恒非 null——只测指针标记位，不经 vtable。
+impl<T: ?Sized> __Obj<T> {
+    #[inline]
+    pub fn is_jvm_null(&self) -> bool {
+        self.is_static()
     }
 }
 

@@ -5,6 +5,7 @@
 
 use crate::java::lang::Class__Methods as _;
 use super::*;
+use crate::java::lang::__ClassHw as _;
 
 /// 数组类（JLS §10.8）：反射创建数组按组件标签，其余按元素类型 T。
 fn array_class<T: Default + Into<Object> + 'static>(tag: Option<&Rc<str>>) -> crate::error::Result<crate::java::lang::Class> {

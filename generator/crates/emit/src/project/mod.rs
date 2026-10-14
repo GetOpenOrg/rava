@@ -352,6 +352,9 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), ctx.opts.jdk_major, crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     }
+    // 手写层构造器缝自动补入（§9.9 K4 与 mark-ctor-fix 的语义统一）：伴生 / INFRA 手写
+    // 副本对生成类构造器的 UFCS 直调补 `X__Methods as _;`（详见函数头注）
+    inject_ctor_method_trait_imports(ctx, &ems, &decl_src, &mut w)?;
     segs.write_crates(&mut w, out_dir, &decl_src, &marker.hosts)?;
     perf.mark("mod_tree");
     module_side::write_module_crates(ctx, &mut w, out_dir, segs.top())?;
@@ -389,7 +392,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         let stamped: Vec<&str> = std::iter::once(decl.as_str())
             .chain(seg_names.iter().copied())
             .chain(crates.all().iter().map(|c| c.name.as_str()))
-            .chain([entry::META_CRATE])
+            .chain([overlay::MARKER_CRATE, entry::META_CRATE])
             .chain(body_names.iter().copied())
             .chain(lib_names.iter().copied())
             .collect();
@@ -425,4 +428,90 @@ fn root_line_registration(ctx: &EmitCtx<'_>, decl_src: &Path) -> Vec<(PathBuf, V
     let methods = cf.methods.iter().filter(|m| m.is_native()).map(|m| (m.name.as_str(), m.desc.as_str(), true, overridable(m.access)));
     let hws = line_tables::handwritten::root_methods(root, &source, &ctx.short(root), methods, &rust_name);
     crate::ctx::EmitShared::root_files(decl_src).into_iter().map(|p| (p, hws.clone())).collect()
+}
+
+/// 手写层构造器缝的发射侧收口（§9.9 K4 与 mark-ctor-fix 的语义统一，2026-10-14）：
+/// 伴生 / INFRA 手写文件对**生成类构造器**的 UFCS 直调（`X::new(..)` / `X::new_<后缀>(..)`，
+/// 含 `super::X::…` / `crate::…::X::…` / 裸名形态）——构造器在 `X__Methods` trait 上
+/// （K4 阶段 3 起 wrapper struct 在 java_marker，固有 impl 留声明层即 E0390；构造器体调
+/// `__init_on` / `__class_init`（声明层状态机），标记层固有也不可行），调用方须 trait 在
+/// 作用域。伴生声明（`mod X_impl;`）按「宿主 + 依赖类文件在场」逐闭包条件发生——哪个闭包
+/// 首次拉入宿主事先不可知，per-file 手工对齐不可穷举（batch-1015 放量首跑 Log4j2ApiMain
+/// E0599 ×21：19 构造器直调 + 2 statics；mark-ctor-fix 据此在 main 把构造器留固有，
+/// 与 K4 跨 crate 必要性冲突）。统一裁决：**构造器留在方法 trait**（K4 结构性要求），
+/// 缝在发射侧收口——扫描 scratch 手写副本，对构造器直调的类自动补
+/// `use crate::<包>::X__Methods as _;`：
+/// - 只认注册表生成类（`binary_of` 反查 + 该类本轮发射且非手写宿主）；被调类经 INFRA
+///   调用边直连底段（D8 构造），`crate::` 包路径在底段 crate 内恒可解析；
+/// - 真源不动（闭包分析 / 缓存指纹 / D8 体量零变化；补入行不进 D8 权重，与 hw 匿名
+///   导入行同口径），`Writer` 写出（内容不变不重写）；
+/// - 文件已含 `<名>__Methods` 字样的类跳过（b1013-fix 既有行不重复）；
+/// - `new` / `new_*` 是构造器保留名（Java 方法名不可能叫 `new`），词面匹配零误补
+///   （碰巧 `new_<x>` 的真方法同样在 trait 上，导入一样正确）。
+/// statics / 实例方法的 UFCS 直调（名字不可预测）仍走既有导入口径（真源 use 行，如
+/// net_impl 的 System / InetAddress 两枚）；接收者形态由 K4-2a 的 hw 白名单机制覆盖。
+fn inject_ctor_method_trait_imports(
+    ctx: &EmitCtx<'_>,
+    ems: &IndexMap<String, ClassEmission>,
+    decl_src: &Path,
+    w: &mut fs::Writer,
+) -> Result<()> {
+    for (dir, _, files) in fs::walk(decl_src) {
+        for f in files.iter().filter(|f| f.ends_with(".rs")) {
+            let path = dir.join(f.as_str());
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            // 生成文件（带生成标记）不走本缝——其导入由 imports::fill 精确发射
+            if text.contains(fs::GEN_MARKER) {
+                continue;
+            }
+            let add = ctor_trait_import_lines(&text, |name| {
+                let binary = ctx.ty.binary_of(name)?;
+                // 手写宿主类（Object 等：无 X__Methods）与未发射类跳过
+                ems.get(&binary)
+                    .filter(|em| !em.handwritten)
+                    .map(|_| (binary.clone(), ctx.declared(&binary)))
+            });
+            if add.is_empty() {
+                continue;
+            }
+            let mut out = text;
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("// §9.9 构造器缝自动补入（发射侧扫描；真源无此行）\n");
+            for line in &add {
+                out.push_str(line);
+                out.push('\n');
+            }
+            w.write(&path, &out)?;
+        }
+    }
+    Ok(())
+}
+
+/// 手写文本中的构造器 UFCS 直调 → 需补的 `X__Methods as _;` 导入行（binary 序确定性；
+/// 文本已含该 trait 名的跳过）。`resolve`：Rust 名 → (binary, 声明名)（只认本轮发射的生成类）。
+fn ctor_trait_import_lines(
+    text: &str,
+    resolve: impl Fn(&str) -> Option<(String, String)>,
+) -> Vec<String> {
+    static CTOR_CALL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = CTOR_CALL
+        .get_or_init(|| regex::Regex::new(r"([A-Z][A-Za-z0-9_]*)::(new[A-Za-z0-9_]*)\s*\(").expect("静态正则"));
+    let mut wanted: BTreeMap<String, String> = BTreeMap::new(); // binary → trait 名
+    for cap in re.captures_iter(text) {
+        if let Some((binary, declared)) = resolve(&cap[1]) {
+            wanted.entry(binary).or_insert(format!("{declared}__Methods"));
+        }
+    }
+    let mut out = Vec::new();
+    for (binary, trait_name) in wanted {
+        if text.contains(&trait_name) {
+            continue;
+        }
+        if let Some(pkg) = crate::imports::cross::rust_pkg_of(&binary) {
+            out.push(format!("use crate::{pkg}::{trait_name} as _;"));
+        }
+    }
+    out
 }

@@ -6,18 +6,21 @@
 use crate::java::lang::r#ref::Finalizer__Methods as _;
 use crate::prelude::*;
 use super::finalizer::Finalizer;
+use super::__FinalizerHw;
 
-impl Finalizer {
+impl __FinalizerHw for Finalizer {
     /// native `isFinalizationEnabled()`：false——Finalizer.<clinit> 据此不启动 finalizer 线程，
     /// register 不登记（JDK 禁用终结化的同一路径）。
     #[jvm_native]
-    pub fn isFinalizationEnabled() -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isFinalizationEnabled() -> Result<bool> {
         Ok(false)
     }
 
     /// native `reportComplete(Object)`：JFR / 诊断计数——no-op。
     #[jvm_native]
-    pub fn reportComplete(_finalizee: Object) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn reportComplete(_finalizee: Object) -> Result<()> {
         Ok(())
     }
 }

@@ -7,12 +7,14 @@ use super::net::Net;
 use super::net_impl::{ipv6_available, socket_error, socket_exception, io_exception};
 use crate::java::io::FileDescriptor;
 use crate::net_posix::{self, errno};
+use super::__NetHw;
+use super::__NetHw2;
 
 /// netinet/ip.h 的 `IPTOS_TOS_MASK | IPTOS_PREC_MASK`
 const IPTOS_MASK: i32 = 0x1e | 0xe0;
 
 /// 选项值的 C 形态：组播 TTL / LOOP 为 u_char，SO_LINGER 为 struct linger，其余 int。
-enum OptVal {
+pub enum OptVal {
     Byte(u8),
     Linger(libc::linger),
     Int(i32),
@@ -139,16 +141,18 @@ fn clamp_timeout(timeout: i64) -> i32 {
     timeout.clamp(-1, i32::MAX as i64) as i32
 }
 
-impl Net {
+impl __NetHw for Net {
     /// native `isIPv6Available0()`
     #[jvm_native]
-    pub fn isIPv6Available0() -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isIPv6Available0() -> Result<bool> {
         ipv6_available()
     }
 
     /// native `isReusePortAvailable0()`：探测套接字上 SO_REUSEPORT 可设。
     #[jvm_native]
-    pub fn isReusePortAvailable0() -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isReusePortAvailable0() -> Result<bool> {
         // SAFETY: 探测套接字，返回前关闭
         unsafe {
             let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
@@ -163,20 +167,23 @@ impl Net {
 
     /// native `isExclusiveBindAvailable()`：仅 Windows 有独占绑定，-1。
     #[jvm_native]
-    pub fn isExclusiveBindAvailable() -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn isExclusiveBindAvailable() -> Result<i32> {
         Ok(-1)
     }
 
     /// native `shouldShutdownWriteBeforeClose0()`：仅 Windows 需要。
     #[jvm_native]
-    pub fn shouldShutdownWriteBeforeClose0() -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn shouldShutdownWriteBeforeClose0() -> Result<bool> {
         Ok(false)
     }
 
     /// native `getIntOption0(FileDescriptor, boolean mayNeedConversion, int level, int opt)`。
     /// SO_LINGER 开启时返回秒数，否则 -1。
     #[jvm_native]
-    pub fn getIntOption0(fdo: FileDescriptor, may_need_conversion: bool, level: i32, opt: i32) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn getIntOption0(fdo: FileDescriptor, may_need_conversion: bool, level: i32, opt: i32) -> Result<i32> {
         let mut v = OptVal::for_option(level, opt);
         let (p, mut len) = v.ptr_len();
         // SAFETY: p / len 指向 v 的 C 形态
@@ -196,7 +203,8 @@ impl Net {
     /// native `setIntOption0(FileDescriptor, boolean mayNeedConversion, int level, int opt, int arg, boolean isIPv6)`。
     /// SO_LINGER：arg ≥ 0 开启并设秒数，否则关闭。
     #[jvm_native]
-    pub fn setIntOption0(fdo: FileDescriptor, may_need_conversion: bool, level: i32, opt: i32, arg: i32, is_ipv6: bool) -> Result<()> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn setIntOption0(fdo: FileDescriptor, may_need_conversion: bool, level: i32, opt: i32, arg: i32, is_ipv6: bool) -> Result<()> {
         let fd = fdo.__get_fd();
         let mut v = match OptVal::for_option(level, opt) {
             OptVal::Byte(_) => OptVal::Byte(arg as u8),
@@ -225,7 +233,8 @@ impl Net {
 
     /// native `poll(FileDescriptor, int events, long timeout)`：返回就绪事件；被信号打断返回 0。
     #[jvm_native]
-    pub fn poll(fdo: FileDescriptor, events: i32, timeout: i64) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn poll(fdo: FileDescriptor, events: i32, timeout: i64) -> Result<i32> {
         let mut pfd = libc::pollfd { fd: fdo.__get_fd(), events: events as i16, revents: 0 };
         // SAFETY: 单个栈上 pollfd
         let rv = crate::gil::blocking(|| unsafe { libc::poll(&mut pfd, 1, clamp_timeout(timeout)) });
@@ -241,7 +250,8 @@ impl Net {
     /// native `pollConnect(FileDescriptor, long timeout)`：等待非阻塞连接完成；
     /// 已连接 true，超时 / 被打断 false，连接失败按 SO_ERROR 抛异常。
     #[jvm_native]
-    pub fn pollConnect(fdo: FileDescriptor, timeout: i64) -> Result<bool> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn pollConnect(fdo: FileDescriptor, timeout: i64) -> Result<bool> {
         let fd = fdo.__get_fd();
         let mut pfd = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
         // SAFETY: 单个栈上 pollfd
@@ -267,7 +277,8 @@ impl Net {
 
     /// native `available(FileDescriptor)`：ioctl(FIONREAD)。
     #[jvm_native]
-    pub fn available(fdo: FileDescriptor) -> Result<i32> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn available(fdo: FileDescriptor) -> Result<i32> {
         let mut count: libc::c_int = 0;
         // SAFETY: FIONREAD 写入栈上 int
         if unsafe { libc::ioctl(fdo.__get_fd(), libc::FIONREAD, &mut count) } != 0 {
@@ -277,33 +288,39 @@ impl Net {
     }
 
     #[jvm_native]
-    pub fn pollinValue() -> Result<i16> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn pollinValue() -> Result<i16> {
         Ok(libc::POLLIN)
     }
 
     #[jvm_native]
-    pub fn polloutValue() -> Result<i16> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn polloutValue() -> Result<i16> {
         Ok(libc::POLLOUT)
     }
 
     #[jvm_native]
-    pub fn pollerrValue() -> Result<i16> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn pollerrValue() -> Result<i16> {
         Ok(libc::POLLERR)
     }
 
     #[jvm_native]
-    pub fn pollhupValue() -> Result<i16> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn pollhupValue() -> Result<i16> {
         Ok(libc::POLLHUP)
     }
 
     #[jvm_native]
-    pub fn pollnvalValue() -> Result<i16> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn pollnvalValue() -> Result<i16> {
         Ok(libc::POLLNVAL)
     }
 
     /// native `pollconnValue()`：连接完成以可写表示。
     #[jvm_native]
-    pub fn pollconnValue() -> Result<i16> {
+    #[cfg_attr(any(), rava_hw_pub)]
+    fn pollconnValue() -> Result<i16> {
         Ok(libc::POLLOUT)
     }
 }

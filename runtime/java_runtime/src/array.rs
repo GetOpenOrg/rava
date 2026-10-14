@@ -16,6 +16,7 @@ mod obj;
 pub use obj::{__ArrayNull, __ArrayObj, __ImageArr};
 use obj::{Form, Repr};
 use crate::obj_ref::__Obj;
+use crate::java::lang::__ClassHw as _;
 
 /// Java 数组。Clone 共享底层存储（Java 数组是引用类型，赋值不复制内容）。
 ///
