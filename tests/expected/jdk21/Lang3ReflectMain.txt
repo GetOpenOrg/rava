@@ -1,0 +1,10 @@
+PASS invoke-public
+PASS invoke-private
+PASS invoke-static
+PASS get-accessible
+PASS field-read
+PASS field-write
+PASS hits-after-greet
+PASS matching-method
+  fields sorted: [hits, secret]
+DONE Lang3ReflectMain

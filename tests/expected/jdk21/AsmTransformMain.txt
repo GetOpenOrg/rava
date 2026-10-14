@@ -1,0 +1,5 @@
+PASS inject-points
+PASS size-changed
+PASS ldc-strings
+PASS calculate-untouched-no-ldc
+DONE AsmTransformMain

@@ -1,0 +1,10 @@
+PASS logger-name
+PASS level-api
+PASS msg-format
+PASS msg-escaped
+PASS msg-null
+PASS msg-throwable-class
+  tc after put (no provider): {}
+PASS tc-degraded-empty
+PASS exists-false
+DONE Log4j2ApiMain

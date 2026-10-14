@@ -1,0 +1,9 @@
+PASS fetch-values
+PASS fetch-default-hint
+PASS cascade-values
+PASS lock-values
+PASS plscope-normal
+PASS plscope-extended
+PASS txtype-values
+PASS combined
+DONE JpaEnumMetaMain
