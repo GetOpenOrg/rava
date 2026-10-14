@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rava 项目进展全景（单文件版）</title>
+<title>rava 项目进展全景</title>
 <style>
 :root {
   --c-done: #2e9e5b; --c-doing: #2f7fd3; --c-blocked: #d64541;
@@ -121,8 +121,6 @@ header h1 { font-size: 17px; font-weight: 600; }
   <div id="detail"><div class="placeholder">点击节点查看详情</div></div>
 </div>
 <div id="blockers"></div>
-<script src="app.js"></script>
-
 <script>
 window.RAVA_DATA = {
   "meta": {
@@ -249,7 +247,9 @@ const W = 176, H = 62, PADX = 26, PADY = 16;
 let DATA, nodesById, adjacency, curFilter = "all", criticalOn = false, ganttOn = false, selected = null;
 
 async function loadData() {
-  DATA = window.RAVA_DATA || await (await fetch("data.json")).json();
+  DATA = window.RAVA_DATA;
+  if (!DATA) { try { DATA = await (await fetch("data.json")).json(); } catch (e) {
+      document.body.insertAdjacentHTML("afterbegin", '<div style="padding:10px 20px;color:#f0978f">数据加载失败：file:// 下请打开 dashboard.html（单文件版），或用本地 HTTP 服务打开 index.html。</div>'); throw e; } }
 }
 const colorOf = s => ({ done:"#2e9e5b", doing:"#2f7fd3", blocked:"#d64541", risk:"#e08a1e", waiting:"#8e5bd3", todo:"#9aa3ab" }[s] || "#9aa3ab");
 
@@ -482,7 +482,6 @@ function bindControls() {
   renderStats(); renderPipe(); renderGraph(); renderGantt(); renderBlockers(); bindControls();
   selectNode(nodesById["k-fix"]); // 默认展示当前关键卡点
 })();
-
 </script>
 </body>
 </html>
