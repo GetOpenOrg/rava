@@ -149,46 +149,63 @@ function renderGraph() {
       .attr("width", w).attr("height", (laneTops[i + 1] ?? h - 40) - laneTops[i] - 16).attr("rx", 10);
     root.append("text").attr("class", "lanelabel").attr("x", 14).attr("y", laneTops[i] + 22).text(l.name);
   });
-  // 边：统一「水平—圆角竖直过渡—水平」的平滑流线。竖直过渡段放在列间隙（间隙内无节点），
-  // 水平段贴源/目标各自泳道行（泳道内每节点独占一行）——几何上保证不压任何无关节点。
-  // 同间隙的并行边在间隙内均匀铺开，避免竖直段重合。
+  // 边：g.edge（状态类+数据属性）内含 .line 可见线、.lbl 标签、.hit 加宽热区（悬停/点击）。
+  // 相邻列走端点扇形分布的贝塞尔 S 曲线（整段在列间隙内）；跨列走「水平—大圆角竖直过渡—水平」，
+  // 竖直过渡放列间隙、圆角限制在间隙内、水平段贴源/目标泳道行——均不压任何无关节点。
+  // 同源出边沿源右边框扇形散开、同汇入边沿目标左边框扇形散开，同向边不再重叠成一股。
+  const defs = svg.append("defs");
+  defs.append("marker").attr("id", "arrow").attr("viewBox", "0 0 10 10").attr("refX", 9).attr("refY", 5)
+    .attr("markerWidth", 5.5).attr("markerHeight", 5.5).attr("orient", "auto-start-reverse")
+    .append("path").attr("d", "M0,1 L9,5 L0,9 z").attr("fill", "context-stroke");
   const cols = [];
   VIEW.nodes.map(n => n.x).sort((a, b) => a - b).forEach(x => { if (!cols.length || x - cols[cols.length - 1] > 40) cols.push(x); });
   const colOf = id => { const x = viewById[id].x; let best = 0; cols.forEach((c, i) => { if (Math.abs(c - x) < Math.abs(cols[best] - x)) best = i; }); return best; };
-  const plans = VIEW.edges
-    .filter(e => viewById[e.from] && viewById[e.to])
-    .map(e => ({ e, i: colOf(e.from), j: colOf(e.to) }));
+  const outs = {}, ins = {};
+  VIEW.edges.forEach(e => { (outs[e.from] = outs[e.from] || []).push(e); (ins[e.to] = ins[e.to] || []).push(e); });
+  const fan = (list, key) => {
+    const sorted = [...list].sort((a, b) => key(a) - key(b));
+    const map = new Map();
+    sorted.forEach((e, i) => map.set(e, sorted.length > 1 ? (i / (sorted.length - 1) - 0.5) * Math.min(H - 10, sorted.length * 9) : 0));
+    return map;
+  };
+  const outOff = new Map(), inOff = new Map();
+  Object.values(outs).forEach(list => fan(list, e => (viewById[e.to] || { y: 0 }).y).forEach((v, e) => outOff.set(e, v)));
+  Object.values(ins).forEach(list => fan(list, e => (viewById[e.from] || { y: 0 }).y).forEach((v, e) => inOff.set(e, v)));
+  const plans = VIEW.edges.filter(e => viewById[e.from] && viewById[e.to]).map(e => ({ e, i: colOf(e.from), j: colOf(e.to) }));
   const gapUse = {};
-  plans.forEach(p => { const k = p.i + Math.max(0, Math.floor((p.j - p.i) / 2)); gapUse[k] = (gapUse[k] || 0) + 1; });
+  plans.forEach(p => { if (p.j > p.i + 1) { const k = p.i + Math.floor((p.j - p.i) / 2); gapUse[k] = (gapUse[k] || 0) + 1; } });
   const gapSeen = {};
   const edgeG = root.append("g");
   plans.forEach(({ e, i, j }) => {
     const s = viewById[e.from], t = viewById[e.to];
-    const sx = s.x + W / 2, sy = s.y, tx = t.x - W / 2, ty = t.y;
-    const k = i + Math.max(0, Math.floor((j - i) / 2));
-    const gapLo = (cols[k] ?? s.x) + W / 2 + 6, gapHi = (cols[k + 1] ?? t.x) - W / 2 - 6;
+    const sx = s.x + W / 2, sy = s.y + (outOff.get(e) || 0), tx = t.x - W / 2, ty = t.y + (inOff.get(e) || 0);
     let d, lx = (sx + tx) / 2;
-    if (j <= i || k + 1 >= cols.length || tx <= sx + 8) {
-      const cx = (tx - sx) / 2; // 退化场景：端点间水平切线 S 曲线
-      d = `M${sx},${sy} C${sx + cx},${sy} ${tx - cx},${ty} ${tx},${ty}`;
+    if (j <= i + 1 || tx <= sx + 8) {
+      const dx = Math.max((tx - sx) * 0.5, 8); // 相邻列：间隙内水平切线 S 曲线
+      d = `M${sx},${sy} C${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`;
     } else {
+      const k = i + Math.floor((j - i) / 2);
+      const gapLo = cols[k] + W / 2 + 6, gapHi = cols[k + 1] - W / 2 - 6;
+      const mid = (gapLo + gapHi) / 2;
+      const lo = Math.min(gapLo + 14, mid), hi = Math.max(gapHi - 14, mid); // 两端留圆角余量
       const total = gapUse[k], idx = gapSeen[k] = (gapSeen[k] || 0);
-      const mx = total > 1 ? gapLo + (gapHi - gapLo) * (idx / Math.max(total - 1, 1)) : (gapLo + gapHi) / 2;
-      const r = Math.max(0, Math.min(20, Math.abs(mx - sx) / 2, Math.abs(tx - mx) / 2, Math.abs(ty - sy) / 2));
-      if (Math.abs(ty - sy) < 2 || r < 4) d = `M${sx},${sy} L${tx},${ty}`;
-      else {
-        const dir = ty > sy ? 1 : -1;
-        d = `M${sx},${sy} L${mx - r},${sy} Q${mx},${sy} ${mx},${sy + dir * r} L${mx},${ty - dir * r} Q${mx},${ty} ${mx + r},${ty} L${tx},${ty}`;
-      }
-      if (Math.abs(ty - sy) > 40) lx = (gapLo + gapHi) / 2; // 标签放竖直过渡段中部
+      const mx = total > 1 ? lo + (hi - lo) * (idx / Math.max(total - 1, 1)) : mid;
+      const r = Math.max(0, Math.min(36, Math.abs(ty - sy) / 2, mx - gapLo, gapHi - mx));
+      const dir = ty > sy ? 1 : -1;
+      if (Math.abs(ty - sy) < 4) d = `M${sx},${sy} L${tx},${ty}`; // 同行：贴行水平线（安全）
+      else if (r < 6) d = `M${sx},${sy} L${mx},${sy} L${mx},${ty} L${tx},${ty}`; // 直角肘形——竖直段仍在间隙内，禁止对角斜穿
+      else d = `M${sx},${sy} L${mx - r},${sy} C${mx - r * 0.45},${sy} ${mx},${sy + dir * r * 0.55} ${mx},${sy + dir * r} L${mx},${ty - dir * r} C${mx},${ty - dir * r * 0.55} ${mx + r * 0.45},${ty} ${mx + r},${ty} L${tx},${ty}`;
+      lx = mid; // 标签放竖直过渡段中部
     }
     const cls = ["edge", e.critical ? "critical" : "",
       e.status ? "e-" + e.status : (s.status === "done" ? "e-done" : (t.status === "blocked" ? "e-blocked" : "e-doing"))].join(" ");
-    const p = edgeG.append("path").attr("class", cls).attr("data-from", e.from).attr("data-to", e.to).attr("d", d);
-    if (e.label) {
-      edgeG.append("text").attr("class", cls).attr("data-from", e.from).attr("data-to", e.to).attr("x", lx).attr("y", (sy + ty) / 2 - 6).attr("text-anchor", "middle").text(e.label);
-    }
-    p.on("click", () => selectNode(viewById[e.to]));
+    const grp = edgeG.append("g").attr("class", cls).attr("data-from", e.from).attr("data-to", e.to);
+    grp.append("path").attr("class", "line").attr("d", d);
+    if (e.label) grp.append("text").attr("class", "lbl").attr("x", lx).attr("y", (sy + ty) / 2 - 6).attr("text-anchor", "middle").text(e.label);
+    grp.append("path").attr("class", "hit").attr("d", d)
+      .on("click", () => selectNode(viewById[e.to]))
+      .on("mouseenter", () => hoverEdge(e.from, e.to))
+      .on("mouseleave", clearEdgeHover);
   });
   // 节点
   const ng = root.append("g");
@@ -238,6 +255,17 @@ function highlight(id) {
   d3.selectAll(".edge").classed("dim", function () { return !(keep.has(this.getAttribute("data-from")) && keep.has(this.getAttribute("data-to"))); });
 }
 function clearHighlight() { d3.selectAll(".node").classed("dim", false); d3.selectAll(".edge").classed("dim", false); }
+
+/* ---------- 边悬停：加粗高亮自身（CSS .hov）+ 点亮两端节点，其余边压暗 ---------- */
+function hoverEdge(from, to) {
+  d3.selectAll("g.edge").classed("dim", function () { return this.getAttribute("data-from") !== from || this.getAttribute("data-to") !== to; });
+  d3.selectAll(".node").classed("hl", function () { const id = this.getAttribute("data-id"); return id === from || id === to; });
+}
+function clearEdgeHover() {
+  d3.selectAll("g.edge").classed("dim", false);
+  d3.selectAll(".node").classed("hl", false);
+  if (criticalOn) applyCritical(); // 恢复关键路径模式的压暗态
+}
 
 /* ---------- 详情侧栏 + 卡点影响 ---------- */
 function downstreamOf(id) { return [...reach(id, "down")].filter(x => x !== id); }
