@@ -48,11 +48,13 @@ pub(crate) const STD_COLLISIONS: [&str; 11] = [
 ///
 /// 仍留固有：`const fn`（trait 方法不可为 const）、std 同名成员（[`STD_COLLISIONS`]）、
 /// 接口载体 `is_jvm_null`（null 探测，K6 归标记层身份面——载体 struct 搬标记 crate 后随
-/// 标记层固有 impl 走）。fn moves_to_trait(f: &ImplItemFn) -> bool {
+/// 标记层固有 impl 走）。
+fn moves_to_trait(f: &ImplItemFn) -> bool {
     let n = f.sig.ident.to_string();
     f.sig.constness.is_none()
         && !STD_COLLISIONS.contains(&n.as_str())
-        && !matches!(n.as_str(), "is_jvm_null")}
+        && !matches!(n.as_str(), "is_jvm_null")
+}
 
 /// trait 中的方法声明：签名同实现（形参模式去 `mut` / 非标识符模式改 `_`，无体声明不接受模式），
 /// 属性去 `#[inline]`（只对有体函数有意义）
