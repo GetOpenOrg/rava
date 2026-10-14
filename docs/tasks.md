@@ -234,8 +234,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏳ jmod 覆盖第 1–4 步（2026-10-03-jmod-coverage.md）
 │   ├─ ⏳ 引用类语义：无 GC 模型（编译期逃逸分析整组释放 + 所有权推断弱引用，2026-10-07-no-gc-memory-model.md）◀── C4
 │   └─ ⏳ JDK 25 适配轮（分支 fix-jdk25，交接 docs/reports/2026-10-11-fix-jdk25-handoff.md）：java_base_decl 三组编译问题已修；JDK 21 两处回归已修（C 闭包翻倍 d279b821 扫描器求值 cfg，DeepCopy 闭包 = 集成头 3001 类；B StackWalkerFrames 725249ef 上调留 native 体内）；待合批。
-│       下一步：① 问题 A，JDK 25 StackFrameInfo 反射元素流（两个 StackWalker 测试存根失败，归 G1 / 反射建模）；② ✅ 扫描器 `&self` 辅助内 `self.X()` 上调丢 on_self（10-12 修，df026eed，规避已解除——见「剩余工作」第 6 条）；③ `GSSNameSpi.equals_obj` 潜伏命名缺陷；④ JDK 25 全量剩余分类（版本输出差异 3、fold / dead_pcs 2、condy switch 标签 1、超时 1、DeepCopy / DES OOM）
-│
+│       下一步：① 问题 A，JDK 25 StackFrameInfo 反射元素流（两个 StackWalker 测试存根失败，归 G1 / 反射建模）；② 扫描器 `&self` 辅助内 `self.X()` 上调丢 on_self（分析器侧，`hw-upcall-self-lost-in-helper`）；③ `GSSNameSpi.equals_obj` 潜伏命名缺陷；④ JDK 25 全量剩余分类（版本输出差异 3、fold / dead_pcs 2、condy switch 标签 1、超时 1、DeepCopy / DES OOM）
+│   └─ ◐ lib pilot rs 侧台账复验（分支 libpilot-gaps @ j25-r2-fix，2026-10-13，§八 docs/reports/2026-10-12-lib-tests-merge-verification.md）：E0624 族 3 例基线消解 GOLDEN_OK；新修 3 提交（a2848077 E0407 协变桥槽族根 / 43466d06 无 LVT 装箱 / 35cede3f E0201 同槽去重）——assertj 76→0 桥成员、jsoup 5→3、joda 10→7；JDK21 e2e 抽 3 例 PASS。剩余登记 failure_patterns 7 条：提升注解×槽追踪（joda）、接收者擦除×实编组（caffeine）、泛型上界视图（jsoup）、手写层构造器请求缝（hocon，与 j25-r2 交接项 3 同族）、C-SYN 动态类加载（caffeine-weigher 口径）、helpful NPE 消息（slf4j 口径）；待合批。│
 ├─ 【暂缓】
 │   ├─ ✅ build-memsafe 内存友好缺省构建档（10-11 交付，待合入；2026-10-11-build-memsafe.md）
 │   ├─ ⏸ 纯优化线（10-06 分级）：二进制 ≤3 MB、S7-4 / S7-5、D2 / D3 引擎结构改造、IR 收敛 / TypeIR G4
